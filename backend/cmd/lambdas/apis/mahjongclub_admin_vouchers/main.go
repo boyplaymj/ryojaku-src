@@ -48,8 +48,12 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		svc = dynamodb.NewFromConfig(cfg)
 	}
 
-	// Auth Check
-	claims, err := validateToken(request.Headers["authorization"])
+	// Auth Check — API Gateway 可能正規化 header 為大寫 Authorization,故兩種都試
+	authHeader := request.Headers["Authorization"]
+	if authHeader == "" {
+		authHeader = request.Headers["authorization"]
+	}
+	claims, err := validateToken(authHeader)
 	if err != nil {
 		return errorResponse(401, "Unauthorized"), nil
 	}
