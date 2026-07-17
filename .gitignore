@@ -25,3 +25,7 @@ PUSH_KEYS.md
 build/
 .aws-sam/
 .tmp/
+
+# migration 彩排產物
+migration/_synthetic/
+migration/__pycache__/
