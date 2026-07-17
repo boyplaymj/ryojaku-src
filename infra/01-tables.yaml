@@ -108,9 +108,13 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}Ratings'
       BillingMode: PAY_PER_REQUEST
+      # 修正(S2 2026-07-17):補toUserId-createdAt-index。get-ratings的getRatingsByToUser
+      # 查此GSI(依受評者列出評分),原缺→ValidationException。createdAt=int64(N)。
       AttributeDefinitions:
         - { AttributeName: gameId, AttributeType: S }
         - { AttributeName: fromUserId, AttributeType: S }
+        - { AttributeName: toUserId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
       KeySchema:
         - { AttributeName: gameId, KeyType: HASH }
         - { AttributeName: fromUserId, KeyType: RANGE }
@@ -119,6 +123,11 @@ Resources:
           KeySchema:
             - { AttributeName: gameId, KeyType: HASH }
             - { AttributeName: fromUserId, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: toUserId-createdAt-index
+          KeySchema:
+            - { AttributeName: toUserId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
           Projection: { ProjectionType: ALL }
 
   # Community 單表設計 (Post/Comment/Like 用 SK 前綴)。createdAt 為 ISO8601 字串 (S)
