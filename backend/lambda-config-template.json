@@ -1,0 +1,64 @@
+{
+    "defaults": {
+        "function": {
+            "runtime": "provided.al2023",
+            "handler": "bootstrap",
+            "memorySize": 512,
+            "timeout": 30,
+            "architecture": "arm64",
+            "packageType": "Image",
+            "IsDeployTarget": false,
+            "environment": {
+                "ENVIRONMENT": "{{ENVIRONMENT}}",
+                "TABLE_PREFIX": "MahjongClub_",
+                "ENCRYPTION_KEY": "{{ENCRYPTION_KEY}}",
+                "VAPID_PUBLIC_KEY": "{{VAPID_PUBLIC_KEY}}",
+                "VAPID_PRIVATE_KEY": "{{VAPID_PRIVATE_KEY}}",
+                "VAPID_SUBSCRIBER": "{{VAPID_SUBSCRIBER}}"
+            }
+        }
+    },
+    "deployment": {
+        "s3": {
+            "bucket": "linebot-lambda",
+            "prefix": "lambda-builds/mahjongclub-app/"
+        },
+        "ecr": {
+            "repositoryPrefix": "mahjongclub-app",
+            "imageTag": "latest"
+        },
+        "environments": {
+            "Local": {
+                "accountId": "228304098112",
+                "region": "ap-southeast-1",
+                "profile": "default",
+                "roleArn": "arn:aws:iam::228304098112:role/lambda-execution-role"
+            },
+            "Dev": {
+                "accountId": "228304098112",
+                "region": "ap-southeast-1",
+                "profile": "default",
+                "roleArn": "arn:aws:iam::228304098112:role/lambda-execution-role"
+            },
+            "STG": {
+                "accountId": "228304098112",
+                "region": "ap-southeast-1",
+                "profile": "default",
+                "roleArn": "arn:aws:iam::228304098112:role/lambda-execution-role"
+            },
+            "Prod": {
+                "accountId": "228304098112",
+                "region": "ap-southeast-1",
+                "profile": "default",
+                "roleArn": "arn:aws:iam::228304098112:role/lambda-execution-role"
+            }
+        }
+    },
+    "build": {
+        "goos": "linux",
+        "goarch": "arm64",
+        "cgoEnabled": false,
+        "ldflags": "-s -w",
+        "outputName": "bootstrap"
+    }
+}

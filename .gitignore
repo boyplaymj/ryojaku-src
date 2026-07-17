@@ -1,0 +1,22 @@
+# deps / build
+node_modules/
+vendor/
+dist/
+.vite/
+*.tsbuildinfo
+# compiled go / lambda artifacts
+*.exe
+bootstrap
+*.zip
+tmp_build
+tmp_verify_user
+**/mahjongclub_*/mahjongclub_*
+# secrets — NEVER commit (quarantined at /opt/sml/ryojaku-secrets)
+.env
+.env.*
+!.env.example
+lambda-config.json
+environment-config.json
+PUSH_KEYS.md
+*.pem
+*.key

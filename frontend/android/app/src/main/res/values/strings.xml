@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">両雀</string>
+    <string name="title_activity_main">両雀</string>
+    <string name="package_name">com.tuantuan.app</string>
+    <string name="custom_url_scheme">com.tuantuan.app</string>
+</resources>

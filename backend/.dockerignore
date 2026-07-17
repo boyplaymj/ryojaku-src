@@ -1,0 +1,6 @@
+tmp_build
+bin
+.git
+.vscode
+*.log
+vendor

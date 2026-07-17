@@ -1,0 +1,338 @@
+:root {
+    --safe-top: env(safe-area-inset-top, 0);
+    --safe-bottom: env(safe-area-inset-bottom, 0);
+
+    /* Minimal Lux Palette */
+    --bg-main: #f9f9f7;
+    --bg-card: #ffffff;
+    --bg-accent: #c5a059;
+    /* Champagne Gold */
+    --text-primary: #1a1a1a;
+    --text-secondary: #717171;
+    --border-lux: rgba(0, 0, 0, 0.04);
+    --lux-shadow: 0 0.625rem 1.875rem -0.625rem rgba(0, 0, 0, 0.05);
+}
+
+body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    overscroll-behavior-y: none;
+    -webkit-font-smoothing: antialiased;
+}
+
+.lux-card {
+    background: white;
+    border: 0.0625rem solid var(--border-lux);
+    box-shadow: var(--lux-shadow);
+    border-radius: 1.5rem;
+}
+
+.lux-button {
+    background: white;
+    border: 0.0625rem solid rgba(197, 160, 89, 0.2);
+    box-shadow: 0 0.25rem 0.75rem rgba(197, 160, 89, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.lux-glass {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(1.25rem);
+    -webkit-backdrop-filter: blur(1.25rem);
+    border-bottom: 0.0625rem solid rgba(255, 255, 255, 0.3);
+}
+
+.font-display {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+/* Hide Scrollbar */
+::-webkit-scrollbar {
+    display: none;
+}
+
+html {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+/* Mobile Optimizations */
+* {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+/* Cyberpunk Grid Animation */
+@keyframes gridFlow {
+    0% {
+        background-position: 0 0;
+    }
+
+    100% {
+        background-position: 0 2.5rem;
+    }
+}
+
+.animate-grid-flow {
+    animation: gridFlow 20s linear infinite;
+}
+
+/* Utilities */
+.pt-safe {
+    padding-top: env(safe-area-inset-top, 1.25rem);
+}
+
+.pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 1.25rem);
+}
+
+/* Cyberpunk Grid Background (redefined here for consistency) */
+.cyber-grid {
+    background-size: 2.5rem 2.5rem;
+    background-image:
+        linear-gradient(to right, rgba(6, 182, 212, 0.05) 0.0625rem, transparent 0.0625rem),
+        linear-gradient(to bottom, rgba(6, 182, 212, 0.05) 0.0625rem, transparent 0.0625rem);
+    mask-image: linear-gradient(to bottom, transparent 5%, black 40%, black 90%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 5%, black 40%, black 90%, transparent 100%);
+}
+
+/* 假切頁滑入動畫 */
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+/* 從點擊位置展開的動畫 */
+@keyframes expandFromPoint {
+    from {
+        clip-path: circle(0% at var(--origin-x, 50%) var(--origin-y, 50%));
+        opacity: 0;
+    }
+
+    to {
+        clip-path: circle(150% at var(--origin-x, 50%) var(--origin-y, 50%));
+        opacity: 1;
+    }
+}
+
+.animate-slide-in-right {
+    animation: slideInRight 0.3s ease-out forwards;
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-expand-from-point {
+    animation: expandFromPoint 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Option B: Tactile Tile Styles */
+.mahjong-table {
+    background-color: #f0f0eb;
+    background-image: radial-gradient(#c5a059 0.0312rem, transparent 0.0312rem), radial-gradient(#c5a059 0.0312rem, #f0f0eb 0.0312rem);
+    background-size: 1.875rem 1.875rem;
+    background-position: 0 0, 0.9375rem 0.9375rem;
+}
+
+.tactile-tile {
+    background: #ffffff;
+    /* Simulate the physical depth of a mahjong tile */
+    box-shadow:
+        0 0.0625rem 0.0625rem rgba(0, 0, 0, 0.05),
+        0 0.125rem 0.125rem rgba(0, 0, 0, 0.05),
+        0 0.25rem 0.25rem rgba(0, 0, 0, 0.05),
+        0 0.5rem 0.5rem rgba(0, 0, 0, 0.05),
+        0 1rem 1rem rgba(0, 0, 0, 0.05),
+        0 0.125rem 0 0 #e5e7eb,
+        /* The physical side of the tile */
+        0 0.25rem 0 0 #d1d5db;
+    border: 0.0625rem solid rgba(0, 0, 0, 0.03);
+}
+
+.tile-flip-container {
+    perspective: 125rem;
+}
+
+.tile-flip-inner {
+    position: relative;
+    width: 100%;
+    transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform-style: preserve-3d;
+    display: grid;
+    /* Use grid to allow container to expand to the taller child */
+}
+
+.tile-flip-active {
+    transform: rotateY(180deg);
+}
+
+.tile-front,
+.tile-back {
+    grid-area: 1 / 1 / 2 / 2;
+    /* Place both in the same grid cell */
+    width: 100%;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+.tile-back {
+    transform: rotateY(180deg);
+}
+
+@keyframes tileDrop {
+    0% {
+        transform: translateY(-1.875rem) scale(0.95);
+        opacity: 0;
+    }
+
+    100% {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+}
+
+.animate-tile-drop {
+    animation: tileDrop 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes iconEntrance {
+    0% {
+        transform: scale(0) rotate(-20deg);
+        opacity: 0;
+        filter: blur(0.625rem);
+    }
+
+    70% {
+        transform: scale(1.1) rotate(5deg);
+        opacity: 1;
+        filter: blur(0);
+    }
+
+    100% {
+        transform: scale(1) rotate(0deg);
+        opacity: 1;
+        filter: blur(0);
+    }
+}
+
+@keyframes revealTitle {
+    0% {
+        transform: translateY(1.25rem);
+        opacity: 0;
+        letter-spacing: -0.1em;
+    }
+
+    100% {
+        transform: translateY(0);
+        opacity: 1;
+        letter-spacing: normal;
+    }
+}
+
+@keyframes floatGentle {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-0.5rem);
+    }
+}
+
+.animate-icon-entrance {
+    animation: iconEntrance 1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.animate-reveal-title {
+    animation: revealTitle 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-float-gentle {
+    animation: floatGentle 4s ease-in-out infinite;
+}
+
+.glass-morphism {
+    background: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(1.25rem);
+    -webkit-backdrop-filter: blur(1.25rem);
+    border: 0.0625rem solid rgba(255, 255, 255, 0.5);
+}
+
+/* Toast Animations */
+@keyframes toastIn {
+    0% {
+        transform: translateY(-1.25rem) scale(0.9) rotateX(-10deg);
+        opacity: 0;
+        filter: blur(0.5rem);
+    }
+
+    60% {
+        transform: translateY(0.3125rem) scale(1.02) rotateX(2deg);
+        opacity: 1;
+        filter: blur(0);
+    }
+
+    100% {
+        transform: translateY(0) scale(1) rotateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes toastOut {
+    0% {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+        filter: blur(0);
+    }
+
+    100% {
+        transform: scale(0.9) translateY(-0.625rem);
+        opacity: 0;
+        filter: blur(0.25rem);
+    }
+}
+
+.animate-toast-in {
+    animation: toastIn 0.5s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+.animate-toast-out {
+    animation: toastOut 0.3s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+@keyframes progressFlow {
+    0% {
+        left: -100%;
+    }
+
+    100% {
+        left: 0;
+    }
+}
+
+.animate-progress-flow {
+    animation: progressFlow linear forwards;
+}

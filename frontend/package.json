@@ -1,0 +1,39 @@
+{
+  "name": "両雀",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.4",
+    "@capacitor/cli": "^7.4.4",
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/ios": "^7.4.4",
+    "@google/genai": "^1.30.0",
+    "aws-amplify": "^6.15.9",
+    "html2canvas": "^1.4.1",
+    "lucide-react": "^0.554.0",
+    "maplibre-gl": "^2.4.0",
+    "maplibre-gl-js-amplify": "^4.0.2",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-image-crop": "^11.0.10",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.9.6",
+    "uuid": "^13.0.0",
+    "vite-plugin-pwa": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "workbox-core": "^7.4.0",
+    "workbox-precaching": "^7.4.0"
+  }
+}

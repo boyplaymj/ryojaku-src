@@ -1,0 +1,7 @@
+{
+  "name": "両雀",
+  "description": "A mobile-first social group buying and activity organizing application (PWA). Designed for high-fidelity mobile experience suitable for wrapping into Android/iOS apps. Features AI-assisted event creation.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

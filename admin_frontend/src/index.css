@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --background: #020617;
+    /* Slate 950 */
+    --foreground: #f8fafc;
+    /* Slate 50 */
+}
+
+body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* =========================================
+   Cyber Theme Scrollbar Styles
+   ========================================= */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    background: #0f172a;
+    /* Slate 900 */
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #0ea5e9, #06b6d4);
+    /* Cyan gradient */
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #38bdf8, #22d3ee);
+    /* Lighter cyan */
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 9999px;
+}
+
+/* Firefox */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #0ea5e9 #0f172a;
+}
+
+@layer utilities {
+    .glass-panel {
+        @apply bg-slate-900/60 backdrop-blur-md border border-white/10 shadow-lg;
+    }
+
+    .neon-text {
+        text-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+    }
+}
