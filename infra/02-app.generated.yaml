@@ -1,0 +1,1496 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  両雀 Ryōjaku — 計算層 (61 Lambda + REST/HTTP/WebSocket API)。
+  由 gen_app_template.py 從 functions.manifest.json 生成，勿手改此檔。
+  機密由 SSM 注入；DynamoDB 表由 01-tables.yaml 先建。
+
+Parameters:
+  TablePrefix: { Type: String, Default: MahjongClubStg_ }
+  Stage: { Type: String, Default: stg }
+  # 機密走 SSM SecureString（值另行 put，不進 git）
+  EncryptionKeyParam: { Type: String, Default: /ryojaku/stg/ENCRYPTION_KEY }
+  JwtSecretParam: { Type: String, Default: /ryojaku/stg/JWT_SECRET }
+  VapidPublicParam: { Type: String, Default: /ryojaku/stg/VAPID_PUBLIC_KEY }
+  VapidPrivateParam: { Type: String, Default: /ryojaku/stg/VAPID_PRIVATE_KEY }
+  VapidSubscriberParam: { Type: String, Default: /ryojaku/stg/VAPID_SUBSCRIBER }
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Handler: bootstrap
+    MemorySize: 256
+    Timeout: 30
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Stage
+        TABLE_PREFIX: !Ref TablePrefix
+        ENCRYPTION_KEY: !Sub '{{resolve:ssm-secure:${EncryptionKeyParam}}}'
+        JWT_SECRET: !Sub '{{resolve:ssm-secure:${JwtSecretParam}}}'
+        VAPID_PUBLIC_KEY: !Sub '{{resolve:ssm-secure:${VapidPublicParam}}}'
+        VAPID_PRIVATE_KEY: !Sub '{{resolve:ssm-secure:${VapidPrivateParam}}}'
+        VAPID_SUBSCRIBER: !Sub '{{resolve:ssm-secure:${VapidSubscriberParam}}}'
+
+Resources:
+
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties: { StageName: !Ref Stage, Cors: "'*'" }
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties: { StageName: !Ref Stage }
+
+  FnAdminActivities:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_activities
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-activities'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/admin/activities', Method: ANY }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminAdmins:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_admins
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-admins'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/admins', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminAnalysis:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_analysis
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-analysis'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/analysis', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminDashboardGetStats:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_dashboard_get_stats
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-dashboard-get-stats'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/dashboard/stats', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminLogin:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_login
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-login'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/login', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminLogs:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_logs
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-logs'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/logs', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminModeration:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_moderation
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-moderation'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/moderation', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminPointHistory:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_point_history
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-point-history'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/point-history', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminPushAll:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_push_all
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-push-all'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/push-all', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminUsers:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_users
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-users'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/users', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminVersions:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_versions
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-versions'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/versions', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAdminVouchers:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_vouchers
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-vouchers'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/admin/vouchers', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAnalytics:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_analytics
+      FunctionName: !Sub 'ryojaku-${Stage}-analytics'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/analytics/{proxy+}', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAppLogin:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_login
+      FunctionName: !Sub 'ryojaku-${Stage}-app-login'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/app-login', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAppRegister:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_register
+      FunctionName: !Sub 'ryojaku-${Stage}-app-register'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/app-register', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAppVersionConfig:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_version_config
+      FunctionName: !Sub 'ryojaku-${Stage}-app-version-config'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/app-version-config', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatArchiver:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_archiver
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-archiver'
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt ChatMessagesStreamArn.Value  # 見 README: 需 01-tables 開 stream 並填 ARN
+            StartingPosition: LATEST
+            BatchSize: 10
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatGetHistory:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_history
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-get-history'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/chat/history', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatGetRoomInfo:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_room_info
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-get-room-info'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/chat/room-info', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatGetRooms:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_rooms
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-get-rooms'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/chat/rooms', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatGetUploadUrl:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_upload_url
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-get-upload-url'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/chat/upload-url', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatMarkRead:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_mark_read
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-mark-read'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/chat-mark-read', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatWsConnect:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_connect
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-connect'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatWsDisconnect:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_disconnect
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-disconnect'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnChatWsSendMessage:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_send_message
+      FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-send-message'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityAddComment:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_add_comment
+      FunctionName: !Sub 'ryojaku-${Stage}-community-add-comment'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-add-comment', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityCreatePost:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_create_post
+      FunctionName: !Sub 'ryojaku-${Stage}-community-create-post'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-create-post', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityGetPostDetail:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_post_detail
+      FunctionName: !Sub 'ryojaku-${Stage}-community-get-post-detail'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-get-post-detail', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityGetPosts:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_posts
+      FunctionName: !Sub 'ryojaku-${Stage}-community-get-posts'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-get-posts', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityGetUploadUrl:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_upload_url
+      FunctionName: !Sub 'ryojaku-${Stage}-community-get-upload-url'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-get-upload-url', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityGetUserPosts:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_user_posts
+      FunctionName: !Sub 'ryojaku-${Stage}-community-get-user-posts'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-get-user-posts', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityLikeComment:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_like_comment
+      FunctionName: !Sub 'ryojaku-${Stage}-community-like-comment'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-like-comment', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCommunityLikePost:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_like_post
+      FunctionName: !Sub 'ryojaku-${Stage}-community-like-post'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/community-like-post', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCreateGame:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_create_game
+      FunctionName: !Sub 'ryojaku-${Stage}-create-game'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/create-game', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnDailyBonus:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_daily_bonus
+      FunctionName: !Sub 'ryojaku-${Stage}-daily-bonus'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/daily-bonus', Method: POST }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnEventCommands:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_event_commands
+      FunctionName: !Sub 'ryojaku-${Stage}-event-commands'
+      FunctionUrlConfig: { AuthType: NONE }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnGameDetail:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_game_detail
+      FunctionName: !Sub 'ryojaku-${Stage}-game-detail'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/game-detail', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnGameRegister:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_register
+      FunctionName: !Sub 'ryojaku-${Stage}-game-register'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/game-register', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnGetRatings:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_ratings
+      FunctionName: !Sub 'ryojaku-${Stage}-get-ratings'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/ratings', Method: GET }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnEventGetUploadUrl:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_event_upload_url
+      FunctionName: !Sub 'ryojaku-${Stage}-event-get-upload-url'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/event-get-upload-url', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnGetUploadUrl:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_upload_url
+      FunctionName: !Sub 'ryojaku-${Stage}-get-upload-url'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/get-upload-url', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnLedger:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_ledger
+      FunctionName: !Sub 'ryojaku-${Stage}-ledger'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/ledger', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnMyGames:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_my_games
+      FunctionName: !Sub 'ryojaku-${Stage}-my-games'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/my-games', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnNotifications:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_notifications
+      FunctionName: !Sub 'ryojaku-${Stage}-notifications'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/notifications', Method: ANY }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnRedeemCode:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_redeem_code
+      FunctionName: !Sub 'ryojaku-${Stage}-redeem-code'
+      FunctionUrlConfig: { AuthType: NONE }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnRedeemPoints:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub-redeem
+      FunctionName: !Sub 'ryojaku-${Stage}-redeem-points'
+      FunctionUrlConfig: { AuthType: NONE }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnRejectRegistration:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_reject_registration
+      FunctionName: !Sub 'ryojaku-${Stage}-reject-registration'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/registrations/reject', Method: POST }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnAcceptRegistration:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_accept_registration
+      FunctionName: !Sub 'ryojaku-${Stage}-accept-registration'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/registrations/accept', Method: POST }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCancelGame:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_cancel_game
+      FunctionName: !Sub 'ryojaku-${Stage}-cancel-game'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/cancel-game', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnCancelRegistration:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_cancel_registration
+      FunctionName: !Sub 'ryojaku-${Stage}-cancel-registration'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/cancel-registration', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnSearchGames:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_search_games
+      FunctionName: !Sub 'ryojaku-${Stage}-search-games'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/search-games', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnSubmitRating:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_submit_rating
+      FunctionName: !Sub 'ryojaku-${Stage}-submit-rating'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/submit-rating', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnSubscribePush:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_subscribe_push
+      FunctionName: !Sub 'ryojaku-${Stage}-subscribe-push'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/subscribe-push', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnSubscriptionStatus:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_subscription_status
+      FunctionName: !Sub 'ryojaku-${Stage}-subscription-status'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/subscription-status', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnUnsubscribePush:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_unsubscribe_push
+      FunctionName: !Sub 'ryojaku-${Stage}-unsubscribe-push'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/unsubscribe-push', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnClaimPushBonus:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_claim_push_bonus
+      FunctionName: !Sub 'ryojaku-${Stage}-claim-push-bonus'
+      Events:
+        Http0:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/claim-push-bonus', Method: POST }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnUserComments:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_comments
+      FunctionName: !Sub 'ryojaku-${Stage}-user-comments'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/user-comments', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnUserInfo:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_info
+      FunctionName: !Sub 'ryojaku-${Stage}-user-info'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/user-info', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnUserProfile:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_profile
+      FunctionName: !Sub 'ryojaku-${Stage}-user-profile'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/user-profile', Method: any }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnVapidKey:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_vapid_key
+      FunctionName: !Sub 'ryojaku-${Stage}-vapid-key'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/vapid-key', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+  FnVerifyUser:
+    Type: AWS::Serverless::Function
+    Metadata: { BuildMethod: makefile }
+    Properties:
+      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_verify_user
+      FunctionName: !Sub 'ryojaku-${Stage}-verify-user'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/verify-user', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+
+
+  # ---------- WebSocket API ----------
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub 'ryojaku-${Stage}-ws'
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: '$request.body.action'
+  WsIntegconnect:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FnChatWsConnect.Arn}/invocations'
+  WsRouteconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$connect'
+      Target: !Sub 'integrations/${WsIntegconnect}'
+  WsPermconnect:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FnChatWsConnect
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  WsIntegdisconnect:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FnChatWsDisconnect.Arn}/invocations'
+  WsRoutedisconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$disconnect'
+      Target: !Sub 'integrations/${WsIntegdisconnect}'
+  WsPermdisconnect:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FnChatWsDisconnect
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  WsIntegsendMessage:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FnChatWsSendMessage.Arn}/invocations'
+  WsRoutesendMessage:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: 'sendMessage'
+      Target: !Sub 'integrations/${WsIntegsendMessage}'
+  WsPermsendMessage:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FnChatWsSendMessage
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+
+Outputs:
+  RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }
+  HttpApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }
+  WebSocketUrl: { Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }

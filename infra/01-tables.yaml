@@ -1,0 +1,376 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  両雀 Ryōjaku — 資料層 (DynamoDB 24 tables).
+  接手自工程師既有服務，重建到我們 AWS 帳號 (staging 先空表)。
+  Keys 取自工程師 setup_*.{sh,ps1} 建表腳本；GSI 名稱取自 Go 源碼實際 IndexName 引用。
+  全表 PAY_PER_REQUEST（遵 tools/COST_CONTROL.md §1 鐵律）。
+
+Parameters:
+  TablePrefix:
+    Type: String
+    Default: MahjongClubStg_
+    Description: staging 用獨立前綴，避免與 prod (MahjongClub_) 撞名；正式切換時改回 MahjongClub_
+
+Resources:
+
+  # ---------- 核心 ----------
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Users'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: email, AttributeType: S }
+        - { AttributeName: invitedBy, AttributeType: S }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: email-index
+          KeySchema: [ { AttributeName: email, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+        - IndexName: invitedBy-index
+          KeySchema: [ { AttributeName: invitedBy, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+
+  GamesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Games'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: gameId, AttributeType: S }
+        - { AttributeName: status, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: gameId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: status-createdAt-index
+          KeySchema:
+            - { AttributeName: status, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }
+
+  RegistrationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Registrations'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: gameId, AttributeType: S }
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: gameId, KeyType: HASH }
+        - { AttributeName: userId, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: gameId-createdAt-index
+          KeySchema:
+            - { AttributeName: gameId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # RatingComments 與 Ratings 分離（源碼各自 query）
+  RatingCommentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}RatingComments'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: gameId, AttributeType: S }
+        - { AttributeName: fromUserId, AttributeType: S }
+        - { AttributeName: toUserId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: gameId, KeyType: HASH }
+        - { AttributeName: fromUserId, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: toUserId-createdAt-index
+          KeySchema:
+            - { AttributeName: toUserId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: gameId-fromUserId-index
+          KeySchema:
+            - { AttributeName: gameId, KeyType: HASH }
+            - { AttributeName: fromUserId, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  RatingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Ratings'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: gameId, AttributeType: S }
+        - { AttributeName: fromUserId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: gameId, KeyType: HASH }
+        - { AttributeName: fromUserId, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: gameId-fromUserId-index
+          KeySchema:
+            - { AttributeName: gameId, KeyType: HASH }
+            - { AttributeName: fromUserId, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # Community 單表設計 (Post/Comment/Like 用 SK 前綴)。createdAt 為 ISO8601 字串 (S)
+  CommunityTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Community'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: postId, AttributeType: S }
+        - { AttributeName: sortKey, AttributeType: S }
+        - { AttributeName: authorId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: S }
+      KeySchema:
+        - { AttributeName: postId, KeyType: HASH }
+        - { AttributeName: sortKey, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: authorId-createdAt-index
+          KeySchema:
+            - { AttributeName: authorId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: sortKey-createdAt-index
+          KeySchema:
+            - { AttributeName: sortKey, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # ---------- 點數 / 記帳 ----------
+  PointTransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}PointTransactions'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: sortKey, AttributeType: S }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: sortKey, KeyType: RANGE }
+
+  LedgerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Ledger'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: sortKey, AttributeType: S }
+        - { AttributeName: gameId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: sortKey, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: gameId-createdAt-index
+          KeySchema:
+            - { AttributeName: gameId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # ---------- 通知 / 推播 ----------
+  NotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Notifications'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: createdAt, KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }
+
+  PushSubscriptionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}PushSubscriptions_MultiDevice'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: deviceId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: deviceId, KeyType: RANGE }
+
+  # ---------- 聊天 (4 表, keys 取自 setup_chat_tables.ps1) ----------
+  ChatRoomsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}ChatRooms'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: RoomID, AttributeType: S }
+      KeySchema:
+        - { AttributeName: RoomID, KeyType: HASH }
+
+  ChatUserMembershipsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}ChatUserMemberships'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: UserID, AttributeType: S }
+        - { AttributeName: 'LastMessageTime#RoomID', AttributeType: S }
+      KeySchema:
+        - { AttributeName: UserID, KeyType: HASH }
+        - { AttributeName: 'LastMessageTime#RoomID', KeyType: RANGE }
+
+  ChatMessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}ChatMessages'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: RoomID, AttributeType: S }
+        - { AttributeName: 'Timestamp#MessageID', AttributeType: S }
+      KeySchema:
+        - { AttributeName: RoomID, KeyType: HASH }
+        - { AttributeName: 'Timestamp#MessageID', KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: TTL, Enabled: true }
+
+  ChatConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}ChatConnections'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: ConnectionID, AttributeType: S }
+        - { AttributeName: UserID, AttributeType: S }
+      KeySchema:
+        - { AttributeName: ConnectionID, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: UserID-index
+          KeySchema: [ { AttributeName: UserID, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+
+  # ---------- 後台 / 營運 (keys 取自 setup_admin_tables.sh) ----------
+  AdminUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AdminUsers'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: username, AttributeType: S } ]
+      KeySchema: [ { AttributeName: username, KeyType: HASH } ]
+
+  AdminAuditLogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AdminAuditLogs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: log_id, AttributeType: S } ]
+      KeySchema: [ { AttributeName: log_id, KeyType: HASH } ]
+
+  AdminConfigsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AdminConfigs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: configKey, AttributeType: S } ]
+      KeySchema: [ { AttributeName: configKey, KeyType: HASH } ]
+
+  VouchersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Vouchers'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: code, AttributeType: S } ]
+      KeySchema: [ { AttributeName: code, KeyType: HASH } ]
+
+  # RedeemCodes: PK code; GSI commandId-redeemedTS-index + BatchIdIndex (源碼引用)
+  RedeemCodesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}RedeemCodes'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: code, AttributeType: S }
+        - { AttributeName: commandId, AttributeType: S }
+        - { AttributeName: redeemedTS, AttributeType: N }
+        - { AttributeName: batchId, AttributeType: S }
+      KeySchema: [ { AttributeName: code, KeyType: HASH } ]
+      GlobalSecondaryIndexes:
+        - IndexName: commandId-redeemedTS-index
+          KeySchema:
+            - { AttributeName: commandId, KeyType: HASH }
+            - { AttributeName: redeemedTS, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: BatchIdIndex
+          KeySchema: [ { AttributeName: batchId, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+
+  EventCommandsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}EventCommands'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: commandId, AttributeType: S }
+        - { AttributeName: command, AttributeType: S }
+      KeySchema: [ { AttributeName: commandId, KeyType: HASH } ]
+      GlobalSecondaryIndexes:
+        - IndexName: command-index
+          KeySchema: [ { AttributeName: command, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+
+  EventRedemptionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}EventRedemptions'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: N }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: createdAt, KeyType: RANGE }
+
+  DailyClaimsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}DailyClaims'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userId, AttributeType: S }
+        - { AttributeName: date, AttributeType: S }
+      KeySchema:
+        - { AttributeName: userId, KeyType: HASH }
+        - { AttributeName: date, KeyType: RANGE }
+
+  APITokenStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}APITokenStats'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: tokenId, AttributeType: S } ]
+      KeySchema: [ { AttributeName: tokenId, KeyType: HASH } ]
+
+  # ---------- LINE / AI 顧問 (獨立命名，不帶 MahjongClub_ 前綴) ----------
+  LineBotUserProfilesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: LineBot-User-Profiles-Stg
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
+      KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
+
+  LineBotUserProfileSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: LineBot-User-Profile-Sessions-Stg
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
+      KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
+      TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+Outputs:
+  TablePrefix:
+    Value: !Ref TablePrefix
+    Export: { Name: RyojakuTablePrefix }
