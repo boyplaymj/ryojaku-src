@@ -388,8 +388,27 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}APITokenStats'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions: [ { AttributeName: tokenId, AttributeType: S } ]
-      KeySchema: [ { AttributeName: tokenId, KeyType: HASH } ]
+      # 修正(S2 2026-07-17):PK改(date,endpoint)。token_stats.go以此為key做原子計數,
+      # admin_analysis依date查;原tokenId不符。
+      AttributeDefinitions:
+        - { AttributeName: date, AttributeType: S }
+        - { AttributeName: endpoint, AttributeType: S }
+      KeySchema:
+        - { AttributeName: date, KeyType: HASH }
+        - { AttributeName: endpoint, KeyType: RANGE }
+
+  # 遙測:RecordTraffic 以 (Date, Category=category#action) 原子計數
+  TrafficStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}TrafficStats'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: Date, AttributeType: S }
+        - { AttributeName: Category, AttributeType: S }
+      KeySchema:
+        - { AttributeName: Date, KeyType: HASH }
+        - { AttributeName: Category, KeyType: RANGE }
 
   # ---------- LINE / AI 顧問 (獨立命名，不帶 MahjongClub_ 前綴) ----------
   LineBotUserProfilesTable:
@@ -408,6 +427,23 @@ Resources:
       AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
       KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
       TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+  # ---------- S3 媒體桶(S2補:程式讀 ASSETS_BUCKET/COMMUNITY_BUCKET env,原缺 IaC) ----------
+  # staging 名;正式版另建 mahjongclub-app-assets / mahjongclub-community-media。
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ryojaku-stg-assets     # 頭像等,get-upload-url presign 目標
+      CorsConfiguration:
+        CorsRules:
+          - { AllowedMethods: [GET, PUT, POST], AllowedOrigins: ['*'], AllowedHeaders: ['*'], MaxAge: 3000 }
+  CommunityBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ryojaku-stg-community   # 社群/聊天/活動媒體,*-get-upload-url presign 目標
+      CorsConfiguration:
+        CorsRules:
+          - { AllowedMethods: [GET, PUT, POST], AllowedOrigins: ['*'], AllowedHeaders: ['*'], MaxAge: 3000 }
 
 Outputs:
   TablePrefix:

@@ -27,6 +27,9 @@ Globals:
       Variables:
         ENVIRONMENT: !Ref Stage
         TABLE_PREFIX: !Ref TablePrefix
+        # S2補:上傳端點讀這兩個env指向我們的桶(原fallback寫死prod桶mahjongclub-*)
+        ASSETS_BUCKET: !Sub 'ryojaku-${Stage}-assets'
+        COMMUNITY_BUCKET: !Sub 'ryojaku-${Stage}-community'
         ENCRYPTION_KEY: !Ref EncryptionKey
         JWT_SECRET: !Ref JwtSecret
         VAPID_PUBLIC_KEY: !Ref VapidPublicKey
@@ -63,7 +66,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminAdmins:
     Type: AWS::Serverless::Function
@@ -85,7 +90,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminAnalysis:
     Type: AWS::Serverless::Function
@@ -107,7 +114,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminDashboardGetStats:
     Type: AWS::Serverless::Function
@@ -129,7 +138,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminLogin:
     Type: AWS::Serverless::Function
@@ -151,7 +162,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminLogs:
     Type: AWS::Serverless::Function
@@ -173,7 +186,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminModeration:
     Type: AWS::Serverless::Function
@@ -195,7 +210,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminPointHistory:
     Type: AWS::Serverless::Function
@@ -217,7 +234,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminPushAll:
     Type: AWS::Serverless::Function
@@ -239,7 +258,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminUsers:
     Type: AWS::Serverless::Function
@@ -261,7 +282,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminVersions:
     Type: AWS::Serverless::Function
@@ -283,7 +306,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAdminVouchers:
     Type: AWS::Serverless::Function
@@ -305,7 +330,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAnalytics:
     Type: AWS::Serverless::Function
@@ -327,7 +354,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAppLogin:
     Type: AWS::Serverless::Function
@@ -349,7 +378,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAppRegister:
     Type: AWS::Serverless::Function
@@ -371,7 +402,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAppVersionConfig:
     Type: AWS::Serverless::Function
@@ -393,7 +426,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatArchiver:
     Type: AWS::Serverless::Function
@@ -411,7 +446,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatGetHistory:
     Type: AWS::Serverless::Function
@@ -433,7 +470,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatGetRoomInfo:
     Type: AWS::Serverless::Function
@@ -455,7 +494,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatGetRooms:
     Type: AWS::Serverless::Function
@@ -477,7 +518,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -499,7 +542,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatMarkRead:
     Type: AWS::Serverless::Function
@@ -521,7 +566,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatWsConnect:
     Type: AWS::Serverless::Function
@@ -539,7 +586,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatWsDisconnect:
     Type: AWS::Serverless::Function
@@ -557,7 +606,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnChatWsSendMessage:
     Type: AWS::Serverless::Function
@@ -575,7 +626,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityAddComment:
     Type: AWS::Serverless::Function
@@ -597,7 +650,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityCreatePost:
     Type: AWS::Serverless::Function
@@ -619,7 +674,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityGetPostDetail:
     Type: AWS::Serverless::Function
@@ -641,7 +698,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityGetPosts:
     Type: AWS::Serverless::Function
@@ -663,7 +722,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -685,7 +746,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityGetUserPosts:
     Type: AWS::Serverless::Function
@@ -707,7 +770,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityLikeComment:
     Type: AWS::Serverless::Function
@@ -729,7 +794,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCommunityLikePost:
     Type: AWS::Serverless::Function
@@ -751,7 +818,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCreateGame:
     Type: AWS::Serverless::Function
@@ -773,7 +842,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnDailyBonus:
     Type: AWS::Serverless::Function
@@ -795,7 +866,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnEventCommands:
     Type: AWS::Serverless::Function
@@ -814,7 +887,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnGameDetail:
     Type: AWS::Serverless::Function
@@ -836,7 +911,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnGameRegister:
     Type: AWS::Serverless::Function
@@ -858,7 +935,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnGetRatings:
     Type: AWS::Serverless::Function
@@ -880,7 +959,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnEventGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -902,7 +983,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -924,7 +1007,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnLedger:
     Type: AWS::Serverless::Function
@@ -946,7 +1031,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnMyGames:
     Type: AWS::Serverless::Function
@@ -968,7 +1055,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnNotifications:
     Type: AWS::Serverless::Function
@@ -990,7 +1079,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnRedeemCode:
     Type: AWS::Serverless::Function
@@ -1009,7 +1100,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnRedeemPoints:
     Type: AWS::Serverless::Function
@@ -1028,7 +1121,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnRejectRegistration:
     Type: AWS::Serverless::Function
@@ -1050,7 +1145,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnAcceptRegistration:
     Type: AWS::Serverless::Function
@@ -1072,7 +1169,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCancelGame:
     Type: AWS::Serverless::Function
@@ -1094,7 +1193,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnCancelRegistration:
     Type: AWS::Serverless::Function
@@ -1116,7 +1217,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnSearchGames:
     Type: AWS::Serverless::Function
@@ -1138,7 +1241,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnSubmitRating:
     Type: AWS::Serverless::Function
@@ -1160,7 +1265,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnSubscribePush:
     Type: AWS::Serverless::Function
@@ -1182,7 +1289,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnSubscriptionStatus:
     Type: AWS::Serverless::Function
@@ -1204,7 +1313,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnUnsubscribePush:
     Type: AWS::Serverless::Function
@@ -1226,7 +1337,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnClaimPushBonus:
     Type: AWS::Serverless::Function
@@ -1248,7 +1361,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnUserComments:
     Type: AWS::Serverless::Function
@@ -1270,7 +1385,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnUserInfo:
     Type: AWS::Serverless::Function
@@ -1292,7 +1409,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnUserProfile:
     Type: AWS::Serverless::Function
@@ -1314,7 +1433,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnVapidKey:
     Type: AWS::Serverless::Function
@@ -1336,7 +1457,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
   FnVerifyUser:
     Type: AWS::Serverless::Function
@@ -1358,7 +1481,9 @@ Resources:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 
 
   # ---------- WebSocket API ----------

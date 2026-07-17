@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -13,8 +14,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// TokenStatsTableName 統計表名稱
-const TokenStatsTableName = "MahjongClub_APITokenStats"
+// tokenStatsTableName 統計表名稱(讀 TABLE_PREFIX，預設 prod 前綴以相容既有部署)
+func tokenStatsTableName() string {
+	p := os.Getenv("TABLE_PREFIX")
+	if p == "" {
+		p = "MahjongClub_"
+	}
+	return p + "APITokenStats"
+}
 
 // tokenStatsClient 用於統計的 DynamoDB client (懶加載)
 var tokenStatsClient *dynamodb.Client
@@ -65,7 +72,7 @@ func recordTokenUsageSync(ctx context.Context, endpoint string, hasToken bool) {
 	}
 
 	_, err = client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(TokenStatsTableName),
+		TableName: aws.String(tokenStatsTableName()),
 		Key: map[string]types.AttributeValue{
 			"date":     &types.AttributeValueMemberS{Value: dateKey},
 			"endpoint": &types.AttributeValueMemberS{Value: endpoint},

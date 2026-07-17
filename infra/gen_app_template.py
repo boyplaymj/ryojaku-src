@@ -42,6 +42,9 @@ Globals:
       Variables:
         ENVIRONMENT: !Ref Stage
         TABLE_PREFIX: !Ref TablePrefix
+        # S2補:上傳端點讀這兩個env指向我們的桶(原fallback寫死prod桶mahjongclub-*)
+        ASSETS_BUCKET: !Sub 'ryojaku-${Stage}-assets'
+        COMMUNITY_BUCKET: !Sub 'ryojaku-${Stage}-community'
         ENCRYPTION_KEY: !Ref EncryptionKey
         JWT_SECRET: !Ref JwtSecret
         VAPID_PUBLIC_KEY: !Ref VapidPublicKey
@@ -70,7 +73,9 @@ DDB_POLICY = """      Policies:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource: !Sub 'arn:aws:s3:::ryojaku-${Stage}-media/*'
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
 """
 
 def fn_block(f):

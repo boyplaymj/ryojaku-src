@@ -1047,7 +1047,7 @@ func main() {
 
 // handleTokenAnalysis 分析 API 請求的 Token 使用統計
 func handleTokenAnalysis(ctx context.Context, now time.Time) interface{} {
-	tokenStatsTable := "MahjongClub_APITokenStats"
+	tokenStatsTable := getEnv("TABLE_PREFIX", "MahjongClub_") + "APITokenStats"
 
 	// 資料結構
 	type DayStat struct {
