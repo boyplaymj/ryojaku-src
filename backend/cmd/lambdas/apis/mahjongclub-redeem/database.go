@@ -94,7 +94,7 @@ func saveBatch(ctx context.Context, batch *CodeBatch) error {
 	}
 
 	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String("MahjongClub_CodeBatches"),
+		TableName: aws.String(tablePrefix + "CodeBatches"),
 		Item:      item,
 	})
 
@@ -109,7 +109,7 @@ func saveRedeemCode(ctx context.Context, code *RedeemCode) error {
 	}
 
 	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String("MahjongClub_RedeemCodes"),
+		TableName: aws.String(tablePrefix + "RedeemCodes"),
 		Item:      item,
 	})
 
@@ -124,7 +124,7 @@ func getRedeemCodeStats(ctx context.Context) (*StatsResponse, error) {
 
 	for {
 		input := &dynamodb.ScanInput{
-			TableName: aws.String("MahjongClub_RedeemCodes"),
+			TableName: aws.String(tablePrefix + "RedeemCodes"),
 		}
 
 		if lastEvaluatedKey != nil {
@@ -187,7 +187,7 @@ func getRedeemCodeStats(ctx context.Context) (*StatsResponse, error) {
 func getBatches(ctx context.Context, limit int) ([]CodeBatch, error) {
 	// Query batches sorted by creation time (descending)
 	input := &dynamodb.ScanInput{
-		TableName: aws.String("MahjongClub_CodeBatches"),
+		TableName: aws.String(tablePrefix + "CodeBatches"),
 		Limit:     aws.Int32(int32(limit)),
 	}
 
@@ -217,7 +217,7 @@ func getBatches(ctx context.Context, limit int) ([]CodeBatch, error) {
 // countUsedCodesByBatch counts used codes in a batch
 func countUsedCodesByBatch(ctx context.Context, batchID string) (int, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("MahjongClub_RedeemCodes"),
+		TableName:              aws.String(tablePrefix + "RedeemCodes"),
 		IndexName:              aws.String("BatchIdIndex"),
 		KeyConditionExpression: aws.String("batchId = :batchId AND #status = :status"),
 		ExpressionAttributeNames: map[string]string{
@@ -245,7 +245,7 @@ func getCodesByBatch(ctx context.Context, batchID string) ([]RedeemCode, error) 
 
 	for {
 		input := &dynamodb.QueryInput{
-			TableName:              aws.String("MahjongClub_RedeemCodes"),
+			TableName:              aws.String(tablePrefix + "RedeemCodes"),
 			IndexName:              aws.String("BatchIdIndex"),
 			KeyConditionExpression: aws.String("batchId = :batchId"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -286,7 +286,7 @@ func getUsageTrend(ctx context.Context, days int) (map[string]interface{}, error
 
 	// Query used codes within the date range
 	input := &dynamodb.ScanInput{
-		TableName:        aws.String("MahjongClub_RedeemCodes"),
+		TableName:        aws.String(tablePrefix + "RedeemCodes"),
 		FilterExpression: aws.String("#status = :status AND usedAt >= :startDate"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",

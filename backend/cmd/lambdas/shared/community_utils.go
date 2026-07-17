@@ -18,6 +18,19 @@ func GetCDNDomain() string {
 	return DefaultCDNDomain
 }
 
+// getS3BucketDomain 回傳要被正規化替換的 S3 直連網域。S2:讀 COMMUNITY_BUCKET
+// env 組出我們的桶網域,不再寫死 prod 桶;env 未設則沿用預設 const。
+func getS3BucketDomain() string {
+	if b := os.Getenv("COMMUNITY_BUCKET"); b != "" {
+		region := os.Getenv("AWS_REGION")
+		if region == "" {
+			region = "ap-southeast-1"
+		}
+		return b + ".s3." + region + ".amazonaws.com"
+	}
+	return S3BucketDomain
+}
+
 // NormalizeMediaURL replaces S3 direct URL with CloudFront CDN URL
 func NormalizeMediaURL(url string) string {
 	if url == "" {
@@ -25,7 +38,7 @@ func NormalizeMediaURL(url string) string {
 	}
 	cdnDomain := GetCDNDomain()
 	// Replace S3 bucket URL with CDN domain
-	return strings.Replace(url, S3BucketDomain, cdnDomain, 1)
+	return strings.Replace(url, getS3BucketDomain(), cdnDomain, 1)
 }
 
 // NormalizePostMediaURLs normalizes all image URLs in a post

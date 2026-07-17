@@ -21,7 +21,17 @@ import (
 var (
 	dynamoClient *dynamodb.Client
 	tableName    = os.Getenv("TABLE_NAME")
+	tablePrefix  = redeemTablePrefix() // S2: 讀 TABLE_PREFIX，不再寫死 prod 前綴
 )
+
+// redeemTablePrefix 讀 TABLE_PREFIX env，預設 prod 前綴以相容既有部署
+func redeemTablePrefix() string {
+	p := os.Getenv("TABLE_PREFIX")
+	if p == "" {
+		p = "MahjongClub_"
+	}
+	return p
+}
 
 func init() {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("ap-southeast-1"))

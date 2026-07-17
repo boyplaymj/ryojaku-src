@@ -307,18 +307,20 @@ Resources:
       AttributeDefinitions: [ { AttributeName: code, AttributeType: S } ]
       KeySchema: [ { AttributeName: code, KeyType: HASH } ]
 
-  # RedeemCodes: PK code; GSI commandId-redeemedTS-index + BatchIdIndex (源碼引用)
+  # 修正(S2 2026-07-17):PK改codeId(第7個schema錯配)。redeem-code與redeem-points
+  # 兩路徑都以GetItem{codeId}存取,原PK=code不符。GSI:BatchIdIndex(依批次)+
+  # commandId-redeemedTS-index(源碼引用,保留)。
   RedeemCodesTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub '${TablePrefix}RedeemCodes'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - { AttributeName: code, AttributeType: S }
+        - { AttributeName: codeId, AttributeType: S }
         - { AttributeName: commandId, AttributeType: S }
         - { AttributeName: redeemedTS, AttributeType: N }
         - { AttributeName: batchId, AttributeType: S }
-      KeySchema: [ { AttributeName: code, KeyType: HASH } ]
+      KeySchema: [ { AttributeName: codeId, KeyType: HASH } ]
       GlobalSecondaryIndexes:
         - IndexName: commandId-redeemedTS-index
           KeySchema:
@@ -328,6 +330,15 @@ Resources:
         - IndexName: BatchIdIndex
           KeySchema: [ { AttributeName: batchId, KeyType: HASH } ]
           Projection: { ProjectionType: ALL }
+
+  # S2補:CodeBatches原完全缺IaC(mahjongclub-redeem的saveBatch/getBatches用)。PK=batchId
+  CodeBatchesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}CodeBatches'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: batchId, AttributeType: S } ]
+      KeySchema: [ { AttributeName: batchId, KeyType: HASH } ]
 
   EventCommandsTable:
     Type: AWS::DynamoDB::Table
