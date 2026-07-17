@@ -57,18 +57,24 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}Registrations'
       BillingMode: PAY_PER_REQUEST
+      # ⚠️ 修正(S2影子測試2026-07-17):PK改registrationId(單一)。原建(gameId,userId)
+      # 與程式不符——accept/cancel/reject/register 全用 GetItem{registrationId} 單鍵查詢，
+      # 複合鍵會讓 accept-registration 找不到報名。userId 僅在 Scan filter 用非 key。
       AttributeDefinitions:
+        - { AttributeName: registrationId, AttributeType: S }
         - { AttributeName: gameId, AttributeType: S }
-        - { AttributeName: userId, AttributeType: S }
         - { AttributeName: createdAt, AttributeType: N }
       KeySchema:
-        - { AttributeName: gameId, KeyType: HASH }
-        - { AttributeName: userId, KeyType: RANGE }
+        - { AttributeName: registrationId, KeyType: HASH }
       GlobalSecondaryIndexes:
-        - IndexName: gameId-createdAt-index
+        - IndexName: gameId-createdAt-index   # register / game_detail 用
           KeySchema:
             - { AttributeName: gameId, KeyType: HASH }
             - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GameIdIndex              # cancel_game 用(源碼硬編此名)
+          KeySchema:
+            - { AttributeName: gameId, KeyType: HASH }
           Projection: { ProjectionType: ALL }
 
   # RatingComments 與 Ratings 分離（源碼各自 query）
@@ -180,12 +186,20 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}Notifications'
       BillingMode: PAY_PER_REQUEST
+      # 修正(S2 2026-07-17):PK改notificationId。程式UpdateItem(標已讀)用notificationId
+      # 單鍵、列表查userId-createdAt-index GSI；原(userId,createdAt)複合鍵不符。
       AttributeDefinitions:
+        - { AttributeName: notificationId, AttributeType: S }
         - { AttributeName: userId, AttributeType: S }
         - { AttributeName: createdAt, AttributeType: N }
       KeySchema:
-        - { AttributeName: userId, KeyType: HASH }
-        - { AttributeName: createdAt, KeyType: RANGE }
+        - { AttributeName: notificationId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: userId-createdAt-index
+          KeySchema:
+            - { AttributeName: userId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
       TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }
 
   PushSubscriptionsTable:
@@ -325,24 +339,40 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}EventRedemptions'
       BillingMode: PAY_PER_REQUEST
+      # 修正(S2 2026-07-17):PK改redemptionId(Put條件attribute_not_exists(redemptionId))
+      # + 補commandId-redeemedTS-index GSI(getEventRedemptionsByCommand用);原(userId,createdAt)不符。
       AttributeDefinitions:
-        - { AttributeName: userId, AttributeType: S }
-        - { AttributeName: createdAt, AttributeType: N }
+        - { AttributeName: redemptionId, AttributeType: S }
+        - { AttributeName: commandId, AttributeType: S }
+        - { AttributeName: redeemedTS, AttributeType: N }
       KeySchema:
-        - { AttributeName: userId, KeyType: HASH }
-        - { AttributeName: createdAt, KeyType: RANGE }
+        - { AttributeName: redemptionId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: commandId-redeemedTS-index
+          KeySchema:
+            - { AttributeName: commandId, KeyType: HASH }
+            - { AttributeName: redeemedTS, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
 
   DailyClaimsTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub '${TablePrefix}DailyClaims'
       BillingMode: PAY_PER_REQUEST
+      # 修正(S2 2026-07-17):key名casing錯。程式存取用userID/claimDate(dynamodbav標)+
+      # admin_analysis查claimDate-userID-index GSI;原(userId,date)大小寫與名稱皆不符。
       AttributeDefinitions:
-        - { AttributeName: userId, AttributeType: S }
-        - { AttributeName: date, AttributeType: S }
+        - { AttributeName: userID, AttributeType: S }
+        - { AttributeName: claimDate, AttributeType: S }
       KeySchema:
-        - { AttributeName: userId, KeyType: HASH }
-        - { AttributeName: date, KeyType: RANGE }
+        - { AttributeName: userID, KeyType: HASH }
+        - { AttributeName: claimDate, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: claimDate-userID-index
+          KeySchema:
+            - { AttributeName: claimDate, KeyType: HASH }
+            - { AttributeName: userID, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
 
   APITokenStatsTable:
     Type: AWS::DynamoDB::Table
