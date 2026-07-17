@@ -296,13 +296,17 @@ Resources:
     Properties:
       TableName: !Sub '${TablePrefix}AdminConfigs'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions: [ { AttributeName: configKey, AttributeType: S } ]
-      KeySchema: [ { AttributeName: configKey, KeyType: HASH } ]
+      # 修正(S2稽核2026-07-17):PK改info_key。程式全用info_key(getRewardsConfig/
+      # admin_versions/activities/邀請獎勵config),原configKey→所有config讀取失敗靜默用預設。
+      AttributeDefinitions: [ { AttributeName: info_key, AttributeType: S } ]
+      KeySchema: [ { AttributeName: info_key, KeyType: HASH } ]
 
+  # 修正(S2稽核2026-07-17):表名改ActivityVouchers。admin_vouchers用
+  # tablePrefix+"ActivityVouchers",原Vouchers→找不到表。PK=code不變。
   VouchersTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${TablePrefix}Vouchers'
+      TableName: !Sub '${TablePrefix}ActivityVouchers'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: code, AttributeType: S } ]
       KeySchema: [ { AttributeName: code, KeyType: HASH } ]
@@ -425,7 +429,7 @@ Resources:
   LineBotUserProfilesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: LineBot-User-Profiles-Stg
+      TableName: LineBot-User-Profiles   # S2稽核:程式(internal/services)硬編此名無-Stg
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
       KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
@@ -433,7 +437,7 @@ Resources:
   LineBotUserProfileSessionsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: LineBot-User-Profile-Sessions-Stg
+      TableName: LineBot-User-Profile-Sessions   # S2稽核:程式硬編此名無-Stg
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
       KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
