@@ -8,12 +8,13 @@ Description: >
 Parameters:
   TablePrefix: { Type: String, Default: MahjongClubStg_ }
   Stage: { Type: String, Default: stg }
-  # 機密走 SSM SecureString（值另行 put，不進 git）
-  EncryptionKeyParam: { Type: String, Default: /ryojaku/stg/ENCRYPTION_KEY }
-  JwtSecretParam: { Type: String, Default: /ryojaku/stg/JWT_SECRET }
-  VapidPublicParam: { Type: String, Default: /ryojaku/stg/VAPID_PUBLIC_KEY }
-  VapidPrivateParam: { Type: String, Default: /ryojaku/stg/VAPID_PRIVATE_KEY }
-  VapidSubscriberParam: { Type: String, Default: /ryojaku/stg/VAPID_SUBSCRIBER }
+  # 機密以 NoEcho 參數注入（值於部署時由 deploy_app.sh 從 SSM SecureString 解密後
+  # 帶入 --parameter-overrides；CFN 不允許 ssm-secure 動態引用用在 Lambda 環境變數）。
+  EncryptionKey: { Type: String, NoEcho: true }
+  JwtSecret: { Type: String, NoEcho: true }
+  VapidPublicKey: { Type: String, NoEcho: true }
+  VapidPrivateKey: { Type: String, NoEcho: true }
+  VapidSubscriber: { Type: String, NoEcho: true }
 
 Globals:
   Function:
@@ -26,11 +27,11 @@ Globals:
       Variables:
         ENVIRONMENT: !Ref Stage
         TABLE_PREFIX: !Ref TablePrefix
-        ENCRYPTION_KEY: !Sub '{{resolve:ssm-secure:${EncryptionKeyParam}}}'
-        JWT_SECRET: !Sub '{{resolve:ssm-secure:${JwtSecretParam}}}'
-        VAPID_PUBLIC_KEY: !Sub '{{resolve:ssm-secure:${VapidPublicParam}}}'
-        VAPID_PRIVATE_KEY: !Sub '{{resolve:ssm-secure:${VapidPrivateParam}}}'
-        VAPID_SUBSCRIBER: !Sub '{{resolve:ssm-secure:${VapidSubscriberParam}}}'
+        ENCRYPTION_KEY: !Ref EncryptionKey
+        JWT_SECRET: !Ref JwtSecret
+        VAPID_PUBLIC_KEY: !Ref VapidPublicKey
+        VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
+        VAPID_SUBSCRIBER: !Ref VapidSubscriber
 
 Resources:
 
@@ -44,9 +45,8 @@ Resources:
 
   FnAdminActivities:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_activities
+      CodeUri: ../build/apis__mahjongclub_admin_activities
       FunctionName: !Sub 'ryojaku-${Stage}-admin-activities'
       Events:
         Http0:
@@ -67,9 +67,8 @@ Resources:
 
   FnAdminAdmins:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_admins
+      CodeUri: ../build/apis__mahjongclub_admin_admins
       FunctionName: !Sub 'ryojaku-${Stage}-admin-admins'
       Events:
         Rest0:
@@ -90,9 +89,8 @@ Resources:
 
   FnAdminAnalysis:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_analysis
+      CodeUri: ../build/apis__mahjongclub_admin_analysis
       FunctionName: !Sub 'ryojaku-${Stage}-admin-analysis'
       Events:
         Rest0:
@@ -113,9 +111,8 @@ Resources:
 
   FnAdminDashboardGetStats:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_dashboard_get_stats
+      CodeUri: ../build/apis__mahjongclub_admin_dashboard_get_stats
       FunctionName: !Sub 'ryojaku-${Stage}-admin-dashboard-get-stats'
       Events:
         Rest0:
@@ -136,9 +133,8 @@ Resources:
 
   FnAdminLogin:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_login
+      CodeUri: ../build/apis__mahjongclub_admin_login
       FunctionName: !Sub 'ryojaku-${Stage}-admin-login'
       Events:
         Rest0:
@@ -159,9 +155,8 @@ Resources:
 
   FnAdminLogs:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_logs
+      CodeUri: ../build/apis__mahjongclub_admin_logs
       FunctionName: !Sub 'ryojaku-${Stage}-admin-logs'
       Events:
         Rest0:
@@ -182,9 +177,8 @@ Resources:
 
   FnAdminModeration:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_moderation
+      CodeUri: ../build/apis__mahjongclub_admin_moderation
       FunctionName: !Sub 'ryojaku-${Stage}-admin-moderation'
       Events:
         Rest0:
@@ -205,9 +199,8 @@ Resources:
 
   FnAdminPointHistory:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_point_history
+      CodeUri: ../build/apis__mahjongclub_admin_point_history
       FunctionName: !Sub 'ryojaku-${Stage}-admin-point-history'
       Events:
         Rest0:
@@ -228,9 +221,8 @@ Resources:
 
   FnAdminPushAll:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_push_all
+      CodeUri: ../build/apis__mahjongclub_admin_push_all
       FunctionName: !Sub 'ryojaku-${Stage}-admin-push-all'
       Events:
         Rest0:
@@ -251,9 +243,8 @@ Resources:
 
   FnAdminUsers:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_users
+      CodeUri: ../build/apis__mahjongclub_admin_users
       FunctionName: !Sub 'ryojaku-${Stage}-admin-users'
       Events:
         Rest0:
@@ -274,9 +265,8 @@ Resources:
 
   FnAdminVersions:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_versions
+      CodeUri: ../build/apis__mahjongclub_admin_versions
       FunctionName: !Sub 'ryojaku-${Stage}-admin-versions'
       Events:
         Rest0:
@@ -297,9 +287,8 @@ Resources:
 
   FnAdminVouchers:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_admin_vouchers
+      CodeUri: ../build/apis__mahjongclub_admin_vouchers
       FunctionName: !Sub 'ryojaku-${Stage}-admin-vouchers'
       Events:
         Rest0:
@@ -320,9 +309,8 @@ Resources:
 
   FnAnalytics:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_analytics
+      CodeUri: ../build/apis__mahjongclub_analytics
       FunctionName: !Sub 'ryojaku-${Stage}-analytics'
       Events:
         Rest0:
@@ -343,9 +331,8 @@ Resources:
 
   FnAppLogin:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_login
+      CodeUri: ../build/apis__mahjongclub_app_login
       FunctionName: !Sub 'ryojaku-${Stage}-app-login'
       Events:
         Rest0:
@@ -366,9 +353,8 @@ Resources:
 
   FnAppRegister:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_register
+      CodeUri: ../build/apis__mahjongclub_app_register
       FunctionName: !Sub 'ryojaku-${Stage}-app-register'
       Events:
         Rest0:
@@ -389,9 +375,8 @@ Resources:
 
   FnAppVersionConfig:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_app_version_config
+      CodeUri: ../build/apis__mahjongclub_app_version_config
       FunctionName: !Sub 'ryojaku-${Stage}-app-version-config'
       Events:
         Rest0:
@@ -412,17 +397,9 @@ Resources:
 
   FnChatArchiver:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_archiver
+      CodeUri: ../build/apis__mahjongclub_chat_archiver
       FunctionName: !Sub 'ryojaku-${Stage}-chat-archiver'
-      Events:
-        Stream:
-          Type: DynamoDB
-          Properties:
-            Stream: !GetAtt ChatMessagesStreamArn.Value  # 見 README: 需 01-tables 開 stream 並填 ARN
-            StartingPosition: LATEST
-            BatchSize: 10
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -438,9 +415,8 @@ Resources:
 
   FnChatGetHistory:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_history
+      CodeUri: ../build/apis__mahjongclub_chat_get_history
       FunctionName: !Sub 'ryojaku-${Stage}-chat-get-history'
       Events:
         Rest0:
@@ -461,9 +437,8 @@ Resources:
 
   FnChatGetRoomInfo:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_room_info
+      CodeUri: ../build/apis__mahjongclub_chat_get_room_info
       FunctionName: !Sub 'ryojaku-${Stage}-chat-get-room-info'
       Events:
         Rest0:
@@ -484,9 +459,8 @@ Resources:
 
   FnChatGetRooms:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_rooms
+      CodeUri: ../build/apis__mahjongclub_chat_get_rooms
       FunctionName: !Sub 'ryojaku-${Stage}-chat-get-rooms'
       Events:
         Rest0:
@@ -507,9 +481,8 @@ Resources:
 
   FnChatGetUploadUrl:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_get_upload_url
+      CodeUri: ../build/apis__mahjongclub_chat_get_upload_url
       FunctionName: !Sub 'ryojaku-${Stage}-chat-get-upload-url'
       Events:
         Rest0:
@@ -530,9 +503,8 @@ Resources:
 
   FnChatMarkRead:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_mark_read
+      CodeUri: ../build/apis__mahjongclub_chat_mark_read
       FunctionName: !Sub 'ryojaku-${Stage}-chat-mark-read'
       Events:
         Rest0:
@@ -553,9 +525,8 @@ Resources:
 
   FnChatWsConnect:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_connect
+      CodeUri: ../build/apis__mahjongclub_chat_ws_connect
       FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-connect'
       Policies:
         - Version: '2012-10-17'
@@ -572,9 +543,8 @@ Resources:
 
   FnChatWsDisconnect:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_disconnect
+      CodeUri: ../build/apis__mahjongclub_chat_ws_disconnect
       FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-disconnect'
       Policies:
         - Version: '2012-10-17'
@@ -591,9 +561,8 @@ Resources:
 
   FnChatWsSendMessage:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_chat_ws_send_message
+      CodeUri: ../build/apis__mahjongclub_chat_ws_send_message
       FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-send-message'
       Policies:
         - Version: '2012-10-17'
@@ -610,9 +579,8 @@ Resources:
 
   FnCommunityAddComment:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_add_comment
+      CodeUri: ../build/apis__mahjongclub_community_add_comment
       FunctionName: !Sub 'ryojaku-${Stage}-community-add-comment'
       Events:
         Rest0:
@@ -633,9 +601,8 @@ Resources:
 
   FnCommunityCreatePost:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_create_post
+      CodeUri: ../build/apis__mahjongclub_community_create_post
       FunctionName: !Sub 'ryojaku-${Stage}-community-create-post'
       Events:
         Rest0:
@@ -656,9 +623,8 @@ Resources:
 
   FnCommunityGetPostDetail:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_post_detail
+      CodeUri: ../build/apis__mahjongclub_community_get_post_detail
       FunctionName: !Sub 'ryojaku-${Stage}-community-get-post-detail'
       Events:
         Rest0:
@@ -679,9 +645,8 @@ Resources:
 
   FnCommunityGetPosts:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_posts
+      CodeUri: ../build/apis__mahjongclub_community_get_posts
       FunctionName: !Sub 'ryojaku-${Stage}-community-get-posts'
       Events:
         Rest0:
@@ -702,9 +667,8 @@ Resources:
 
   FnCommunityGetUploadUrl:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_upload_url
+      CodeUri: ../build/apis__mahjongclub_community_get_upload_url
       FunctionName: !Sub 'ryojaku-${Stage}-community-get-upload-url'
       Events:
         Rest0:
@@ -725,9 +689,8 @@ Resources:
 
   FnCommunityGetUserPosts:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_get_user_posts
+      CodeUri: ../build/apis__mahjongclub_community_get_user_posts
       FunctionName: !Sub 'ryojaku-${Stage}-community-get-user-posts'
       Events:
         Rest0:
@@ -748,9 +711,8 @@ Resources:
 
   FnCommunityLikeComment:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_like_comment
+      CodeUri: ../build/apis__mahjongclub_community_like_comment
       FunctionName: !Sub 'ryojaku-${Stage}-community-like-comment'
       Events:
         Rest0:
@@ -771,9 +733,8 @@ Resources:
 
   FnCommunityLikePost:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_community_like_post
+      CodeUri: ../build/apis__mahjongclub_community_like_post
       FunctionName: !Sub 'ryojaku-${Stage}-community-like-post'
       Events:
         Rest0:
@@ -794,9 +755,8 @@ Resources:
 
   FnCreateGame:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_create_game
+      CodeUri: ../build/apis__mahjongclub_web_create_game
       FunctionName: !Sub 'ryojaku-${Stage}-create-game'
       Events:
         Rest0:
@@ -817,9 +777,8 @@ Resources:
 
   FnDailyBonus:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_daily_bonus
+      CodeUri: ../build/apis__mahjongclub_daily_bonus
       FunctionName: !Sub 'ryojaku-${Stage}-daily-bonus'
       Events:
         Http0:
@@ -840,9 +799,8 @@ Resources:
 
   FnEventCommands:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_event_commands
+      CodeUri: ../build/apis__mahjongclub_event_commands
       FunctionName: !Sub 'ryojaku-${Stage}-event-commands'
       FunctionUrlConfig: { AuthType: NONE }
       Policies:
@@ -860,9 +818,8 @@ Resources:
 
   FnGameDetail:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_game_detail
+      CodeUri: ../build/apis__mahjongclub_web_game_detail
       FunctionName: !Sub 'ryojaku-${Stage}-game-detail'
       Events:
         Rest0:
@@ -883,9 +840,8 @@ Resources:
 
   FnGameRegister:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_register
+      CodeUri: ../build/apis__mahjongclub_web_register
       FunctionName: !Sub 'ryojaku-${Stage}-game-register'
       Events:
         Rest0:
@@ -906,9 +862,8 @@ Resources:
 
   FnGetRatings:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_ratings
+      CodeUri: ../build/apis__mahjongclub_web_get_ratings
       FunctionName: !Sub 'ryojaku-${Stage}-get-ratings'
       Events:
         Http0:
@@ -929,9 +884,8 @@ Resources:
 
   FnEventGetUploadUrl:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_event_upload_url
+      CodeUri: ../build/apis__mahjongclub_web_get_event_upload_url
       FunctionName: !Sub 'ryojaku-${Stage}-event-get-upload-url'
       Events:
         Rest0:
@@ -952,9 +906,8 @@ Resources:
 
   FnGetUploadUrl:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_get_upload_url
+      CodeUri: ../build/apis__mahjongclub_web_get_upload_url
       FunctionName: !Sub 'ryojaku-${Stage}-get-upload-url'
       Events:
         Rest0:
@@ -975,9 +928,8 @@ Resources:
 
   FnLedger:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_ledger
+      CodeUri: ../build/apis__mahjongclub_ledger
       FunctionName: !Sub 'ryojaku-${Stage}-ledger'
       Events:
         Rest0:
@@ -998,9 +950,8 @@ Resources:
 
   FnMyGames:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_my_games
+      CodeUri: ../build/apis__mahjongclub_web_my_games
       FunctionName: !Sub 'ryojaku-${Stage}-my-games'
       Events:
         Rest0:
@@ -1021,9 +972,8 @@ Resources:
 
   FnNotifications:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_notifications
+      CodeUri: ../build/apis__mahjongclub_web_notifications
       FunctionName: !Sub 'ryojaku-${Stage}-notifications'
       Events:
         Http0:
@@ -1044,9 +994,8 @@ Resources:
 
   FnRedeemCode:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_redeem_code
+      CodeUri: ../build/apis__mahjongclub_web_redeem_code
       FunctionName: !Sub 'ryojaku-${Stage}-redeem-code'
       FunctionUrlConfig: { AuthType: NONE }
       Policies:
@@ -1064,9 +1013,8 @@ Resources:
 
   FnRedeemPoints:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub-redeem
+      CodeUri: ../build/apis__mahjongclub-redeem
       FunctionName: !Sub 'ryojaku-${Stage}-redeem-points'
       FunctionUrlConfig: { AuthType: NONE }
       Policies:
@@ -1084,9 +1032,8 @@ Resources:
 
   FnRejectRegistration:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_reject_registration
+      CodeUri: ../build/apis__mahjongclub_web_reject_registration
       FunctionName: !Sub 'ryojaku-${Stage}-reject-registration'
       Events:
         Http0:
@@ -1107,9 +1054,8 @@ Resources:
 
   FnAcceptRegistration:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_accept_registration
+      CodeUri: ../build/apis__mahjongclub_web_accept_registration
       FunctionName: !Sub 'ryojaku-${Stage}-accept-registration'
       Events:
         Http0:
@@ -1130,9 +1076,8 @@ Resources:
 
   FnCancelGame:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_cancel_game
+      CodeUri: ../build/apis__mahjongclub_web_cancel_game
       FunctionName: !Sub 'ryojaku-${Stage}-cancel-game'
       Events:
         Rest0:
@@ -1153,9 +1098,8 @@ Resources:
 
   FnCancelRegistration:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_cancel_registration
+      CodeUri: ../build/apis__mahjongclub_web_cancel_registration
       FunctionName: !Sub 'ryojaku-${Stage}-cancel-registration'
       Events:
         Rest0:
@@ -1176,9 +1120,8 @@ Resources:
 
   FnSearchGames:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_search_games
+      CodeUri: ../build/apis__mahjongclub_web_search_games
       FunctionName: !Sub 'ryojaku-${Stage}-search-games'
       Events:
         Rest0:
@@ -1199,9 +1142,8 @@ Resources:
 
   FnSubmitRating:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_submit_rating
+      CodeUri: ../build/apis__mahjongclub_web_submit_rating
       FunctionName: !Sub 'ryojaku-${Stage}-submit-rating'
       Events:
         Rest0:
@@ -1222,9 +1164,8 @@ Resources:
 
   FnSubscribePush:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_subscribe_push
+      CodeUri: ../build/apis__mahjongclub_web_subscribe_push
       FunctionName: !Sub 'ryojaku-${Stage}-subscribe-push'
       Events:
         Rest0:
@@ -1245,9 +1186,8 @@ Resources:
 
   FnSubscriptionStatus:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_subscription_status
+      CodeUri: ../build/apis__mahjongclub_web_subscription_status
       FunctionName: !Sub 'ryojaku-${Stage}-subscription-status'
       Events:
         Rest0:
@@ -1268,9 +1208,8 @@ Resources:
 
   FnUnsubscribePush:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_unsubscribe_push
+      CodeUri: ../build/apis__mahjongclub_web_unsubscribe_push
       FunctionName: !Sub 'ryojaku-${Stage}-unsubscribe-push'
       Events:
         Rest0:
@@ -1291,9 +1230,8 @@ Resources:
 
   FnClaimPushBonus:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_claim_push_bonus
+      CodeUri: ../build/apis__mahjongclub_web_claim_push_bonus
       FunctionName: !Sub 'ryojaku-${Stage}-claim-push-bonus'
       Events:
         Http0:
@@ -1314,9 +1252,8 @@ Resources:
 
   FnUserComments:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_comments
+      CodeUri: ../build/apis__mahjongclub_web_user_comments
       FunctionName: !Sub 'ryojaku-${Stage}-user-comments'
       Events:
         Rest0:
@@ -1337,9 +1274,8 @@ Resources:
 
   FnUserInfo:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_info
+      CodeUri: ../build/apis__mahjongclub_web_user_info
       FunctionName: !Sub 'ryojaku-${Stage}-user-info'
       Events:
         Rest0:
@@ -1360,9 +1296,8 @@ Resources:
 
   FnUserProfile:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_user_profile
+      CodeUri: ../build/apis__mahjongclub_web_user_profile
       FunctionName: !Sub 'ryojaku-${Stage}-user-profile'
       Events:
         Rest0:
@@ -1383,9 +1318,8 @@ Resources:
 
   FnVapidKey:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_vapid_key
+      CodeUri: ../build/apis__mahjongclub_web_vapid_key
       FunctionName: !Sub 'ryojaku-${Stage}-vapid-key'
       Events:
         Rest0:
@@ -1406,9 +1340,8 @@ Resources:
 
   FnVerifyUser:
     Type: AWS::Serverless::Function
-    Metadata: { BuildMethod: makefile }
     Properties:
-      CodeUri: ../backend/cmd/lambdas/apis/mahjongclub_web_verify_user
+      CodeUri: ../build/apis__mahjongclub_web_verify_user
       FunctionName: !Sub 'ryojaku-${Stage}-verify-user'
       Events:
         Rest0:

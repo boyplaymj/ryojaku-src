@@ -23,12 +23,13 @@ Description: >
 Parameters:
   TablePrefix: { Type: String, Default: MahjongClubStg_ }
   Stage: { Type: String, Default: stg }
-  # 機密走 SSM SecureString（值另行 put，不進 git）
-  EncryptionKeyParam: { Type: String, Default: /ryojaku/stg/ENCRYPTION_KEY }
-  JwtSecretParam: { Type: String, Default: /ryojaku/stg/JWT_SECRET }
-  VapidPublicParam: { Type: String, Default: /ryojaku/stg/VAPID_PUBLIC_KEY }
-  VapidPrivateParam: { Type: String, Default: /ryojaku/stg/VAPID_PRIVATE_KEY }
-  VapidSubscriberParam: { Type: String, Default: /ryojaku/stg/VAPID_SUBSCRIBER }
+  # 機密以 NoEcho 參數注入（值於部署時由 deploy_app.sh 從 SSM SecureString 解密後
+  # 帶入 --parameter-overrides；CFN 不允許 ssm-secure 動態引用用在 Lambda 環境變數）。
+  EncryptionKey: { Type: String, NoEcho: true }
+  JwtSecret: { Type: String, NoEcho: true }
+  VapidPublicKey: { Type: String, NoEcho: true }
+  VapidPrivateKey: { Type: String, NoEcho: true }
+  VapidSubscriber: { Type: String, NoEcho: true }
 
 Globals:
   Function:
@@ -41,11 +42,11 @@ Globals:
       Variables:
         ENVIRONMENT: !Ref Stage
         TABLE_PREFIX: !Ref TablePrefix
-        ENCRYPTION_KEY: !Sub '{{resolve:ssm-secure:${EncryptionKeyParam}}}'
-        JWT_SECRET: !Sub '{{resolve:ssm-secure:${JwtSecretParam}}}'
-        VAPID_PUBLIC_KEY: !Sub '{{resolve:ssm-secure:${VapidPublicParam}}}'
-        VAPID_PRIVATE_KEY: !Sub '{{resolve:ssm-secure:${VapidPrivateParam}}}'
-        VAPID_SUBSCRIBER: !Sub '{{resolve:ssm-secure:${VapidSubscriberParam}}}'
+        ENCRYPTION_KEY: !Ref EncryptionKey
+        JWT_SECRET: !Ref JwtSecret
+        VAPID_PUBLIC_KEY: !Ref VapidPublicKey
+        VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
+        VAPID_SUBSCRIBER: !Ref VapidSubscriber
 
 Resources:
 
@@ -75,12 +76,14 @@ DDB_POLICY = """      Policies:
 def fn_block(f):
     lid = logical(f["name"])
     path = f["path"].rstrip("?")
-    code = f"backend/{f['projectPath']}"
+    # 預編產物：go build 出的 arm64 bootstrap 放在 build/<art>/bootstrap
+    # (SAM makefile builder 會把單一 function 葉目錄複製到 scratch，失去 go module
+    #  根、解不到跨套件 shared import；故改用預編 zip artifact，build 由 build_all.sh 控。)
+    art = f["projectPath"].replace("cmd/lambdas/", "").replace("/", "__")
     b = [f"  {lid}:",
          "    Type: AWS::Serverless::Function",
-         "    Metadata: { BuildMethod: makefile }",
          "    Properties:",
-         f"      CodeUri: ../{code}",
+         f"      CodeUri: ../build/{art}",
          f"      FunctionName: !Sub 'ryojaku-${{Stage}}-{f['name']}'"]
     ev = f["apiType"]
     methods = ["ANY"] if f["method"] == "ANY" else f["method"].split(",")
@@ -99,13 +102,9 @@ def fn_block(f):
     elif ev == "LAMBDA_URL":
         b.append("      FunctionUrlConfig: { AuthType: NONE }")
     elif ev == "STREAM":
-        b += ["      Events:",
-              "        Stream:",
-              "          Type: DynamoDB",
-              "          Properties:",
-              "            Stream: !GetAtt ChatMessagesStreamArn.Value  # 見 README: 需 01-tables 開 stream 並填 ARN",
-              "            StartingPosition: LATEST",
-              "            BatchSize: 10"]
+        # staging: ChatMessages 尚未開 DynamoDB Stream，故先不接觸發器（函式仍部署，
+        # 供 S2 開 stream 後再 wire）。見 README TODO。避免引用不存在的 StreamArn。
+        pass
     # WEBSOCKET 由下方 WS 區塊統一處理，這裡只出 function 本體
     b.append(DDB_POLICY.rstrip("\n"))
     return "\n".join(b)

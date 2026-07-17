@@ -20,3 +20,8 @@ environment-config.json
 PUSH_KEYS.md
 *.pem
 *.key
+
+# build/deploy scratch (bootstraps are ignored above; ignore dirs too)
+build/
+.aws-sam/
+.tmp/

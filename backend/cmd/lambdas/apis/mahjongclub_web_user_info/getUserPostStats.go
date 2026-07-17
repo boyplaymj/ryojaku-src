@@ -1,3 +1,16 @@
+package main
+
+import (
+	"context"
+	"log"
+
+	"mahjongclub-backend/cmd/lambdas/shared"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
 
 // getUserPostStats calculates real-time post statistics (TotalPosts, TotalLikesReceived)
 // It queries the Community table using authorId-createdAt-index and filters for actual posts (sortKey=METADATA)
