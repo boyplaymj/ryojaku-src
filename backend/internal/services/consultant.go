@@ -28,7 +28,7 @@ func NewConsultantService(db *DatabaseService) *ConsultantService {
 // GetConsultant retrieves a consultant by ID
 func (s *ConsultantService) GetConsultant(consultantID string) (*models.Consultant, error) {
 	result, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-Consultants"),
+		TableName: aws.String(lineBotTable("Consultants")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(consultantID),
@@ -58,7 +58,7 @@ func (s *ConsultantService) GetConsultant(consultantID string) (*models.Consulta
 // GetAvailableConsultants retrieves all active consultants
 func (s *ConsultantService) GetAvailableConsultants() ([]models.Consultant, error) {
 	input := &dynamodb.ScanInput{
-		TableName:        aws.String("LineBot-Consultants"),
+		TableName:        aws.String(lineBotTable("Consultants")),
 		FilterExpression: aws.String("is_active = :active"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
 			":active": {
@@ -95,7 +95,7 @@ func (s *ConsultantService) CreateConsultant(consultant *models.Consultant) erro
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-Consultants"),
+		TableName: aws.String(lineBotTable("Consultants")),
 		Item:      av,
 	}
 
@@ -120,7 +120,7 @@ func (s *ConsultantService) UpdateConsultant(consultant *models.Consultant) erro
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-Consultants"),
+		TableName: aws.String(lineBotTable("Consultants")),
 		Item:      av,
 	}
 
@@ -138,7 +138,7 @@ func (s *ConsultantService) UpdateConsultant(consultant *models.Consultant) erro
 func (s *ConsultantService) IsConsultantAvailable(consultantID string) (bool, error) {
 	// Check if consultant has any active sessions using scan (temporary until ConsultantStatusIndex is ready)
 	input := &dynamodb.ScanInput{
-		TableName:        aws.String("LineBot-Consultation-Sessions"),
+		TableName:        aws.String(lineBotTable("Consultation-Sessions")),
 		FilterExpression: aws.String("consultant_id = :consultant_id AND #status = :status"),
 		ExpressionAttributeNames: map[string]*string{
 			"#status": aws.String("status"),
@@ -190,7 +190,7 @@ func (s *ConsultantService) GetConsultantPersonality(consultantID string) (strin
 // DeactivateConsultant deactivates a consultant
 func (s *ConsultantService) DeactivateConsultant(consultantID string) error {
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-Consultants"),
+		TableName: aws.String(lineBotTable("Consultants")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(consultantID),
@@ -220,7 +220,7 @@ func (s *ConsultantService) DeactivateConsultant(consultantID string) error {
 // ActivateConsultant activates a consultant
 func (s *ConsultantService) ActivateConsultant(consultantID string) error {
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-Consultants"),
+		TableName: aws.String(lineBotTable("Consultants")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(consultantID),

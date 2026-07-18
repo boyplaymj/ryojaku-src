@@ -44,7 +44,7 @@ func (s *ConversationService) SaveMessage(sessionID, userID, consultantID, messa
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-Conversation-Records"),
+		TableName: aws.String(lineBotTable("Conversation-Records")),
 		Item:      av,
 	}
 
@@ -61,7 +61,7 @@ func (s *ConversationService) SaveMessage(sessionID, userID, consultantID, messa
 // GetSessionHistory retrieves conversation history for a session
 func (s *ConversationService) GetSessionHistory(sessionID string) ([]models.ConversationRecord, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Conversation-Records"),
+		TableName:              aws.String(lineBotTable("Conversation-Records")),
 		IndexName:              aws.String("SessionTimestampIndex"),
 		KeyConditionExpression: aws.String("session_id = :session_id"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
@@ -91,7 +91,7 @@ func (s *ConversationService) GetSessionHistory(sessionID string) ([]models.Conv
 // GetUserConsultantHistory retrieves conversation history between a user and consultant
 func (s *ConversationService) GetUserConsultantHistory(userID, consultantID string, limit int) ([]models.ConversationRecord, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Conversation-Records"),
+		TableName:              aws.String(lineBotTable("Conversation-Records")),
 		IndexName:              aws.String("UserConsultantIndex"),
 		KeyConditionExpression: aws.String("user_id = :user_id AND consultant_id = :consultant_id"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
@@ -134,7 +134,7 @@ func (s *ConversationService) GetUserConsultantHistoryByDays(userID, consultantI
 	cutoffTimeStr := cutoffTime.Format(time.RFC3339)
 
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Conversation-Records"),
+		TableName:              aws.String(lineBotTable("Conversation-Records")),
 		IndexName:              aws.String("UserConsultantIndex"),
 		KeyConditionExpression: aws.String("user_id = :user_id AND consultant_id = :consultant_id"),
 		FilterExpression:       aws.String("#ts >= :cutoff_time"),
@@ -225,7 +225,7 @@ func (s *ConversationService) DeleteSessionHistory(sessionID string) error {
 	// Delete each record
 	for _, record := range records {
 		input := &dynamodb.DeleteItemInput{
-			TableName: aws.String("LineBot-Conversation-Records"),
+			TableName: aws.String(lineBotTable("Conversation-Records")),
 			Key: map[string]*dynamodb.AttributeValue{
 				"id": {
 					S: aws.String(record.ID),

@@ -4,5 +4,5 @@ stack_name = "ryojaku-app-stg"
 region = "ap-southeast-1"
 capabilities = "CAPABILITY_IAM"
 resolve_s3 = true
-parameter_overrides = "TablePrefix=MahjongClubStg_ Stage=stg"
+parameter_overrides = "TablePrefix=MahjongClubStg_ LineBotTablePrefix=LineBotStg- Stage=stg"
 # ⚠️ 部署前先 put SSM SecureString: /ryojaku/stg/{ENCRYPTION_KEY,JWT_SECRET,VAPID_*}

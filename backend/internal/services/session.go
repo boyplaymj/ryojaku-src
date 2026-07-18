@@ -44,7 +44,7 @@ func (s *SessionService) CreateSession(userID, consultantID string, duration int
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-Consultation-Sessions"),
+		TableName: aws.String(lineBotTable("Consultation-Sessions")),
 		Item:      av,
 	}
 
@@ -61,7 +61,7 @@ func (s *SessionService) CreateSession(userID, consultantID string, duration int
 // GetActiveSession retrieves the active session for a user
 func (s *SessionService) GetActiveSession(userID string) (*models.ConsultationSession, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Consultation-Sessions"),
+		TableName:              aws.String(lineBotTable("Consultation-Sessions")),
 		IndexName:              aws.String("UserStatusIndex"),
 		KeyConditionExpression: aws.String("user_id = :user_id AND #status = :status"),
 		ExpressionAttributeNames: map[string]*string{
@@ -103,7 +103,7 @@ func (s *SessionService) StartSession(sessionID string) error {
 	now := time.Now()
 
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-Consultation-Sessions"),
+		TableName: aws.String(lineBotTable("Consultation-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(sessionID),
@@ -141,7 +141,7 @@ func (s *SessionService) EndSession(sessionID string) error {
 	now := time.Now()
 
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-Consultation-Sessions"),
+		TableName: aws.String(lineBotTable("Consultation-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(sessionID),
@@ -177,7 +177,7 @@ func (s *SessionService) EndSession(sessionID string) error {
 // GetWaitingQueue retrieves waiting sessions for a consultant
 func (s *SessionService) GetWaitingQueue(consultantID string) ([]models.ConsultationSession, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Consultation-Sessions"),
+		TableName:              aws.String(lineBotTable("Consultation-Sessions")),
 		IndexName:              aws.String("ConsultantStatusIndex"),
 		KeyConditionExpression: aws.String("consultant_id = :consultant_id AND #status = :status"),
 		ExpressionAttributeNames: map[string]*string{
@@ -213,7 +213,7 @@ func (s *SessionService) GetWaitingQueue(consultantID string) ([]models.Consulta
 // GetSessionByID retrieves a session by ID
 func (s *SessionService) GetSessionByID(sessionID string) (*models.ConsultationSession, error) {
 	result, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-Consultation-Sessions"),
+		TableName: aws.String(lineBotTable("Consultation-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(sessionID),
@@ -302,7 +302,7 @@ func (s *SessionService) CancelSession(sessionID string) error {
 	now := time.Now()
 
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-Consultation-Sessions"),
+		TableName: aws.String(lineBotTable("Consultation-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
 				S: aws.String(sessionID),
@@ -338,7 +338,7 @@ func (s *SessionService) CancelSession(sessionID string) error {
 // GetActiveSessionByConsultant gets the active session for a consultant
 func (s *SessionService) GetActiveSessionByConsultant(consultantID string) (*models.ConsultationSession, error) {
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String("LineBot-Consultation-Sessions"),
+		TableName:              aws.String(lineBotTable("Consultation-Sessions")),
 		IndexName:              aws.String("ConsultantStatusIndex"),
 		KeyConditionExpression: aws.String("consultant_id = :consultant_id AND #status = :status"),
 		ExpressionAttributeNames: map[string]*string{

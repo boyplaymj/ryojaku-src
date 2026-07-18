@@ -318,7 +318,7 @@ func (s *OpenAIService) loadOpenAIConfigFromDB() (*OpenAIConfig, error) {
 
 	// Load OpenAI settings
 	settingsResult, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-OpenAI-Config"),
+		TableName: aws.String(lineBotTable("OpenAI-Config")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"config_key": {
 				S: aws.String("openai_settings"),
@@ -372,7 +372,7 @@ func (s *OpenAIService) loadOpenAIConfigFromDB() (*OpenAIConfig, error) {
 
 	// Load system prompt template
 	templateResult, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-OpenAI-Config"),
+		TableName: aws.String(lineBotTable("OpenAI-Config")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"config_key": {
 				S: aws.String("system_prompt_template"),
@@ -391,7 +391,7 @@ func (s *OpenAIService) loadOpenAIConfigFromDB() (*OpenAIConfig, error) {
 
 	// Load response guidelines
 	guidelinesResult, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-OpenAI-Config"),
+		TableName: aws.String(lineBotTable("OpenAI-Config")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"config_key": {
 				S: aws.String("response_guidelines"),
@@ -423,7 +423,7 @@ func (s *OpenAIService) loadOpenAIConfigFromDB() (*OpenAIConfig, error) {
 
 	// Load fallback responses
 	fallbackResult, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-OpenAI-Config"),
+		TableName: aws.String(lineBotTable("OpenAI-Config")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"config_key": {
 				S: aws.String("fallback_responses"),
@@ -449,7 +449,7 @@ func (s *OpenAIService) loadOpenAIConfigFromDB() (*OpenAIConfig, error) {
 
 	// Load special commands
 	commandsResult, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-OpenAI-Config"),
+		TableName: aws.String(lineBotTable("OpenAI-Config")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"config_key": {
 				S: aws.String("special_commands"),

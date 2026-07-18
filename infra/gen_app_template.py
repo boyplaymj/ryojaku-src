@@ -22,6 +22,9 @@ Description: >
 
 Parameters:
   TablePrefix: { Type: String, Default: MahjongClubStg_ }
+  # LineBot-* 表(AI顧問/LINE 用戶檔)的前綴。staging=LineBotStg- 與 prod(LineBot-)分離,
+  # 避免同帳號 stg/prod 撞名(internal/services 讀 LINEBOT_TABLE_PREFIX)。正式切換改回 LineBot-。
+  LineBotTablePrefix: { Type: String, Default: LineBotStg- }
   Stage: { Type: String, Default: stg }
   # 機密以 NoEcho 參數注入（值於部署時由 deploy_app.sh 從 SSM SecureString 解密後
   # 帶入 --parameter-overrides；CFN 不允許 ssm-secure 動態引用用在 Lambda 環境變數）。
@@ -42,6 +45,7 @@ Globals:
       Variables:
         ENVIRONMENT: !Ref Stage
         TABLE_PREFIX: !Ref TablePrefix
+        LINEBOT_TABLE_PREFIX: !Ref LineBotTablePrefix
         # S2補:上傳端點讀這兩個env指向我們的桶(原fallback寫死prod桶mahjongclub-*)
         ASSETS_BUCKET: !Sub 'ryojaku-${Stage}-assets'
         COMMUNITY_BUCKET: !Sub 'ryojaku-${Stage}-community'
@@ -70,7 +74,8 @@ DDB_POLICY = """      Policies:
               Resource:
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
                 - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
-                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/LineBot-*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
               Resource:

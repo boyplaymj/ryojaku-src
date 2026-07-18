@@ -27,7 +27,7 @@ func NewUserProfileService(db *DatabaseService) *UserProfileService {
 // GetUserProfile retrieves a user's profile
 func (s *UserProfileService) GetUserProfile(userID string) (*models.UserProfile, error) {
 	result, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-User-Profiles"),
+		TableName: aws.String(lineBotTable("User-Profiles")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"user_id": {
 				S: aws.String(userID),
@@ -82,7 +82,7 @@ func (s *UserProfileService) SaveUserProfile(profile *models.UserProfile) error 
 	log.Printf("Marshaled profile data: %+v", av)
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-User-Profiles"),
+		TableName: aws.String(lineBotTable("User-Profiles")),
 		Item:      av,
 	}
 
@@ -101,7 +101,7 @@ func (s *UserProfileService) UpdateRedThreadURL(userID, redThreadURL string) err
 	now := time.Now()
 
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String("LineBot-User-Profiles"),
+		TableName: aws.String(lineBotTable("User-Profiles")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"user_id": {
 				S: aws.String(userID),
@@ -150,7 +150,7 @@ func (s *UserProfileService) HasRedThread(userID string) (bool, string, error) {
 // GetProfileSession retrieves a user's profile completion session
 func (s *UserProfileService) GetProfileSession(userID string) (*models.UserProfileSession, error) {
 	result, err := s.db.client.GetItem(&dynamodb.GetItemInput{
-		TableName: aws.String("LineBot-User-Profile-Sessions"),
+		TableName: aws.String(lineBotTable("User-Profile-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"user_id": {
 				S: aws.String(userID),
@@ -208,7 +208,7 @@ func (s *UserProfileService) CreateProfileSession(userID string) (*models.UserPr
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-User-Profile-Sessions"),
+		TableName: aws.String(lineBotTable("User-Profile-Sessions")),
 		Item:      av,
 	}
 
@@ -233,7 +233,7 @@ func (s *UserProfileService) UpdateProfileSession(session *models.UserProfileSes
 	}
 
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String("LineBot-User-Profile-Sessions"),
+		TableName: aws.String(lineBotTable("User-Profile-Sessions")),
 		Item:      av,
 	}
 
@@ -249,7 +249,7 @@ func (s *UserProfileService) UpdateProfileSession(session *models.UserProfileSes
 // DeleteProfileSession deletes a profile completion session
 func (s *UserProfileService) DeleteProfileSession(userID string) error {
 	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String("LineBot-User-Profile-Sessions"),
+		TableName: aws.String(lineBotTable("User-Profile-Sessions")),
 		Key: map[string]*dynamodb.AttributeValue{
 			"user_id": {
 				S: aws.String(userID),

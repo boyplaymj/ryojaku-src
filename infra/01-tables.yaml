@@ -10,6 +10,10 @@ Parameters:
     Type: String
     Default: MahjongClubStg_
     Description: staging 用獨立前綴，避免與 prod (MahjongClub_) 撞名；正式切換時改回 MahjongClub_
+  LineBotTablePrefix:
+    Type: String
+    Default: LineBotStg-
+    Description: LineBot-* 表(AI顧問/LINE用戶檔)前綴；staging=LineBotStg- 與 prod(LineBot-)分離，避免同帳號撞名；正式切換改回 LineBot-
 
 Resources:
 
@@ -429,7 +433,7 @@ Resources:
   LineBotUserProfilesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: LineBot-User-Profiles   # S2稽核:程式(internal/services)硬編此名無-Stg
+      TableName: !Sub '${LineBotTablePrefix}User-Profiles'   # S2修:改 env-driven 前綴,不再硬編
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
       KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
@@ -437,7 +441,7 @@ Resources:
   LineBotUserProfileSessionsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: LineBot-User-Profile-Sessions   # S2稽核:程式硬編此名無-Stg
+      TableName: !Sub '${LineBotTablePrefix}User-Profile-Sessions'   # S2修:改 env-driven 前綴,不再硬編
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: user_id, AttributeType: S } ]
       KeySchema: [ { AttributeName: user_id, KeyType: HASH } ]
