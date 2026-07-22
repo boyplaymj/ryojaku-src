@@ -464,6 +464,31 @@ Resources:
         CorsRules:
           - { AllowedMethods: [GET, PUT, POST], AllowedOrigins: ['*'], AllowedHeaders: ['*'], MaxAge: 3000 }
 
+  # ---------- 帳號系統 (AUTH_SYSTEM_DESIGN P0.3) ----------
+  # 一帳號多鑰匙:登入身分索引 + 一次性 token(認證信/重設密碼)。詳 tools/ryojaku-webapp/AUTH_SYSTEM_DESIGN.md
+  AuthIdentitiesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AuthIdentities'   # PK=identity: google#<sub> / email#<lower> / line#<encId> → userId
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: identity, AttributeType: S }
+        - { AttributeName: userId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: identity, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: userId-index                        # 查某帳號綁了哪些鑰匙(解綁最後一把守衛/後台)
+          KeySchema: [ { AttributeName: userId, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
+  AuthTokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AuthTokens'        # PK=tokenHash(SHA256,不存明碼);purpose=verify_email|reset_password
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: tokenHash, AttributeType: S } ]
+      KeySchema: [ { AttributeName: tokenHash, KeyType: HASH } ]
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # verify 24h / reset 30min 自動清
+
 Outputs:
   TablePrefix:
     Value: !Ref TablePrefix

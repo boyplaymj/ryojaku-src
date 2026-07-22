@@ -18,14 +18,40 @@ type JWTClaims struct {
 	jwt.RegisteredClaims
 }
 
-// GetJWTSecret returns the JWT secret from environment variables
+// GetJWTSecret returns the JWT secret from environment variables.
+// 硬化(AUTH_SYSTEM_DESIGN §6.1)：移除寫死 fallback（已知字串=可偽造 token 的洞）。
+// 未設 JWT_SECRET 一律 fail-closed（拒簽/拒驗）；本機開發可設 ALLOW_DEV_JWT_SECRET=true。
 func GetJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		// Default for development if not set, but should always be set in production
-		return []byte("mahjong_club_default_secret_2025")
+		if os.Getenv("ALLOW_DEV_JWT_SECRET") == "true" {
+			return []byte("dev_only_insecure_secret_do_not_use_in_prod")
+		}
+		panic("JWT_SECRET not configured — refusing to sign/verify with a known default; set JWT_SECRET (or ALLOW_DEV_JWT_SECRET=true for local dev)")
 	}
 	return []byte(secret)
+}
+
+// TokenIssuedBefore：token 是否早於某時間點（pwChangedAt 版本閘用）。
+func TokenIssuedBefore(claims *JWTClaims, cutoff *time.Time) bool {
+	if cutoff == nil || claims == nil || claims.IssuedAt == nil {
+		return false
+	}
+	return claims.IssuedAt.Time.Before(*cutoff)
+}
+
+// VerifyTokenWithPwGate：VerifyToken + pwChangedAt 版本閘。
+// 呼叫端已取得 user 時傳入其 pwChangedAt；token 早於 pwChangedAt → 視為已被改密碼撤銷。
+// 用途：改密碼/重設密碼後令舊裝置 token 立即失效（「登出其他裝置」）。
+func VerifyTokenWithPwGate(tokenString string, pwChangedAt *time.Time) (*JWTClaims, error) {
+	claims, err := VerifyToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if TokenIssuedBefore(claims, pwChangedAt) {
+		return nil, errors.New("token revoked by password change")
+	}
+	return claims, nil
 }
 
 // GenerateToken generates a new JWT token for a user
