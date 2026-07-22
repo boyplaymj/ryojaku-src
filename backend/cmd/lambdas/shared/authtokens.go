@@ -67,56 +67,36 @@ func IssueToken(ctx context.Context, userID, purpose string, ttl time.Duration) 
 	return raw, nil
 }
 
-// ConsumeToken：驗一個明碼 token(限定用途)。通過→回 userId 並原子標記 usedAt(單次)。
-// 失敗：不存在 / 用途不符 / 已過期 / 已用過 → 回 ""+err。
+// ConsumeToken：驗一個明碼 token(限定用途)並原子消耗。單一 conditional UpdateItem 完成：
+// 存在 + 用途相符 + 未過期 + 未用過（全放進同一 ConditionExpression）→ 標記 usedAt，回 userId。
+// 避免「GetItem 檢查後才標記」之間的 stale 窗口/TTL 邊界誤放行。
+// 任一條件不符 → ConditionalCheckFailed，統一回不洩漏細節的錯誤。
 func ConsumeToken(ctx context.Context, raw, purpose string) (string, error) {
 	c := getAuthDDBClient()
 	if c == nil {
 		return "", ErrAuthDDBUnavailable
 	}
-	h := hashToken(raw)
-	out, err := c.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(authTokensTable()),
-		Key:       map[string]types.AttributeValue{"tokenHash": &types.AttributeValueMemberS{Value: h}},
-	})
-	if err != nil {
-		return "", err
-	}
-	if out.Item == nil {
-		return "", errors.New("invalid token")
-	}
-	if p, ok := out.Item["purpose"].(*types.AttributeValueMemberS); !ok || p.Value != purpose {
-		return "", errors.New("invalid token")
-	}
-	if _, used := out.Item["usedAt"]; used {
-		return "", errors.New("token already used")
-	}
-	// TTL 刪除有延遲，程式端再驗一次過期。
-	if e, ok := out.Item["expiresAt"].(*types.AttributeValueMemberN); ok {
-		var exp int64
-		fmt.Sscanf(e.Value, "%d", &exp)
-		if time.Now().Unix() > exp {
-			return "", errors.New("token expired")
-		}
-	}
-	uid := ""
-	if u, ok := out.Item["userId"].(*types.AttributeValueMemberS); ok {
-		uid = u.Value
-	}
-	// 原子標記單次使用：usedAt 不存在才寫，防同一 token 併發雙用。
-	_, err = c.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(authTokensTable()),
-		Key:                       map[string]types.AttributeValue{"tokenHash": &types.AttributeValueMemberS{Value: h}},
-		UpdateExpression:          aws.String("SET usedAt = :t"),
-		ConditionExpression:       aws.String("attribute_not_exists(usedAt)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{":t": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Unix())}},
+	now := fmt.Sprintf("%d", time.Now().Unix())
+	out, err := c.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(authTokensTable()),
+		Key:                 map[string]types.AttributeValue{"tokenHash": &types.AttributeValueMemberS{Value: hashToken(raw)}},
+		UpdateExpression:    aws.String("SET usedAt = :now"),
+		ConditionExpression: aws.String("attribute_exists(tokenHash) AND purpose = :p AND expiresAt > :now AND attribute_not_exists(usedAt)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": &types.AttributeValueMemberN{Value: now},
+			":p":   &types.AttributeValueMemberS{Value: purpose},
+		},
+		ReturnValues: types.ReturnValueAllOld, // 取回消耗前的 userId
 	})
 	if err != nil {
 		var ccf *types.ConditionalCheckFailedException
 		if errors.As(err, &ccf) {
-			return "", errors.New("token already used")
+			return "", errors.New("invalid, expired, or used token")
 		}
 		return "", err
 	}
-	return uid, nil
+	if u, ok := out.Attributes["userId"].(*types.AttributeValueMemberS); ok {
+		return u.Value, nil
+	}
+	return "", errors.New("invalid token")
 }

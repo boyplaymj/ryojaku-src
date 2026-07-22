@@ -51,7 +51,7 @@ func init() {
 	appCfg = &Config{
 		AWSRegion:   getEnv("AWS_REGION", "ap-southeast-1"),
 		TablePrefix: getEnv("TABLE_PREFIX", "MahjongClub_"),
-		JWTSecret:   getEnv("JWT_SECRET", "default-secret-change-me"),
+		JWTSecret:   requireJWTSecret(),
 	}
 
 	awsCfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(appCfg.AWSRegion))
@@ -209,4 +209,13 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 func main() {
 	lambda.Start(handler)
+}
+
+// requireJWTSecret：fail-closed 讀 JWT_SECRET(移除 default-secret-change-me 死 fallback,AUTH_SYSTEM_DESIGN §6.1)。
+func requireJWTSecret() string {
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		panic("JWT_SECRET not configured — refusing admin JWT with a known default")
+	}
+	return s
 }

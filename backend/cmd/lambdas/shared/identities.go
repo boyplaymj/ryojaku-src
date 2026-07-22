@@ -42,6 +42,7 @@ func tablePrefix() string {
 }
 
 func authIdentitiesTable() string { return tablePrefix() + "AuthIdentities" }
+func usersTable() string           { return tablePrefix() + "Users" }
 
 // Identity provider 常數。
 const (
@@ -55,15 +56,18 @@ var (
 	ErrIdentityTaken = errors.New("identity already bound to another account")
 	// ErrLastIdentity：這是帳號最後一把可登入鑰匙，不准解綁（防孤兒帳號）。
 	ErrLastIdentity = errors.New("cannot unbind the last login identity")
+	// ErrIdentityNotOwned：要解綁的鑰匙不屬於這個帳號。
+	ErrIdentityNotOwned = errors.New("identity not owned by this account")
 	// ErrAuthDDBUnavailable：DDB client 無法初始化。
 	ErrAuthDDBUnavailable = errors.New("auth ddb client unavailable")
 )
 
-// IdentityKey 組出 AuthIdentities 的 PK：<provider>#<external>。
-// password(email) 一律小寫去空白正規化，避免大小寫造成重複帳號。
+// IdentityKey 組出 AuthIdentities 的 PK。
+// 對齊 AUTH_SYSTEM_DESIGN §2：google#<sub> / email#<lowercased> / line#<encId>。
+// password 登入身分以 email 為外部識別，PK 前綴用 email#（非 password#），並小寫去空白正規化。
 func IdentityKey(provider, external string) string {
 	if provider == ProviderPassword {
-		external = strings.ToLower(strings.TrimSpace(external))
+		return "email#" + strings.ToLower(strings.TrimSpace(external))
 	}
 	return provider + "#" + external
 }
@@ -87,25 +91,38 @@ func ResolveIdentity(ctx context.Context, identity string) (string, error) {
 	return "", nil
 }
 
-// BindIdentity：把一把鑰匙掛到 userId。若該鑰匙已存在 → ErrIdentityTaken（防搶綁）。
+// BindIdentity：把一把鑰匙掛到 userId，並在同一交易遞增 Users.identityCount（供孤兒守衛）。
+// 若該鑰匙已存在 → ErrIdentityTaken（防搶綁，attribute_not_exists 條件）。
+// 原子性：Put 身分 + Update 計數器合為單一 TransactWriteItems，兩者同生同滅。
 func BindIdentity(ctx context.Context, identity, userID, provider string) error {
 	c := getAuthDDBClient()
 	if c == nil {
 		return ErrAuthDDBUnavailable
 	}
-	_, err := c.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(authIdentitiesTable()),
-		Item: map[string]types.AttributeValue{
-			"identity":  &types.AttributeValueMemberS{Value: identity},
-			"userId":    &types.AttributeValueMemberS{Value: userID},
-			"provider":  &types.AttributeValueMemberS{Value: provider},
-			"createdAt": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
+	_, err := c.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName: aws.String(authIdentitiesTable()),
+				Item: map[string]types.AttributeValue{
+					"identity":  &types.AttributeValueMemberS{Value: identity},
+					"userId":    &types.AttributeValueMemberS{Value: userID},
+					"provider":  &types.AttributeValueMemberS{Value: provider},
+					"createdAt": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
+				},
+				ConditionExpression: aws.String("attribute_not_exists(identity)"),
+			}},
+			{Update: &types.Update{ // 計數器 +1（ADD 對缺屬性視為 0 起算）
+				TableName:                 aws.String(usersTable()),
+				Key:                       map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+				UpdateExpression:          aws.String("ADD identityCount :one"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":one": &types.AttributeValueMemberN{Value: "1"}},
+			}},
 		},
-		ConditionExpression: aws.String("attribute_not_exists(identity)"),
 	})
 	if err != nil {
-		var ccf *types.ConditionalCheckFailedException
-		if errors.As(err, &ccf) {
+		// Bind 只有 Put 有條件；交易被取消⇒該鑰匙已被搶綁。
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) {
 			return ErrIdentityTaken
 		}
 		return err
@@ -113,8 +130,8 @@ func BindIdentity(ctx context.Context, identity, userID, provider string) error 
 	return nil
 }
 
-// CountIdentities：某 userId 目前綁了幾把鑰匙（走 userId-index GSI）。
-// 一帳號鑰匙數極少（<10），單頁 Count 足夠、無需分頁。
+// CountIdentities：某 userId 目前綁了幾把鑰匙（走 userId-index GSI）。唯讀用途（顯示/後台）。
+// 孤兒守衛不靠這個（改用交易計數器，見 UnbindIdentity）；此處單頁 Count 對極少鑰匙足夠。
 func CountIdentities(ctx context.Context, userID string) (int, error) {
 	c := getAuthDDBClient()
 	if c == nil {
@@ -133,25 +150,43 @@ func CountIdentities(ctx context.Context, userID string) (int, error) {
 	return int(out.Count), nil
 }
 
-// UnbindIdentity：解綁一把鑰匙。守衛：若這是最後一把 → ErrLastIdentity（防孤兒帳號）。
-// 註：count→delete 非單一原子；同一 user 同時解兩把的極端競態可能雙刪，屬低風險可接受。
+// UnbindIdentity：解綁一把鑰匙。單一 TransactWriteItems 原子完成：
+//   ① Delete 身分（條件 userId=自己 → 只能解自己的鑰匙）
+//   ② Update 計數器 -1（條件 identityCount > 1 → 最後一把擋下，防孤兒）
+// 兩條件哪個失敗都會取消整筆交易，用 CancellationReasons 分辨回對應錯誤。
 func UnbindIdentity(ctx context.Context, identity, userID string) error {
 	c := getAuthDDBClient()
 	if c == nil {
 		return ErrAuthDDBUnavailable
 	}
-	n, err := CountIdentities(ctx, userID)
+	_, err := c.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{
+				TableName:                 aws.String(authIdentitiesTable()),
+				Key:                       map[string]types.AttributeValue{"identity": &types.AttributeValueMemberS{Value: identity}},
+				ConditionExpression:       aws.String("userId = :u"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":u": &types.AttributeValueMemberS{Value: userID}},
+			}},
+			{Update: &types.Update{
+				TableName:                 aws.String(usersTable()),
+				Key:                       map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+				UpdateExpression:          aws.String("SET identityCount = identityCount - :one"),
+				ConditionExpression:       aws.String("identityCount > :one"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":one": &types.AttributeValueMemberN{Value: "1"}},
+			}},
+		},
+	})
 	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2 {
+			if r := tce.CancellationReasons[0].Code; r != nil && *r == "ConditionalCheckFailed" {
+				return ErrIdentityNotOwned // ①失敗：鑰匙不屬於此帳號（或已不存在）
+			}
+			if r := tce.CancellationReasons[1].Code; r != nil && *r == "ConditionalCheckFailed" {
+				return ErrLastIdentity // ②失敗：只剩最後一把
+			}
+		}
 		return err
 	}
-	if n <= 1 {
-		return ErrLastIdentity
-	}
-	_, err = c.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName:                 aws.String(authIdentitiesTable()),
-		Key:                       map[string]types.AttributeValue{"identity": &types.AttributeValueMemberS{Value: identity}},
-		ConditionExpression:       aws.String("userId = :u"), // 只能解自己名下的鑰匙
-		ExpressionAttributeValues: map[string]types.AttributeValue{":u": &types.AttributeValueMemberS{Value: userID}},
-	})
-	return err
+	return nil
 }
