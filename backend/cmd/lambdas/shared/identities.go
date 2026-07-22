@@ -58,6 +58,8 @@ var (
 	ErrLastIdentity = errors.New("cannot unbind the last login identity")
 	// ErrIdentityNotOwned：要解綁的鑰匙不屬於這個帳號。
 	ErrIdentityNotOwned = errors.New("identity not owned by this account")
+	// ErrUserNotFound：目標 userId 在 Users 表不存在（防綁鑰匙時建出骷髏帳號）。
+	ErrUserNotFound = errors.New("target user does not exist")
 	// ErrAuthDDBUnavailable：DDB client 無法初始化。
 	ErrAuthDDBUnavailable = errors.New("auth ddb client unavailable")
 )
@@ -115,15 +117,20 @@ func BindIdentity(ctx context.Context, identity, userID, provider string) error 
 				TableName:                 aws.String(usersTable()),
 				Key:                       map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
 				UpdateExpression:          aws.String("ADD identityCount :one"),
+				ConditionExpression:       aws.String("attribute_exists(userId)"), // 目標帳號須已存在，否則 Update 會建骷髏帳號
 				ExpressionAttributeValues: map[string]types.AttributeValue{":one": &types.AttributeValueMemberN{Value: "1"}},
 			}},
 		},
 	})
 	if err != nil {
-		// Bind 只有 Put 有條件；交易被取消⇒該鑰匙已被搶綁。
 		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) {
-			return ErrIdentityTaken
+		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2 {
+			if r := tce.CancellationReasons[0].Code; r != nil && *r == "ConditionalCheckFailed" {
+				return ErrIdentityTaken // ①失敗：該鑰匙已綁在別的帳號
+			}
+			if r := tce.CancellationReasons[1].Code; r != nil && *r == "ConditionalCheckFailed" {
+				return ErrUserNotFound // ②失敗：目標 userId 不存在
+			}
 		}
 		return err
 	}
