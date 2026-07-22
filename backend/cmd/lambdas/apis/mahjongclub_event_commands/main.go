@@ -124,6 +124,9 @@ func handler(ctx context.Context, request events.LambdaFunctionURLRequest) (Resp
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return errorResponseLocal(headers, http.StatusInternalServerError, "Server auth misconfigured"), nil
+	}
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(jwtSecret), nil
 	})

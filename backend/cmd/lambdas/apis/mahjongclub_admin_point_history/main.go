@@ -33,6 +33,13 @@ func init() {
 		tablePrefix = "MahjongClub_"
 	}
 	jwtSecret = []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		if os.Getenv("ALLOW_DEV_JWT_SECRET") == "true" {
+			jwtSecret = []byte("dev_only_insecure_secret_do_not_use_in_prod")
+		} else {
+			panic("JWT_SECRET not configured — refusing empty admin JWT secret (AUTH_SYSTEM_DESIGN §6.1)")
+		}
+	}
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("ap-southeast-1"))
 	if err != nil {
