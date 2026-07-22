@@ -218,6 +218,37 @@ func (d *Database) GetUserByLineID(ctx context.Context, lineID string) (*User, e
 	return &user, nil
 }
 
+// GetUserByID retrieves a user by userId.
+func (d *Database) GetUserByID(ctx context.Context, userID string) (*User, error) {
+	tableName := d.cfg.TablePrefix + "Users"
+	result, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &tableName,
+		Key:       map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.Item == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	var user User
+	if err = attributevalue.UnmarshalMap(result.Item, &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// getUserForEmailLogin：P2(AUTH_SYSTEM_DESIGN §5.B) email/密碼登入的帳號解析。
+// 先走 AuthIdentities(email#，權威 O(1))；查無則 fallback email-index(相容尚未 backfill 的既有用戶)。只讀不寫。
+func (d *Database) getUserForEmailLogin(ctx context.Context, email string) (*User, error) {
+	if uid, err := shared.ResolveIdentity(ctx, shared.IdentityKey(shared.ProviderPassword, email)); err == nil && uid != "" {
+		if u, gerr := d.GetUserByID(ctx, uid); gerr == nil && u != nil {
+			return u, nil
+		}
+	}
+	return d.GetUserByEmail(ctx, email)
+}
+
 // UpdateLastLogin updates the user's last login timestamp and version info
 func (d *Database) UpdateLastLogin(ctx context.Context, userID, version, platform string) error {
 	tableName := d.cfg.TablePrefix + "Users"
@@ -296,9 +327,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	var user *User
 
-	// 方式 1: 使用 Email + Password 登入
+	// 方式 1: 使用 Email + Password 登入（P2: AuthIdentities 優先 + email-index fallback）
 	if req.Email != "" && req.Password != "" {
-		user, err = db.GetUserByEmail(ctx, req.Email)
+		user, err = db.getUserForEmailLogin(ctx, req.Email)
 		if err != nil {
 			log.Printf("User not found: %v", err)
 			response := Response{Success: false, Error: "Invalid email or password"}

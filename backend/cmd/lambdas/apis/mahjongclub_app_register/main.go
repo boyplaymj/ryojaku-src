@@ -550,6 +550,17 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// P2(AUTH_SYSTEM_DESIGN §5.A): 綁 email 登入身分（同時把 identityCount 設為 1）+ 寄認證信。
+	// 皆為非致命：失敗僅記錄，不擋註冊成功——email-index 仍可 fallback 登入、認證信可日後補寄。
+	if bindErr := shared.BindIdentity(ctx, shared.IdentityKey(shared.ProviderPassword, user.Email), user.UserID, shared.ProviderPassword); bindErr != nil {
+		log.Printf("[register] BindIdentity 失敗 user=%s: %v（email-index fallback 仍可登入）", user.UserID, bindErr)
+	}
+	if rawTok, tokErr := shared.IssueToken(ctx, user.UserID, shared.PurposeVerifyEmail, shared.TTLVerifyEmail); tokErr != nil {
+		log.Printf("[register] 產認證 token 失敗 user=%s: %v", user.UserID, tokErr)
+	} else if mailErr := shared.SendVerifyEmail(ctx, user.Email, rawTok); mailErr != nil {
+		log.Printf("[register] 寄認證信失敗 user=%s: %v", user.UserID, mailErr)
+	}
+
 	// 3.5 Record Invitee Point Log (Shadow)
 	// Since the user was just created with points, we only log the event
 	if inviterID != "" && inviteePoints > 0 {

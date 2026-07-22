@@ -342,6 +342,17 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// P2 軟門檻(AUTH_SYSTEM_DESIGN §5.A): 未驗證信箱不可報名入團(信任行為)。查詢失敗採 fail-open 不誤傷。
+	if blocked, gErr := shared.BlockUnverifiedTrustAction(ctx, userID); gErr == nil && blocked {
+		response := Response{Success: false, Error: "請先完成信箱驗證才能報名牌局"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusForbidden,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
+
 	// Parse request body
 	var req RegisterRequest
 	err = json.Unmarshal([]byte(request.Body), &req)
