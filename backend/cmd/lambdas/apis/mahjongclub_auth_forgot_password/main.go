@@ -64,9 +64,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return genericResponse(headers), nil
 	}
 
-	uid, err := shared.ResolveIdentity(ctx, shared.IdentityKey(shared.ProviderPassword, email))
+	// AuthIdentities 優先 + email-index fallback（相容未 backfill 的既有 13k；能登入即能收重設信）。
+	uid, err := shared.ResolveEmailToUserID(ctx, req.Email)
 	if err != nil {
-		log.Printf("ResolveIdentity failed: %v", err)
+		log.Printf("ResolveEmailToUserID failed: %v", err)
 		return genericResponse(headers), nil
 	}
 

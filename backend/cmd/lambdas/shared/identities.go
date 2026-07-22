@@ -93,6 +93,37 @@ func ResolveIdentity(ctx context.Context, identity string) (string, error) {
 	return "", nil
 }
 
+// ResolveEmailToUserID：email → userId 的統一解析（只回 userId、只讀不寫）。
+// AuthIdentities(email#lower) 權威優先；查無則 fallback Users email-index（相容未 backfill 的既有 13k）。
+// email-index 以「原輸入去空白」比對，與 login 的 GetUserByEmail 語意一致 → 能登入者即能收重設信。
+// 查無 → 回 ("", nil)；呼叫端(如 forgot)據此決定要不要寄信，且不論如何都回防枚舉的統一訊息。
+func ResolveEmailToUserID(ctx context.Context, rawEmail string) (string, error) {
+	if uid, err := ResolveIdentity(ctx, IdentityKey(ProviderPassword, rawEmail)); err == nil && uid != "" {
+		return uid, nil
+	}
+	c := getAuthDDBClient()
+	if c == nil {
+		return "", ErrAuthDDBUnavailable
+	}
+	out, err := c.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(usersTable()),
+		IndexName:                 aws.String("email-index"),
+		KeyConditionExpression:    aws.String("email = :e"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":e": &types.AttributeValueMemberS{Value: strings.TrimSpace(rawEmail)}},
+		ProjectionExpression:      aws.String("userId"),
+		Limit:                     aws.Int32(1),
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(out.Items) > 0 {
+		if v, ok := out.Items[0]["userId"].(*types.AttributeValueMemberS); ok {
+			return v.Value, nil
+		}
+	}
+	return "", nil
+}
+
 // BindIdentity：把一把鑰匙掛到 userId，並在同一交易遞增 Users.identityCount（供孤兒守衛）。
 // 若該鑰匙已存在 → ErrIdentityTaken（防搶綁，attribute_not_exists 條件）。
 // 原子性：Put 身分 + Update 計數器合為單一 TransactWriteItems，兩者同生同滅。
