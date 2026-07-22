@@ -124,6 +124,34 @@ func ResolveEmailToUserID(ctx context.Context, rawEmail string) (string, error) 
 	return "", nil
 }
 
+// FindIdentityByProvider：查某帳號某 provider 的 identity PK（走 userId-index，Projection=ALL）。
+// 查無回 ("", nil)。用於解綁(需先知道要刪哪把 identity)。
+func FindIdentityByProvider(ctx context.Context, userID, provider string) (string, error) {
+	c := getAuthDDBClient()
+	if c == nil {
+		return "", ErrAuthDDBUnavailable
+	}
+	out, err := c.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(authIdentitiesTable()),
+		IndexName:              aws.String("userId-index"),
+		KeyConditionExpression: aws.String("userId = :u"),
+		FilterExpression:       aws.String("provider = :p"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":u": &types.AttributeValueMemberS{Value: userID},
+			":p": &types.AttributeValueMemberS{Value: provider},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(out.Items) > 0 {
+		if v, ok := out.Items[0]["identity"].(*types.AttributeValueMemberS); ok {
+			return v.Value, nil
+		}
+	}
+	return "", nil
+}
+
 // BindIdentity：把一把鑰匙掛到 userId，並在同一交易遞增 Users.identityCount（供孤兒守衛）。
 // 若該鑰匙已存在 → ErrIdentityTaken（防搶綁，attribute_not_exists 條件）。
 // 原子性：Put 身分 + Update 計數器合為單一 TransactWriteItems，兩者同生同滅。
