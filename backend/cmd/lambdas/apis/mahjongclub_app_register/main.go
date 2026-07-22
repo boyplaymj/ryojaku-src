@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -203,6 +205,38 @@ func (d *Database) SaveUser(ctx context.Context, user *User) error {
 	return err
 }
 
+// SaveUserWithIdentity 原子建立 user + 綁 email 登入身分 + 設 identityCount=1（單一 TransactWriteItems）。
+// AuthIdentities 的 attribute_not_exists(identity) 是 email 唯一性的權威閘：
+// 大小寫變體或併發同 email → 交易取消(idx1) → 呼叫端回 409。取代先前非致命 Bind 會留重複帳號的問題(Codex P2 High)。
+func (d *Database) SaveUserWithIdentity(ctx context.Context, user *User, identity, provider string) error {
+	av, err := attributevalue.MarshalMap(user)
+	if err != nil {
+		return fmt.Errorf("failed to marshal user: %w", err)
+	}
+	av["identityCount"] = &types.AttributeValueMemberN{Value: "1"} // 新帳號起算一把鑰匙
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = d.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName:           stringPtr(d.cfg.TablePrefix + "Users"),
+				Item:                av,
+				ConditionExpression: stringPtr("attribute_not_exists(userId)"),
+			}},
+			{Put: &types.Put{
+				TableName: stringPtr(d.cfg.TablePrefix + "AuthIdentities"),
+				Item: map[string]types.AttributeValue{
+					"identity":  &types.AttributeValueMemberS{Value: identity},
+					"userId":    &types.AttributeValueMemberS{Value: user.UserID},
+					"provider":  &types.AttributeValueMemberS{Value: provider},
+					"createdAt": &types.AttributeValueMemberS{Value: now},
+				},
+				ConditionExpression: stringPtr("attribute_not_exists(identity)"),
+			}},
+		},
+	})
+	return err
+}
+
 func stringPtr(s string) *string {
 	return &s
 }
@@ -308,6 +342,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 			Body:       string(body),
 		}, nil
 	}
+
+	// P2 修正: normalize email(小寫去空白)→ CheckEmailExists / user.Email / identity 全用同一正規化值，
+	// 避免大小寫變體繞過唯一性(Codex P2 High)。
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	// Validate email format
 	if !ValidateEmail(req.Email) {
@@ -537,9 +575,22 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		user.InviteRewarded = true
 	}
 
-	// Save user to database
-	err = db.SaveUser(ctx, user)
+	// P2 修正(Codex High): 原子建立 user + 綁 email 身分 + identityCount=1（單一交易）。
+	// AuthIdentities 的 attribute_not_exists(identity) 是 email 唯一性權威閘 → 大小寫變體/併發重複 → 409。
+	emailIdentity := shared.IdentityKey(shared.ProviderPassword, user.Email)
+	err = db.SaveUserWithIdentity(ctx, user, emailIdentity, shared.ProviderPassword)
 	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2 {
+			if r := tce.CancellationReasons[1].Code; r != nil && *r == "ConditionalCheckFailed" {
+				// idx1: email#identity 已存在 → 此信箱已被註冊
+				log.Printf("register conflict email=%s: %v", user.Email, err)
+				response := Response{Success: false, Error: "此信箱已被註冊"}
+				body, _ := json.Marshal(response)
+				return events.APIGatewayProxyResponse{StatusCode: http.StatusConflict, Headers: headers, Body: string(body)}, nil
+			}
+			// idx0: userId 撞號（隨機 APP_ id，近乎不可能）→ 當成內部錯誤
+		}
 		log.Printf("Failed to save user: %v", err)
 		response := Response{Success: false, Error: "Failed to create user"}
 		body, _ := json.Marshal(response)
@@ -550,11 +601,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
-	// P2(AUTH_SYSTEM_DESIGN §5.A): 綁 email 登入身分（同時把 identityCount 設為 1）+ 寄認證信。
-	// 皆為非致命：失敗僅記錄，不擋註冊成功——email-index 仍可 fallback 登入、認證信可日後補寄。
-	if bindErr := shared.BindIdentity(ctx, shared.IdentityKey(shared.ProviderPassword, user.Email), user.UserID, shared.ProviderPassword); bindErr != nil {
-		log.Printf("[register] BindIdentity 失敗 user=%s: %v（email-index fallback 仍可登入）", user.UserID, bindErr)
-	}
+	// 寄認證信（非致命：失敗僅記錄，認證信可日後補寄；身分已於上方交易綁定）。
 	if rawTok, tokErr := shared.IssueToken(ctx, user.UserID, shared.PurposeVerifyEmail, shared.TTLVerifyEmail); tokErr != nil {
 		log.Printf("[register] 產認證 token 失敗 user=%s: %v", user.UserID, tokErr)
 	} else if mailErr := shared.SendVerifyEmail(ctx, user.Email, rawTok); mailErr != nil {
