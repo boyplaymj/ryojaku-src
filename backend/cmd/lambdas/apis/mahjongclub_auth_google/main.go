@@ -79,7 +79,8 @@ func respondAuth(headers map[string]string, uid, email, mode string) events.APIG
 }
 
 // createGoogleUser：原子建立 Google 新帳號 + 綁 google 身分 + identityCount=1（單一交易）。
-func createGoogleUser(ctx context.Context, uid, email, name, identity string) error {
+// emailVerified 依 Google claim 帶入（Codex P4 High：不可無條件 true，否則 email 未驗證/空也繞過軟門檻）。
+func createGoogleUser(ctx context.Context, uid, email, name, identity string, emailVerified bool) error {
 	now := time.Now().Format(time.RFC3339)
 	userItem := map[string]types.AttributeValue{
 		"userId":        &types.AttributeValueMemberS{Value: uid},
@@ -88,7 +89,7 @@ func createGoogleUser(ctx context.Context, uid, email, name, identity string) er
 		"points":        &types.AttributeValueMemberN{Value: "0"},
 		"rating":        &types.AttributeValueMemberN{Value: "5"},
 		"isVerified":    &types.AttributeValueMemberBOOL{Value: false},
-		"emailVerified": &types.AttributeValueMemberBOOL{Value: true}, // Google 已驗信箱
+		"emailVerified": &types.AttributeValueMemberBOOL{Value: emailVerified},
 		"identityCount": &types.AttributeValueMemberN{Value: "1"},
 		"createdAt":     &types.AttributeValueMemberS{Value: now},
 		"updatedAt":     &types.AttributeValueMemberS{Value: now},
@@ -163,6 +164,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 				log.Printf("merge BindIdentity failed for %s: %v", existing, berr)
 				return jsonResp(headers, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": "internal error"}), nil
 			}
+			// Google 已驗證此 email(進入此分支的前提) → 把既有帳號標 emailVerified，免被軟門檻誤擋(Codex P4 Medium)。
+			// 非致命:合併已成功,驗證旗標 best-effort。
+			markNow := time.Now().Format(time.RFC3339)
+			if _, uerr := ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+				TableName:                 aws.String(tablePrefix + "Users"),
+				Key:                       map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: existing}},
+				UpdateExpression:          aws.String("SET emailVerified = :t, updatedAt = :now"),
+				ConditionExpression:       aws.String("attribute_exists(userId)"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":t": &types.AttributeValueMemberBOOL{Value: true}, ":now": &types.AttributeValueMemberS{Value: markNow}},
+			}); uerr != nil {
+				log.Printf("merge: mark emailVerified failed for %s: %v", existing, uerr)
+			}
 			return respondAuth(headers, existing, g.Email, "merged"), nil
 		}
 	}
@@ -176,7 +189,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if name == "" {
 		name = "麻友"
 	}
-	if err := createGoogleUser(ctx, uid, g.Email, name, identity); err != nil {
+	if err := createGoogleUser(ctx, uid, g.Email, name, identity, g.EmailVerified && g.Email != ""); err != nil {
 		var tce *types.TransactionCanceledException
 		if errors.As(err, &tce) {
 			// google 身分被搶(競態) → 重解析登入

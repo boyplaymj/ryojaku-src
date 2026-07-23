@@ -34,6 +34,10 @@ func VerifyGoogleIDToken(ctx context.Context, rawIDToken string) (*GoogleIdentit
 	if err != nil {
 		return nil, err
 	}
+	// idtoken.Validate 驗 aud/exp/簽章，但不檢查 iss → 這裡明確驗發行者(Codex P4 High)。
+	if payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com" {
+		return nil, errors.New("invalid issuer")
+	}
 	g := &GoogleIdentity{Sub: payload.Subject}
 	if v, ok := payload.Claims["email"].(string); ok {
 		g.Email = strings.ToLower(strings.TrimSpace(v))
