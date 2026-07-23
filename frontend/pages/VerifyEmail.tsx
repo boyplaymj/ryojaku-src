@@ -1,12 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { authService } from '../services/authService';
-import { Loader2, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
-import { AppButton } from '../components/ui/CommonUI';
+import { Loader2, CheckCircle2, AlertTriangle, ArrowRight, Mail } from 'lucide-react';
+import { AppInput, AppButton } from '../components/ui/CommonUI';
+import { useToast } from '../contexts/ToastContext';
 
 type VerifyState = 'verifying' | 'success' | 'error';
 
 const VerifyEmail: React.FC = () => {
   const [state, setState] = useState<VerifyState>('verifying');
+  const [resendEmail, setResendEmail] = useState('');
+  const [resendSent, setResendSent] = useState(false);
+  const [resending, setResending] = useState(false);
+  const { showToast } = useToast();
+
+  const handleResend = async () => {
+    if (!resendEmail || !resendEmail.includes('@')) {
+      showToast('請輸入有效的信箱', 'warning');
+      return;
+    }
+    try {
+      setResending(true);
+      await authService.resendVerify(resendEmail);
+    } finally {
+      setResending(false);
+      setResendSent(true); // 防枚舉:一律顯示已寄出
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
@@ -106,6 +125,28 @@ const VerifyEmail: React.FC = () => {
                 <p className="text-[0.75rem] font-bold text-neutral-400 leading-relaxed mb-6">
                   驗證失敗，連結可能已過期或已使用。
                 </p>
+
+                {resendSent ? (
+                  <p className="w-full text-[0.75rem] font-bold text-neutral-500 leading-relaxed mb-6 bg-neutral-50 rounded-lg p-4">
+                    若此信箱已註冊，我們已把新的驗證信寄到你的信箱，請查收。
+                  </p>
+                ) : (
+                  <div className="w-full space-y-3 mb-6">
+                    <p className="text-[0.6875rem] font-black text-neutral-400 uppercase tracking-widest text-left ml-1">重寄驗證信</p>
+                    <AppInput
+                      type="email"
+                      placeholder="your@email.com"
+                      icon={Mail}
+                      value={resendEmail}
+                      onChange={(e) => setResendEmail(e.target.value)}
+                      className="bg-neutral-50/50"
+                    />
+                    <AppButton type="button" variant="secondary" isLoading={resending} onClick={handleResend} className="w-full">
+                      重寄驗證信
+                    </AppButton>
+                  </div>
+                )}
+
                 <AppButton
                   type="button"
                   onClick={goToLogin}

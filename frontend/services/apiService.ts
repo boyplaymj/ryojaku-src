@@ -167,6 +167,11 @@ export async function verifyEmail(token: string) {
   return apiRequest(`/auth/verify-email?token=${encodeURIComponent(token)}`, { method: 'GET' });
 }
 
+// 重寄認證信（免登入；後端一律回防枚舉成功句）
+export async function resendVerify(email: string) {
+  return apiRequest('/auth/resend-verify', { method: 'POST', body: JSON.stringify({ email }) });
+}
+
 // 改密碼（需登入）：驗當前密碼 → 換新
 export async function changePassword(currentPassword: string, newPassword: string) {
   return apiRequest('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });

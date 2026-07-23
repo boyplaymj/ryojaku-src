@@ -2,7 +2,7 @@ import { User } from '../types';
 import { verifyUser, loginUser, registerUser, LoginRequest, RegisterRequest,
   forgotPassword as apiForgotPassword, resetPassword as apiResetPassword, verifyEmail as apiVerifyEmail,
   changePassword as apiChangePassword, logoutAllDevices as apiLogoutAll, googleAuth as apiGoogleAuth,
-  bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, getUserProfile } from './apiService';
+  bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, resendVerify as apiResendVerify, getUserProfile } from './apiService';
 import { STORAGE_KEYS } from '../constants';
 
 export const authService = {
@@ -138,6 +138,11 @@ export const authService = {
   // 忘記密碼（後端一律回防枚舉成功句，不 throw）
   forgotPassword: async (email: string): Promise<void> => {
     await apiForgotPassword(email);
+  },
+
+  // 重寄認證信（後端一律回防枚舉成功句，不 throw）
+  resendVerify: async (email: string): Promise<void> => {
+    await apiResendVerify(email);
   },
 
   // 用信中 token 重設密碼（免登入）

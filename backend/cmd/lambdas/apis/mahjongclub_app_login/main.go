@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -329,6 +330,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// 方式 1: 使用 Email + Password 登入（P2: AuthIdentities 優先 + email-index fallback）
 	if req.Email != "" && req.Password != "" {
+		// normalize email：限流 key 與登入查詢共用同一正規化值，避免大小寫/空白變體繞過限流(Codex P6 High)。
+		req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 		// rate limit：防暴力破解（同信箱+IP，15 分鐘 10 次）。超限回 429。
 		if allowed, _ := shared.CheckRateLimit(ctx, "login#"+req.Email+"#"+request.RequestContext.Identity.SourceIP, 10, 900); !allowed {
 			response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
