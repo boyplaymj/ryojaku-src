@@ -145,6 +145,49 @@ export async function loginUser(data: LoginRequest) {
   });
 }
 
+// ============ 帳號系統 P5（新版 auth：認證信 / 忘記改密碼 / Google）============
+// 路徑對齊後端 lambda（P6 APIGW 接線）；需登入的端點由 apiRequest 自動帶 Authorization: Bearer。
+
+// 忘記密碼：寄重設連結（後端一律回防枚舉的成功句）
+export async function forgotPassword(email: string) {
+  return apiRequest('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+}
+
+// 重設密碼：用信中 token 設新密碼（免登入）
+export async function resetPassword(token: string, newPassword: string) {
+  return apiRequest('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) });
+}
+
+// 驗證信箱：用信中 token（免登入）
+export async function verifyEmail(token: string) {
+  return apiRequest(`/auth/verify-email?token=${encodeURIComponent(token)}`, { method: 'GET' });
+}
+
+// 改密碼（需登入）：驗當前密碼 → 換新
+export async function changePassword(currentPassword: string, newPassword: string) {
+  return apiRequest('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+}
+
+// 登出所有其他裝置（需登入）
+export async function logoutAllDevices() {
+  return apiRequest('/auth/logout-all', { method: 'POST' });
+}
+
+// Google 登入/註冊/合併：傳 Google ID token
+export async function googleAuth(idToken: string) {
+  return apiRequest('/auth/google', { method: 'POST', body: JSON.stringify({ idToken }) });
+}
+
+// 綁定 Google 到目前帳號（需登入）
+export async function bindGoogle(idToken: string) {
+  return apiRequest('/auth/bind-google', { method: 'POST', body: JSON.stringify({ idToken }) });
+}
+
+// 解綁登入方式（需登入）：provider = 'google' | 'line'
+export async function unbindProvider(provider: string) {
+  return apiRequest('/auth/unbind', { method: 'POST', body: JSON.stringify({ provider }) });
+}
+
 // ============ WEB Authentication APIs (Legacy) ============
 
 // Verify user and get user info (for LINE Bot users)

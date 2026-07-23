@@ -12,6 +12,9 @@ import Profile from './pages/Profile';
 import Messages from './pages/ChatList';
 import ChatRoom from './pages/ChatRoom';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import Notifications from './pages/Notifications';
 import RateGame from './pages/RateGame';
 
@@ -241,9 +244,15 @@ function App() {
     if (isAuthChecking) return null;
 
     if (!user) {
+      // pre-auth 頁（從信裡的連結進入，免登入）：#/reset?token / #/verify?token / #/forgot
+      const hash = window.location.hash || '';
+      const preAuth = hash.startsWith('#/reset') ? <ResetPassword />
+        : hash.startsWith('#/verify') ? <VerifyEmail />
+        : hash.startsWith('#/forgot') ? <ForgotPassword />
+        : null;
       return (
         <div className="mx-auto w-full bg-transparent min-h-screen shadow-2xl relative overflow-hidden">
-          <Login onLoginSuccess={handleLoginSuccess} inviteePoints={invitePoints.invitee} />
+          {preAuth || <Login onLoginSuccess={handleLoginSuccess} inviteePoints={invitePoints.invitee} />}
         </div>
       );
     }

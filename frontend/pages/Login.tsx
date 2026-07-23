@@ -4,6 +4,7 @@ import { User } from '../types';
 import { Loader2, ArrowRight, Sparkles, Mail, Lock, UserPlus, User as UserIcon, QrCode } from 'lucide-react';
 import { AppInput, AppButton } from '../components/ui/CommonUI';
 import { useToast } from '../contexts/ToastContext';
+import { isGoogleConfigured, renderGoogleButton } from '../services/googleSignIn';
 
 interface LoginProps {
   onLoginSuccess: (user: User) => void;
@@ -38,6 +39,28 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, inviteePoints = '50' }) =
       window.history.replaceState({}, document.title, window.location.pathname + window.location.hash.split('?')[0]);
     }
   }, []);
+
+  // Google 登入（GIS 官方按鈕；未設 VITE_GOOGLE_CLIENT_ID 則不顯示）
+  const googleBtnRef = React.useRef<HTMLDivElement>(null);
+  const [googleReady] = useState(isGoogleConfigured());
+  React.useEffect(() => {
+    if (!googleReady || !googleBtnRef.current) return;
+    renderGoogleButton(
+      googleBtnRef.current,
+      async (idToken) => {
+        try {
+          setIsLoading(true);
+          const user = await authService.loginWithGoogle(idToken);
+          onLoginSuccess(user);
+        } catch (err) {
+          showToast(err instanceof Error ? err.message : 'Google 登入失敗', 'error');
+        } finally {
+          setIsLoading(false);
+        }
+      },
+      (e) => showToast(e.message, 'error'),
+    );
+  }, [googleReady]);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,6 +181,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, inviteePoints = '50' }) =
                   <div className="space-y-1.5 relative">
                     <div className="flex items-center justify-between ml-1 pr-1">
                       <label className="text-[0.5625rem] font-black text-neutral-400 uppercase tracking-widest">Password</label>
+                      <button type="button" onClick={() => { window.location.hash = '#/forgot'; }} className="text-[0.5625rem] font-black text-neutral-400 hover:text-neutral-900 uppercase tracking-widest">忘記密碼？</button>
                     </div>
                     <AppInput
                       type="password"
@@ -182,6 +206,17 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, inviteePoints = '50' }) =
                     </AppButton>
                   </div>
                 </form>
+
+                {googleReady && (
+                  <div className="mt-6">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="flex-1 h-px bg-neutral-200" />
+                      <span className="text-[0.5625rem] font-black text-neutral-400 uppercase tracking-widest">或</span>
+                      <div className="flex-1 h-px bg-neutral-200" />
+                    </div>
+                    <div ref={googleBtnRef} className="flex justify-center" />
+                  </div>
+                )}
               </div>
             </div>
 

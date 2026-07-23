@@ -14,6 +14,8 @@ import 'react-image-crop/dist/ReactCrop.css';
 import MyGamesOverlay from '../components/MyGamesOverlay';
 import LedgerOverlay from '../components/LedgerOverlay';
 import UserReviewsModal from '../components/UserReviewsModal';
+import AccountSecurity from '../components/AccountSecurity';
+import GoogleLinkCard from '../components/GoogleLinkCard';
 import { AppInput, AppSelect, AppButton } from '../components/ui/CommonUI';
 
 interface ProfileProps {
@@ -1006,6 +1008,9 @@ const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUserUpdate, inviter
                         </div>
                         <ChevronRight size="1rem" className="text-neutral-200 group-hover:text-[#c5a059]" />
                     </button>
+
+                    <div className="mt-3"><AccountSecurity /></div>
+                    <div className="mt-3"><GoogleLinkCard /></div>
 
                     <div className="pt-2">
                         <button

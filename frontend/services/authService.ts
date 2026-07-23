@@ -1,5 +1,8 @@
 import { User } from '../types';
-import { verifyUser, loginUser, registerUser, LoginRequest, RegisterRequest } from './apiService';
+import { verifyUser, loginUser, registerUser, LoginRequest, RegisterRequest,
+  forgotPassword as apiForgotPassword, resetPassword as apiResetPassword, verifyEmail as apiVerifyEmail,
+  changePassword as apiChangePassword, logoutAllDevices as apiLogoutAll, googleAuth as apiGoogleAuth,
+  bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, getUserProfile } from './apiService';
 import { STORAGE_KEYS } from '../constants';
 
 export const authService = {
@@ -106,6 +109,65 @@ export const authService = {
   // Legacy method for backward compatibility (used by Login.tsx)
   login: async (email: string, password: string): Promise<User> => {
     return authService.loginWithEmail(email, password);
+  },
+
+  // ===== 帳號系統 P5 =====
+
+  // Google 登入/註冊/合併：後端只回 token+userId → 再撈完整 profile 存起來。
+  loginWithGoogle: async (idToken: string): Promise<User> => {
+    const resp = await apiGoogleAuth(idToken);
+    if (!resp.success || !resp.token || !resp.userId) {
+      throw new Error(resp.error || 'Google 登入失敗');
+    }
+    localStorage.setItem(STORAGE_KEYS.JWT, resp.token);
+    localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'app');
+    const profileResp = await getUserProfile(resp.userId);
+    const user: User = profileResp.data || profileResp.user;
+    if (user) {
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+    }
+    return user;
+  },
+
+  // 忘記密碼（後端一律回防枚舉成功句，不 throw）
+  forgotPassword: async (email: string): Promise<void> => {
+    await apiForgotPassword(email);
+  },
+
+  // 用信中 token 重設密碼（免登入）
+  resetPassword: async (token: string, newPassword: string): Promise<void> => {
+    const resp = await apiResetPassword(token, newPassword);
+    if (!resp.success) throw new Error(resp.error || '重設失敗，連結可能已過期');
+  },
+
+  // 用信中 token 驗證信箱（免登入）
+  verifyEmail: async (token: string): Promise<void> => {
+    const resp = await apiVerifyEmail(token);
+    if (!resp.success) throw new Error(resp.error || '驗證失敗，連結可能已過期或已使用');
+  },
+
+  // 改密碼（需登入）
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    const resp = await apiChangePassword(currentPassword, newPassword);
+    if (!resp.success) throw new Error(resp.error || '改密碼失敗');
+  },
+
+  // 登出所有其他裝置（需登入）
+  logoutAllDevices: async (): Promise<void> => {
+    const resp = await apiLogoutAll();
+    if (!resp.success) throw new Error(resp.error || '操作失敗');
+  },
+
+  // 綁定 Google 到目前帳號（需登入）
+  bindGoogle: async (idToken: string): Promise<void> => {
+    const resp = await apiBindGoogle(idToken);
+    if (!resp.success) throw new Error(resp.error || '綁定失敗');
+  },
+
+  // 解綁登入方式（需登入）
+  unbindProvider: async (provider: string): Promise<void> => {
+    const resp = await apiUnbind(provider);
+    if (!resp.success) throw new Error(resp.error || '解綁失敗');
   },
 
   getCurrentUser: (): User | null => {
