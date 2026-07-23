@@ -243,16 +243,25 @@ function App() {
   const renderContent = () => {
     if (isAuthChecking) return null;
 
-    if (!user) {
-      // pre-auth 頁（從信裡的連結進入，免登入）：#/reset?token / #/verify?token / #/forgot
-      const hash = window.location.hash || '';
-      const preAuth = hash.startsWith('#/reset') ? <ResetPassword />
-        : hash.startsWith('#/verify') ? <VerifyEmail />
-        : hash.startsWith('#/forgot') ? <ForgotPassword />
-        : null;
+    // 認證流程頁（從信裡連結進站）：登入與否都要能開，故放在 user 判斷之前。
+    // 後端寄的是 HashRouter 形式 <base>/#/verify?token= / /#/reset?token=（見 shared/email.go）。
+    const hash = window.location.hash || '';
+    const authFlow = hash.startsWith('#/verify') ? <VerifyEmail />
+      : hash.startsWith('#/reset') ? <ResetPassword />
+      : hash.startsWith('#/forgot') ? <ForgotPassword />
+      : null;
+    if (authFlow) {
       return (
         <div className="mx-auto w-full bg-transparent min-h-screen shadow-2xl relative overflow-hidden">
-          {preAuth || <Login onLoginSuccess={handleLoginSuccess} inviteePoints={invitePoints.invitee} />}
+          {authFlow}
+        </div>
+      );
+    }
+
+    if (!user) {
+      return (
+        <div className="mx-auto w-full bg-transparent min-h-screen shadow-2xl relative overflow-hidden">
+          <Login onLoginSuccess={handleLoginSuccess} inviteePoints={invitePoints.invitee} />
         </div>
       );
     }

@@ -65,7 +65,7 @@ func sendEmail(ctx context.Context, to, subject, html string) error {
 
 // SendVerifyEmail：寄認證信（連結帶明碼 token）。
 func SendVerifyEmail(ctx context.Context, to, rawToken string) error {
-	link := fmt.Sprintf("%s/verify?token=%s", appBaseURL(), rawToken)
+	link := fmt.Sprintf("%s/#/verify?token=%s", appBaseURL(), rawToken) // HashRouter 前端 → 用 /#/ 形式
 	return sendEmail(ctx, to, "【両雀】驗證你的信箱", brandedEmail(
 		"驗證你的信箱",
 		"歡迎加入両雀！點下方按鈕完成信箱驗證，就能開團與加入牌局。",
@@ -76,7 +76,7 @@ func SendVerifyEmail(ctx context.Context, to, rawToken string) error {
 
 // SendResetEmail：寄重設密碼信。
 func SendResetEmail(ctx context.Context, to, rawToken string) error {
-	link := fmt.Sprintf("%s/reset?token=%s", appBaseURL(), rawToken)
+	link := fmt.Sprintf("%s/#/reset?token=%s", appBaseURL(), rawToken) // HashRouter 前端 → 用 /#/ 形式
 	return sendEmail(ctx, to, "【両雀】重設你的密碼", brandedEmail(
 		"重設你的密碼",
 		"我們收到重設密碼的請求。點下方按鈕設定新密碼。",

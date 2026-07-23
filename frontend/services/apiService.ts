@@ -50,7 +50,11 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
     if (!response.ok) {
       // 處理 401 未授權：清除登入狀態並強制重新載入
       if (response.status === 401) {
-        const isAuthEndpoint = endpoint.includes('/app-login') || endpoint.includes('/app-register') || endpoint.includes('/verify-user');
+        // public auth 端點的 401 是「憑證/帳密錯誤」，不是既有 session 過期 → 不清 localStorage
+        const isAuthEndpoint = endpoint.includes('/app-login') || endpoint.includes('/app-register')
+          || endpoint.includes('/verify-user') || endpoint.includes('/auth/google')
+          || endpoint.includes('/auth/forgot-password') || endpoint.includes('/auth/reset-password')
+          || endpoint.includes('/auth/verify-email');
 
         if (!isAuthEndpoint) {
           // 使用旗標防止多個併發 401 同時觸發多次跳轉

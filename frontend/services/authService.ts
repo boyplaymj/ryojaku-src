@@ -121,12 +121,18 @@ export const authService = {
     }
     localStorage.setItem(STORAGE_KEYS.JWT, resp.token);
     localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'app');
-    const profileResp = await getUserProfile(resp.userId);
-    const user: User = profileResp.data || profileResp.user;
-    if (user) {
+    try {
+      const profileResp = await getUserProfile(resp.userId);
+      const user: User = profileResp.data || profileResp.user;
+      if (!user) throw new Error('無法取得使用者資料');
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      return user;
+    } catch (e) {
+      // 撈 profile 失敗 → 清掉剛寫入的半套 session，避免壞狀態
+      localStorage.removeItem(STORAGE_KEYS.JWT);
+      localStorage.removeItem(STORAGE_KEYS.AUTH_TYPE);
+      throw e instanceof Error ? e : new Error('Google 登入後無法取得使用者資料');
     }
-    return user;
   },
 
   // 忘記密碼（後端一律回防枚舉成功句，不 throw）
