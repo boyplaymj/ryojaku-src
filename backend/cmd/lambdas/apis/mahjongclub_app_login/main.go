@@ -330,10 +330,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// 方式 1: 使用 Email + Password 登入（P2: AuthIdentities 優先 + email-index fallback）
 	if req.Email != "" && req.Password != "" {
-		// normalize email：限流 key 與登入查詢共用同一正規化值，避免大小寫/空白變體繞過限流(Codex P6 High)。
-		req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+		// normEmail 只給限流 key：避免大小寫/空白變體落不同 bucket 繞過限流(Codex P6 High)。
+		// ⚠️ 不可改動 req.Email 本身——登入查詢的 email-index fallback 需保留「原輸入精確比對」語意，
+		//    否則 mixed-case 且未 backfill AuthIdentities 的 13k legacy 帳號會查不到(Codex P6 回歸)。
+		normEmail := strings.ToLower(strings.TrimSpace(req.Email))
 		// rate limit：防暴力破解（同信箱+IP，15 分鐘 10 次）。超限回 429。
-		if allowed, _ := shared.CheckRateLimit(ctx, "login#"+req.Email+"#"+request.RequestContext.Identity.SourceIP, 10, 900); !allowed {
+		if allowed, _ := shared.CheckRateLimit(ctx, "login#"+normEmail+"#"+request.RequestContext.Identity.SourceIP, 10, 900); !allowed {
 			response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{StatusCode: http.StatusTooManyRequests, Headers: headers, Body: string(body)}, nil
