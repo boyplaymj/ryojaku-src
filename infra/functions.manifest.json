@@ -61,6 +61,15 @@
     {"name":"user-info","projectPath":"cmd/lambdas/apis/mahjongclub_web_user_info","apiType":"REST_V1","method":"GET","path":"/user-info?","auth":"public","tables":["Users","Games","Registrations","RatingComments"]},
     {"name":"user-profile","projectPath":"cmd/lambdas/apis/mahjongclub_web_user_profile","apiType":"REST_V1","method":"ANY","path":"/user-profile?","auth":"user","tables":["Users","Games","Registrations","RatingComments"]},
     {"name":"vapid-key","projectPath":"cmd/lambdas/apis/mahjongclub_web_vapid_key","apiType":"REST_V1","method":"GET","path":"/vapid-key?","auth":"public","tables":[]},
-    {"name":"verify-user","projectPath":"cmd/lambdas/apis/mahjongclub_web_verify_user","apiType":"REST_V1","method":"POST","path":"/verify-user?","auth":"public","tables":["Users"]}
+    {"name":"verify-user","projectPath":"cmd/lambdas/apis/mahjongclub_web_verify_user","apiType":"REST_V1","method":"POST","path":"/verify-user?","auth":"public","tables":["Users"]},
+    {"name":"auth-verify-email","projectPath":"cmd/lambdas/apis/mahjongclub_auth_verify_email","apiType":"REST_V1","method":"GET","path":"/auth/verify-email?","auth":"public","tables":["Users","AuthTokens"]},
+    {"name":"auth-forgot-password","projectPath":"cmd/lambdas/apis/mahjongclub_auth_forgot_password","apiType":"REST_V1","method":"POST","path":"/auth/forgot-password?","auth":"public","tables":["Users","AuthIdentities","AuthTokens","AuthRateLimit"]},
+    {"name":"auth-reset-password","projectPath":"cmd/lambdas/apis/mahjongclub_auth_reset_password","apiType":"REST_V1","method":"POST","path":"/auth/reset-password?","auth":"public","tables":["Users","AuthTokens"]},
+    {"name":"auth-change-password","projectPath":"cmd/lambdas/apis/mahjongclub_auth_change_password","apiType":"REST_V1","method":"POST","path":"/auth/change-password?","auth":"user","tables":["Users"]},
+    {"name":"auth-logout-all","projectPath":"cmd/lambdas/apis/mahjongclub_auth_logout_all","apiType":"REST_V1","method":"POST","path":"/auth/logout-all?","auth":"user","tables":["Users"]},
+    {"name":"auth-google","projectPath":"cmd/lambdas/apis/mahjongclub_auth_google","apiType":"REST_V1","method":"POST","path":"/auth/google?","auth":"public","tables":["Users","AuthIdentities"]},
+    {"name":"auth-bind-google","projectPath":"cmd/lambdas/apis/mahjongclub_auth_bind_google","apiType":"REST_V1","method":"POST","path":"/auth/bind-google?","auth":"user","tables":["Users","AuthIdentities"]},
+    {"name":"auth-unbind","projectPath":"cmd/lambdas/apis/mahjongclub_auth_unbind","apiType":"REST_V1","method":"POST","path":"/auth/unbind?","auth":"user","tables":["Users","AuthIdentities"]},
+    {"name":"auth-resend-verify","projectPath":"cmd/lambdas/apis/mahjongclub_auth_resend_verify","apiType":"REST_V1","method":"POST","path":"/auth/resend-verify?","auth":"public","tables":["Users","AuthIdentities","AuthTokens","AuthRateLimit"]}
   ]
 }

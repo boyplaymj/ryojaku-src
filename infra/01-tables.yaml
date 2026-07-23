@@ -488,6 +488,14 @@ Resources:
       AttributeDefinitions: [ { AttributeName: tokenHash, AttributeType: S } ]
       KeySchema: [ { AttributeName: tokenHash, KeyType: HASH } ]
       TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # verify 24h / reset 30min 自動清
+  AuthRateLimitTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}AuthRateLimit'     # PK=rlKey(行為#識別#窗口桶);固定窗口計數,防暴力/寄信轟炸
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [ { AttributeName: rlKey, AttributeType: S } ]
+      KeySchema: [ { AttributeName: rlKey, KeyType: HASH } ]
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # 窗口過後自清
 
 Outputs:
   TablePrefix:

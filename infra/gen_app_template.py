@@ -33,6 +33,12 @@ Parameters:
   VapidPublicKey: { Type: String, NoEcho: true }
   VapidPrivateKey: { Type: String, NoEcho: true }
   VapidSubscriber: { Type: String, NoEcho: true }
+  # 帳號系統 P6：非機密設定（明碼參數）。GOOGLE_CLIENT_ID 是公開值(前端亦內嵌)；SES 寄件設定。
+  GoogleClientId: { Type: String, Default: '' }
+  MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
+  AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
+  SesRegion: { Type: String, Default: 'ap-southeast-1' }
+  EmailVerifyGate: { Type: String, Default: 'on' }
 
 Globals:
   Function:
@@ -54,6 +60,11 @@ Globals:
         VAPID_PUBLIC_KEY: !Ref VapidPublicKey
         VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
         VAPID_SUBSCRIBER: !Ref VapidSubscriber
+        GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        MAIL_FROM: !Ref MailFrom
+        APP_BASE_URL: !Ref AppBaseUrl
+        SES_REGION: !Ref SesRegion
+        EMAIL_VERIFY_GATE: !Ref EmailVerifyGate
 
 Resources:
 
@@ -81,6 +92,9 @@ DDB_POLICY = """      Policies:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 """
 
 def fn_block(f):

@@ -369,6 +369,15 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// rate limit：防大量註冊（同 IP 每小時 10 次）。超限回 429。
+	if ip := request.RequestContext.Identity.SourceIP; ip != "" {
+		if allowed, _ := shared.CheckRateLimit(ctx, "register#ip#"+ip, 10, 3600); !allowed {
+			response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
+			body, _ := json.Marshal(response)
+			return events.APIGatewayProxyResponse{StatusCode: http.StatusTooManyRequests, Headers: headers, Body: string(body)}, nil
+		}
+	}
+
 	// Check if email already exists
 	exists, err := db.CheckEmailExists(ctx, req.Email)
 	if err != nil {

@@ -64,6 +64,16 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return genericResponse(headers), nil
 	}
 
+	// rate limit：防寄信轟炸（同 IP 20/hr、同信箱 5/hr）。超限一樣回成功句，不洩漏。
+	if ip := request.RequestContext.Identity.SourceIP; ip != "" {
+		if allowed, _ := shared.CheckRateLimit(ctx, "forgot#ip#"+ip, 20, 3600); !allowed {
+			return genericResponse(headers), nil
+		}
+	}
+	if allowed, _ := shared.CheckRateLimit(ctx, "forgot#email#"+email, 5, 3600); !allowed {
+		return genericResponse(headers), nil
+	}
+
 	// AuthIdentities 優先 + email-index fallback（相容未 backfill 的既有 13k；能登入即能收重設信）。
 	uid, err := shared.ResolveEmailToUserID(ctx, req.Email)
 	if err != nil {

@@ -329,6 +329,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// 方式 1: 使用 Email + Password 登入（P2: AuthIdentities 優先 + email-index fallback）
 	if req.Email != "" && req.Password != "" {
+		// rate limit：防暴力破解（同信箱+IP，15 分鐘 10 次）。超限回 429。
+		if allowed, _ := shared.CheckRateLimit(ctx, "login#"+req.Email+"#"+request.RequestContext.Identity.SourceIP, 10, 900); !allowed {
+			response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
+			body, _ := json.Marshal(response)
+			return events.APIGatewayProxyResponse{StatusCode: http.StatusTooManyRequests, Headers: headers, Body: string(body)}, nil
+		}
 		user, err = db.getUserForEmailLogin(ctx, req.Email)
 		if err != nil {
 			log.Printf("User not found: %v", err)

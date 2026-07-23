@@ -18,6 +18,12 @@ Parameters:
   VapidPublicKey: { Type: String, NoEcho: true }
   VapidPrivateKey: { Type: String, NoEcho: true }
   VapidSubscriber: { Type: String, NoEcho: true }
+  # 帳號系統 P6：非機密設定（明碼參數）。GOOGLE_CLIENT_ID 是公開值(前端亦內嵌)；SES 寄件設定。
+  GoogleClientId: { Type: String, Default: '' }
+  MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
+  AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
+  SesRegion: { Type: String, Default: 'ap-southeast-1' }
+  EmailVerifyGate: { Type: String, Default: 'on' }
 
 Globals:
   Function:
@@ -39,6 +45,11 @@ Globals:
         VAPID_PUBLIC_KEY: !Ref VapidPublicKey
         VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
         VAPID_SUBSCRIBER: !Ref VapidSubscriber
+        GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        MAIL_FROM: !Ref MailFrom
+        APP_BASE_URL: !Ref AppBaseUrl
+        SES_REGION: !Ref SesRegion
+        EMAIL_VERIFY_GATE: !Ref EmailVerifyGate
 
 Resources:
 
@@ -74,6 +85,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminAdmins:
     Type: AWS::Serverless::Function
@@ -99,6 +113,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminAnalysis:
     Type: AWS::Serverless::Function
@@ -124,6 +141,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminDashboardGetStats:
     Type: AWS::Serverless::Function
@@ -149,6 +169,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminLogin:
     Type: AWS::Serverless::Function
@@ -174,6 +197,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminLogs:
     Type: AWS::Serverless::Function
@@ -199,6 +225,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminModeration:
     Type: AWS::Serverless::Function
@@ -224,6 +253,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminPointHistory:
     Type: AWS::Serverless::Function
@@ -249,6 +281,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminPushAll:
     Type: AWS::Serverless::Function
@@ -274,6 +309,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminUsers:
     Type: AWS::Serverless::Function
@@ -299,6 +337,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminVersions:
     Type: AWS::Serverless::Function
@@ -324,6 +365,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAdminVouchers:
     Type: AWS::Serverless::Function
@@ -349,6 +393,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAnalytics:
     Type: AWS::Serverless::Function
@@ -374,6 +421,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAppLogin:
     Type: AWS::Serverless::Function
@@ -399,6 +449,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAppRegister:
     Type: AWS::Serverless::Function
@@ -424,6 +477,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAppVersionConfig:
     Type: AWS::Serverless::Function
@@ -449,6 +505,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatArchiver:
     Type: AWS::Serverless::Function
@@ -470,6 +529,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatGetHistory:
     Type: AWS::Serverless::Function
@@ -495,6 +557,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatGetRoomInfo:
     Type: AWS::Serverless::Function
@@ -520,6 +585,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatGetRooms:
     Type: AWS::Serverless::Function
@@ -545,6 +613,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -570,6 +641,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatMarkRead:
     Type: AWS::Serverless::Function
@@ -595,6 +669,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatWsConnect:
     Type: AWS::Serverless::Function
@@ -616,6 +693,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatWsDisconnect:
     Type: AWS::Serverless::Function
@@ -637,6 +717,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnChatWsSendMessage:
     Type: AWS::Serverless::Function
@@ -658,6 +741,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityAddComment:
     Type: AWS::Serverless::Function
@@ -683,6 +769,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityCreatePost:
     Type: AWS::Serverless::Function
@@ -708,6 +797,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityGetPostDetail:
     Type: AWS::Serverless::Function
@@ -733,6 +825,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityGetPosts:
     Type: AWS::Serverless::Function
@@ -758,6 +853,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -783,6 +881,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityGetUserPosts:
     Type: AWS::Serverless::Function
@@ -808,6 +909,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityLikeComment:
     Type: AWS::Serverless::Function
@@ -833,6 +937,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCommunityLikePost:
     Type: AWS::Serverless::Function
@@ -858,6 +965,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCreateGame:
     Type: AWS::Serverless::Function
@@ -883,6 +993,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnDailyBonus:
     Type: AWS::Serverless::Function
@@ -908,6 +1021,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnEventCommands:
     Type: AWS::Serverless::Function
@@ -930,6 +1046,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnGameDetail:
     Type: AWS::Serverless::Function
@@ -955,6 +1074,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnGameRegister:
     Type: AWS::Serverless::Function
@@ -980,6 +1102,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnGetRatings:
     Type: AWS::Serverless::Function
@@ -1005,6 +1130,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnEventGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -1030,6 +1158,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnGetUploadUrl:
     Type: AWS::Serverless::Function
@@ -1055,6 +1186,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnLedger:
     Type: AWS::Serverless::Function
@@ -1080,6 +1214,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnMyGames:
     Type: AWS::Serverless::Function
@@ -1105,6 +1242,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnNotifications:
     Type: AWS::Serverless::Function
@@ -1130,6 +1270,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnRedeemCode:
     Type: AWS::Serverless::Function
@@ -1152,6 +1295,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnRedeemPoints:
     Type: AWS::Serverless::Function
@@ -1174,6 +1320,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnRejectRegistration:
     Type: AWS::Serverless::Function
@@ -1199,6 +1348,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnAcceptRegistration:
     Type: AWS::Serverless::Function
@@ -1224,6 +1376,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCancelGame:
     Type: AWS::Serverless::Function
@@ -1249,6 +1404,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnCancelRegistration:
     Type: AWS::Serverless::Function
@@ -1274,6 +1432,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnSearchGames:
     Type: AWS::Serverless::Function
@@ -1299,6 +1460,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnSubmitRating:
     Type: AWS::Serverless::Function
@@ -1324,6 +1488,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnSubscribePush:
     Type: AWS::Serverless::Function
@@ -1349,6 +1516,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnSubscriptionStatus:
     Type: AWS::Serverless::Function
@@ -1374,6 +1544,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnUnsubscribePush:
     Type: AWS::Serverless::Function
@@ -1399,6 +1572,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnClaimPushBonus:
     Type: AWS::Serverless::Function
@@ -1424,6 +1600,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnUserComments:
     Type: AWS::Serverless::Function
@@ -1449,6 +1628,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnUserInfo:
     Type: AWS::Serverless::Function
@@ -1474,6 +1656,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnUserProfile:
     Type: AWS::Serverless::Function
@@ -1499,6 +1684,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnVapidKey:
     Type: AWS::Serverless::Function
@@ -1524,6 +1712,9 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
   FnVerifyUser:
     Type: AWS::Serverless::Function
@@ -1549,6 +1740,261 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
                 - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthVerifyEmail:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_verify_email
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-verify-email'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/verify-email', Method: get }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthForgotPassword:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_forgot_password
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-forgot-password'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/forgot-password', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthResetPassword:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_reset_password
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-reset-password'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/reset-password', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthChangePassword:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_change_password
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-change-password'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/change-password', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthLogoutAll:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_logout_all
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-logout-all'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/logout-all', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthGoogle:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_google
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-google'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/google', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthBindGoogle:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_bind_google
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-bind-google'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/bind-google', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthUnbind:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_unbind
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-unbind'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/unbind', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthResendVerify:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_resend_verify
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-resend-verify'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/resend-verify', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
 
 
   # ---------- WebSocket API ----------
