@@ -5,7 +5,16 @@
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://yg7y0xkb50.execute-api.ap-southeast-1.amazonaws.com';
+// fail-closed：原本沒設 VITE_API_BASE_URL 就回退到工程師的「正式」API,
+// 等於 staging 版本會安靜地對真實用戶資料下手。寧可整個 app 起不來也不要打錯後端。
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+if (!API_BASE_URL) {
+  throw new Error(
+    'VITE_API_BASE_URL 未設定。請在 build 前指定後端 API(staging 例: ' +
+    'https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg)。' +
+    '此處刻意不留預設值,避免誤連正式環境。'
+  );
+}
 
 // 防止多個 401 同時觸發重複跳轉的旗標
 let isRedirectingToLogin = false;

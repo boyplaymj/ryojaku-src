@@ -22,9 +22,17 @@ class ChatService {
         if (this.ws?.readyState === WebSocket.OPEN) return;
         this.userId = userId;
 
+        // fail-closed：這行原本把工程師的「正式」WebSocket 寫死(ek5dythoh9.../prod),
+        // 連 env 都不能覆蓋 → staging 的聊天會直接接到正式環境。改成必須由 env 指定。
+        const wsBase = import.meta.env.VITE_WS_BASE_URL;
+        if (!wsBase) {
+            console.error('VITE_WS_BASE_URL 未設定,拒絕連線(避免誤連正式 WebSocket)。');
+            return;
+        }
+
         const token = localStorage.getItem(STORAGE_KEYS.JWT);
         const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-        const wsUrl = `wss://ek5dythoh9.execute-api.ap-southeast-1.amazonaws.com/prod?userId=${userId}${tokenParam}`;
+        const wsUrl = `${wsBase}?userId=${userId}${tokenParam}`;
         console.log('Connecting to Chat WS...', wsUrl);
 
         this.ws = new WebSocket(wsUrl);
