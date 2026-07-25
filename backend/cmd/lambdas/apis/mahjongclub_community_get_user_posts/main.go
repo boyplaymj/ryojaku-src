@@ -249,7 +249,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// 1. JWT 驗證 (只要是合法登入用戶即可呼叫)
-	requestingUserId, isJWT := shared.GetUserIdentifier(request)
+	requestingUserId, isJWT := shared.GetUserIdentifierWithContext(ctx, request)
 	if !isJWT || requestingUserId == "" {
 		return respond(http.StatusUnauthorized, Response{Success: false, Error: "Unauthorized - Valid Token Required"}, headers)
 	}

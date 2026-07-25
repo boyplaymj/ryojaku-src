@@ -37,7 +37,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Headers: headers, Body: ""}, nil
 	}
 
-	userID, fromJWT := shared.GetUserIdentifier(request)
+	userID, fromJWT := shared.GetUserIdentifierWithContext(ctx, request)
 	if !fromJWT || userID == "" {
 		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "unauthorized"}), nil
 	}

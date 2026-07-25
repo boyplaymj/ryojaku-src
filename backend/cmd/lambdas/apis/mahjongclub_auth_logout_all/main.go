@@ -80,7 +80,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// 安全鐵律：只接受 JWT 身分，絕不接受 query param userId。
-	userID, fromJWT := shared.GetUserIdentifier(request)
+	userID, fromJWT := shared.GetUserIdentifierWithContext(ctx, request)
 	if !fromJWT || userID == "" {
 		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
 	}

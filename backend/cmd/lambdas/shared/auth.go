@@ -1,13 +1,18 @@
 package shared
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -45,6 +50,48 @@ func TokenIssuedBefore(claims *JWTClaims, cutoff *time.Time) bool {
 // 用途：改密碼/重設密碼後令舊裝置 token 立即失效（「登出其他裝置」）。
 func VerifyTokenWithPwGate(tokenString string, pwChangedAt *time.Time) (*JWTClaims, error) {
 	claims, err := VerifyToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if TokenIssuedBefore(claims, pwChangedAt) {
+		return nil, errors.New("token revoked by password change")
+	}
+	return claims, nil
+}
+
+func getUserPwChangedAt(ctx context.Context, userID string) (*time.Time, error) {
+	c := getAuthDDBClient()
+	if c == nil {
+		return nil, ErrAuthDDBUnavailable
+	}
+	out, err := c.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:            aws.String(usersTable()),
+		Key:                  map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+		ProjectionExpression: aws.String("userId, pwChangedAt"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Item == nil || len(out.Item) == 0 {
+		return nil, errors.New("user not found")
+	}
+	if v, ok := out.Item["pwChangedAt"].(*types.AttributeValueMemberN); ok && v.Value != "" {
+		sec, err := strconv.ParseInt(v.Value, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		t := time.Unix(sec, 0)
+		return &t, nil
+	}
+	return nil, nil
+}
+
+func VerifyTokenWithUserPwGate(ctx context.Context, tokenString string) (*JWTClaims, error) {
+	claims, err := VerifyToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	pwChangedAt, err := getUserPwChangedAt(ctx, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +149,13 @@ func VerifyToken(tokenString string) (*JWTClaims, error) {
 // GetUserIdentifier extracts userId from JWT or Fallback to Query Params
 // This is the core of Phase 1 Compatibility
 func GetUserIdentifier(request events.APIGatewayProxyRequest) (string, bool) {
+	return GetUserIdentifierWithContext(context.Background(), request)
+}
+
+// GetUserIdentifierWithContext extracts userId from JWT or falls back to query params.
+// If a JWT is present, it must verify and pass the pwChangedAt gate; revoked/invalid
+// tokens fail closed and never fall back to query params.
+func GetUserIdentifierWithContext(ctx context.Context, request events.APIGatewayProxyRequest) (string, bool) {
 	// 1. Try to get from Authorization Header
 	authHeader := request.Headers["Authorization"]
 	if authHeader == "" {
@@ -111,17 +165,13 @@ func GetUserIdentifier(request events.APIGatewayProxyRequest) (string, bool) {
 
 	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		claims, err := VerifyToken(tokenString)
+		claims, err := VerifyTokenWithUserPwGate(ctx, tokenString)
 		if err == nil && claims != nil {
 			fmt.Printf("[AUTH] Verified JWT for user: %s\n", claims.UserID)
 			return claims.UserID, true
 		}
 		fmt.Printf("[AUTH] JWT provided but invalid: %v\n", err)
-		// If JWT is invalid, we don't fall back, we should probably return error?
-		// But in Phase 1, we might want to be more lenient.
-		// Actually, if they sent a token and it's BAD, it's safer to reject.
-		// However, the rule says Phase 1 should NOT impact.
-		// Let's proceed to fallback if JWT verify fails in Phase 1.
+		return "", false
 	}
 
 	// 2. Fallback to Query Parameters (Existing logic)
