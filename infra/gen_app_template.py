@@ -13,6 +13,54 @@ MAN = json.load(open(os.path.join(HERE, "functions.manifest.json")))["functions"
 def logical(name):  # kebab → PascalCase LogicalId
     return "Fn" + "".join(p.capitalize() for p in re.split(r"[-_]", name))
 
+# ---------------------------------------------------------------------------
+# S1：Lambda Authorizer 掛載範圍。
+#
+# manifest 的 auth 欄位一直只是註解——CFN 模板裡 authorizer 數為 0，34 個標 auth:user
+# 的端點只有 5 個在程式內自驗 JWT，其餘不帶 token 即可冒充任意用戶
+# （見 tools/ryojaku-webapp/SECURITY_AUTH_BYPASS.md）。
+#
+# S1 先以「明確列舉」的方式試點，只掛少數唯讀端點，驗證機制在 REST_V1 與 HTTP_V2
+# 兩種 apiType 上都成立、且前端不會斷。
+# S2 才把這裡改成 `f["auth"] == "user"` 全面套用 —— 屆時務必確認 auth:public 端點
+# 不會被誤掛（register / login / forgot 被掛上去會直接鎖死註冊流程）。
+AUTHORIZER_NAME = "RyojakuUserAuth"
+AUTHORIZER_PILOT = {
+    "ledger",        # REST_V1  ANY  /ledger        D級唯讀
+    "user-profile",  # REST_V1  ANY  /user-profile  D級唯讀
+    "my-games",      # REST_V1  POST /my-games      D級唯讀
+    "notifications", # HTTP_V2  ANY  /notifications D級唯讀（同時驗證 HTTP API 路徑）
+}
+
+def needs_authorizer(f):
+    return f["name"] in AUTHORIZER_PILOT
+
+# Identity.ReauthorizeEvery = 0 → 關閉 authorizer 結果快取。
+# 必須關：快取會讓「改密碼／登出全裝置」後的撤銷延後到 TTL 到期才生效，
+# 直接抵銷 shared.VerifyTokenWithUserPwGate 那道閘的意義。
+# 若日後為了成本要開，必須明確記錄 TTL＝撤銷生效的最壞延遲。
+# 注意縮排：Auth 是 Properties 底下的屬性（6 空格），不是與 Properties 同級（4 空格）。
+AUTH_BLOCK_REST = f"""      Auth:
+        Authorizers:
+          {AUTHORIZER_NAME}:
+            FunctionArn: !GetAtt {{lid}}.Arn
+            FunctionPayloadType: REQUEST
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
+"""
+
+AUTH_BLOCK_HTTP = f"""      Auth:
+        Authorizers:
+          {AUTHORIZER_NAME}:
+            FunctionArn: !GetAtt {{lid}}.Arn
+            AuthorizerPayloadFormatVersion: 1.0
+            EnableSimpleResponses: false
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
+"""
+
 HEAD = """AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
@@ -70,11 +118,16 @@ Resources:
 
   RestApi:
     Type: AWS::Serverless::Api
-    Properties: { StageName: !Ref Stage, Cors: "'*'" }
+    Properties:
+      StageName: !Ref Stage
+      Cors: "'*'"
+__REST_AUTH__
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
-    Properties: { StageName: !Ref Stage }
+    Properties:
+      StageName: !Ref Stage
+__HTTP_AUTH__
 """
 
 DDB_POLICY = """      Policies:
@@ -97,6 +150,21 @@ DDB_POLICY = """      Policies:
               Resource: '*'
 """
 
+# SAM 只會替 REST API 的 authorizer 自動建 Lambda invoke 權限，
+# HTTP API 的那份不會建 —— 少了它，API Gateway 叫不動 authorizer，
+# 帶合法 token 的請求會回 500（而且 authorizer 完全不會被觸發，日誌空白，很難查）。
+# S1 試點實測踩到，故在此明確補上。
+HTTP_AUTHZ_PERMISSION = """
+  # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
+  AuthorizerHttpApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt {lid}.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${{AWS::Region}}:${{AWS::AccountId}}:${{HttpApi}}/authorizers/*'
+"""
+
 def fn_block(f):
     lid = logical(f["name"])
     path = f["path"].rstrip("?")
@@ -111,18 +179,37 @@ def fn_block(f):
          f"      FunctionName: !Sub 'ryojaku-${{Stage}}-{f['name']}'"]
     ev = f["apiType"]
     methods = ["ANY"] if f["method"] == "ANY" else f["method"].split(",")
+    # 掛 authorizer 的端點改用區塊式 Properties（inline flow mapping 塞不下巢狀 Auth）。
+    authz = needs_authorizer(f)
     if ev == "REST_V1":
         b.append("      Events:")
         for i, m in enumerate(methods):
-            b += [f"        Rest{i}:",
-                  "          Type: Api",
-                  f"          Properties: {{ RestApiId: !Ref RestApi, Path: '{path}', Method: {m.lower()} }}"]
+            b += [f"        Rest{i}:", "          Type: Api"]
+            if authz:
+                b += ["          Properties:",
+                      "            RestApiId: !Ref RestApi",
+                      f"            Path: '{path}'",
+                      f"            Method: {m.lower()}",
+                      "            Auth:",
+                      f"              Authorizer: {AUTHORIZER_NAME}"]
+            else:
+                b += [f"          Properties: {{ RestApiId: !Ref RestApi, Path: '{path}', Method: {m.lower()} }}"]
     elif ev == "HTTP_V2":
         b.append("      Events:")
         for i, m in enumerate(methods):
-            b += [f"        Http{i}:",
-                  "          Type: HttpApi",
-                  f"          Properties: {{ ApiId: !Ref HttpApi, Path: '{path}', Method: {m.upper()} }}"]
+            b += [f"        Http{i}:", "          Type: HttpApi"]
+            if authz:
+                b += ["          Properties:",
+                      "            ApiId: !Ref HttpApi",
+                      f"            Path: '{path}'",
+                      f"            Method: {m.upper()}",
+                      "            Auth:",
+                      f"              Authorizer: {AUTHORIZER_NAME}"]
+            else:
+                b += [f"          Properties: {{ ApiId: !Ref HttpApi, Path: '{path}', Method: {m.upper()} }}"]
+    elif ev == "AUTHORIZER":
+        # authorizer 本身不掛任何路由；它被 RestApi / HttpApi 的 Auth 區塊以 GetAtt 引用。
+        pass
     elif ev == "LAMBDA_URL":
         b.append("      FunctionUrlConfig: { AuthType: NONE }")
     elif ev == "STREAM":
@@ -171,11 +258,23 @@ def ws_block(ws):
 fns = [f for f in MAN if f["apiType"] != "WEBSOCKET"]
 ws = [f for f in MAN if f["apiType"] == "WEBSOCKET"]
 
-parts = [HEAD]
+# 只有真的有端點掛 authorizer 時才在 API 上宣告 Authorizers，
+# 否則產出一個沒人引用的 authorizer 定義（無害但徒增雜訊）。
+AUTHZ_LID = logical("authorizer")
+_rest_authz = any(needs_authorizer(f) and f["apiType"] == "REST_V1" for f in MAN)
+_http_authz = any(needs_authorizer(f) and f["apiType"] == "HTTP_V2" for f in MAN)
+head = HEAD.replace("__REST_AUTH__",
+                    AUTH_BLOCK_REST.format(lid=AUTHZ_LID).rstrip("\n") if _rest_authz else "")
+head = head.replace("__HTTP_AUTH__",
+                    AUTH_BLOCK_HTTP.format(lid=AUTHZ_LID).rstrip("\n") if _http_authz else "")
+
+parts = [head]
 for f in MAN:  # function 本體(含 WS 的 function)
     parts.append(fn_block(f))
     parts.append("")
 parts.append(ws_block(ws))
+if _http_authz:
+    parts.append(HTTP_AUTHZ_PERMISSION.format(lid=AUTHZ_LID))
 parts += ["",
           "Outputs:",
           "  RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }",

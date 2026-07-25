@@ -55,11 +55,31 @@ Resources:
 
   RestApi:
     Type: AWS::Serverless::Api
-    Properties: { StageName: !Ref Stage, Cors: "'*'" }
+    Properties:
+      StageName: !Ref Stage
+      Cors: "'*'"
+      Auth:
+        Authorizers:
+          RyojakuUserAuth:
+            FunctionArn: !GetAtt FnAuthorizer.Arn
+            FunctionPayloadType: REQUEST
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
-    Properties: { StageName: !Ref Stage }
+    Properties:
+      StageName: !Ref Stage
+      Auth:
+        Authorizers:
+          RyojakuUserAuth:
+            FunctionArn: !GetAtt FnAuthorizer.Arn
+            AuthorizerPayloadFormatVersion: 1.0
+            EnableSimpleResponses: false
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
 
   FnAdminActivities:
     Type: AWS::Serverless::Function
@@ -1198,7 +1218,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/ledger', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/ledger'
+            Method: any
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1226,7 +1251,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/my-games', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/my-games'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1254,7 +1284,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/notifications', Method: ANY }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/notifications'
+            Method: ANY
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1668,7 +1703,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/user-profile', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/user-profile'
+            Method: any
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1996,6 +2036,30 @@ Resources:
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
 
+  FnAuthorizer:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_authorizer
+      FunctionName: !Sub 'ryojaku-${Stage}-authorizer'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
 
   # ---------- WebSocket API ----------
   WebSocketApi:
@@ -2058,6 +2122,16 @@ Resources:
       FunctionName: !Ref FnChatWsSendMessage
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+
+  # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
+  AuthorizerHttpApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FnAuthorizer.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/*'
+
 
 Outputs:
   RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }
