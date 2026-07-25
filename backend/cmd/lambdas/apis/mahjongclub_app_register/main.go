@@ -230,7 +230,10 @@ func (d *Database) SaveUserWithIdentity(ctx context.Context, user *User, identit
 					"provider":  &types.AttributeValueMemberS{Value: provider},
 					"createdAt": &types.AttributeValueMemberS{Value: now},
 				},
-				ConditionExpression: stringPtr("attribute_not_exists(identity)"),
+				// identity 是 DynamoDB 保留字,運算式內必須用 ExpressionAttributeNames 別名,
+				// 否則整筆 TransactWriteItems 被 ValidationException 打回 → 註冊全掛。
+				ConditionExpression:      stringPtr("attribute_not_exists(#identity)"),
+				ExpressionAttributeNames: map[string]string{"#identity": "identity"},
 			}},
 		},
 	})

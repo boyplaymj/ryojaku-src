@@ -112,7 +112,9 @@ func createGoogleUser(ctx context.Context, uid, email, name, identity string, em
 					"provider":  &types.AttributeValueMemberS{Value: shared.ProviderGoogle},
 					"createdAt": &types.AttributeValueMemberS{Value: now},
 				},
-				ConditionExpression: aws.String("attribute_not_exists(identity)"),
+				// identity 是 DynamoDB 保留字 → 必須走 ExpressionAttributeNames 別名。
+				ConditionExpression:      aws.String("attribute_not_exists(#identity)"),
+				ExpressionAttributeNames: map[string]string{"#identity": "identity"},
 			}},
 		},
 	})

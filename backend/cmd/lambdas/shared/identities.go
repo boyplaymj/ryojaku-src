@@ -170,7 +170,9 @@ func BindIdentity(ctx context.Context, identity, userID, provider string) error 
 					"provider":  &types.AttributeValueMemberS{Value: provider},
 					"createdAt": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
 				},
-				ConditionExpression: aws.String("attribute_not_exists(identity)"),
+				// identity 是 DynamoDB 保留字 → 必須走 ExpressionAttributeNames 別名。
+				ConditionExpression:      aws.String("attribute_not_exists(#identity)"),
+				ExpressionAttributeNames: map[string]string{"#identity": "identity"},
 			}},
 			{Update: &types.Update{ // 計數器 +1（ADD 對缺屬性視為 0 起算）
 				TableName:                 aws.String(usersTable()),

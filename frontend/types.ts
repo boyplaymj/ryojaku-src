@@ -63,6 +63,8 @@ export interface User {
   rating: number;
   isVerified: boolean;
   stats?: UserStats;
+  /** @deprecated 舊版後端的頂層欄位，新資料請讀 stats.gamesHosted */
+  gamesHosted?: number;
   pictureUrl?: string;
   invitedBy?: string;
   inviteCount?: number;

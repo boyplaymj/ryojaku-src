@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, X, Check, Ban } from 'lucide-react';
+import { AlertTriangle, Check, Ban, type LucideIcon } from 'lucide-react';
 
 interface CyberpunkConfirmModalProps {
     isOpen: boolean;
@@ -39,14 +39,23 @@ const CyberpunkConfirmModal: React.FC<CyberpunkConfirmModalProps> = ({
 
     if (!isOpen) return null;
 
-    const colors = {
+    const colors: Record<NonNullable<CyberpunkConfirmModalProps['type']>, {
+        border: string;
+        text: string;
+        bg: string;
+        btn: string;
+        shadow: string;
+        Icon: LucideIcon;
+        iconClass: string;
+    }> = {
         danger: {
             border: 'border-orange-100',
             text: 'text-orange-600',
             bg: 'bg-orange-50/50',
             btn: 'bg-neutral-900 hover:bg-black text-white',
             shadow: 'shadow-2xl shadow-orange-900/5',
-            icon: <Ban className="text-orange-500" size={24} strokeWidth={2.5} />
+            Icon: Ban,
+            iconClass: 'text-orange-500'
         },
         warning: {
             border: 'border-[#c5a059]/20',
@@ -54,7 +63,8 @@ const CyberpunkConfirmModal: React.FC<CyberpunkConfirmModalProps> = ({
             bg: 'bg-[#c5a059]/5',
             btn: 'bg-neutral-900 hover:bg-black text-white',
             shadow: 'shadow-2xl shadow-black/5',
-            icon: <AlertTriangle className="text-[#c5a059]" size={24} strokeWidth={2.5} />
+            Icon: AlertTriangle,
+            iconClass: 'text-[#c5a059]'
         },
         info: {
             border: 'border-emerald-100',
@@ -62,11 +72,13 @@ const CyberpunkConfirmModal: React.FC<CyberpunkConfirmModalProps> = ({
             bg: 'bg-emerald-50/50',
             btn: 'bg-neutral-900 hover:bg-black text-white',
             shadow: 'shadow-2xl shadow-emerald-900/5',
-            icon: <Check className="text-emerald-500" size={24} strokeWidth={2.5} />
+            Icon: Check,
+            iconClass: 'text-emerald-500'
         }
     };
 
     const config = colors[type];
+    const Icon = config.Icon;
 
     return createPortal(
         <div className="fixed inset-0 z-[10000] flex items-center justify-center px-6 animate-fade-in">
@@ -83,7 +95,7 @@ const CyberpunkConfirmModal: React.FC<CyberpunkConfirmModalProps> = ({
                 {/* Header/Icon - 縮小尺寸 */}
                 <div className="flex justify-center mb-5">
                     <div className={`w-14 h-14 rounded-xl ${config.bg} flex items-center justify-center border border-black/[0.01] shadow-inner`}>
-                        {React.cloneElement(config.icon as React.ReactElement, { size: 28 })}
+                        <Icon className={config.iconClass} size={28} strokeWidth={2.5} />
                     </div>
                 </div>
 
