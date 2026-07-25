@@ -37,12 +37,18 @@ func GetJWTSecret() []byte {
 	return []byte(secret)
 }
 
-// TokenIssuedBefore：token 是否早於某時間點（pwChangedAt 版本閘用）。
+// TokenIssuedBefore：token 是否不晚於某時間點（pwChangedAt 版本閘用）。
+//
+// 判定用 iat <= cutoff（不是嚴格 <）。JWT iat 與 pwChangedAt 都只有「秒」精度，
+// 若用嚴格 <，同一秒內簽發的 token 會鑽過閘活下來——而那正是「按下登出全裝置的當下
+// 另一台裝置剛好登入」這個最該擋的情境。
+// 安全性：不會誤殺自己人——寫 pwChangedAt 的三個端點(change/reset/logout-all)都不發
+// token，發 token 的 register/google 都不寫 pwChangedAt，故無「同秒發了又撤」的自撞。
 func TokenIssuedBefore(claims *JWTClaims, cutoff *time.Time) bool {
 	if cutoff == nil || claims == nil || claims.IssuedAt == nil {
 		return false
 	}
-	return claims.IssuedAt.Time.Before(*cutoff)
+	return !claims.IssuedAt.Time.After(*cutoff)
 }
 
 // VerifyTokenWithPwGate：VerifyToken + pwChangedAt 版本閘。
@@ -64,10 +70,14 @@ func getUserPwChangedAt(ctx context.Context, userID string) (*time.Time, error) 
 	if c == nil {
 		return nil, ErrAuthDDBUnavailable
 	}
+	// ConsistentRead 必須開：DynamoDB 預設最終一致，剛寫完 pwChangedAt 的數百毫秒內
+	// 可能讀到舊值而放行——而「撤銷後的第一個請求」正是這道閘唯一要擋的東西，
+	// 在那個窗口失效等於整個機制失效。代價是該次讀取的 RRU 加倍（單筆投影，可忽略）。
 	out, err := c.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName:            aws.String(usersTable()),
 		Key:                  map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
 		ProjectionExpression: aws.String("userId, pwChangedAt"),
+		ConsistentRead:       aws.Bool(true),
 	})
 	if err != nil {
 		return nil, err
@@ -86,6 +96,14 @@ func getUserPwChangedAt(ctx context.Context, userID string) (*time.Time, error) 
 	return nil, nil
 }
 
+// VerifyTokenWithUserPwGate：驗簽 + 讀該用戶 pwChangedAt 做版本閘。
+//
+// ⚠️ 取捨（刻意 fail-closed）：DDB 查詢失敗一律回 error → 呼叫端視為未授權。
+// 好處是撤銷語意在任何故障下都不會被繞過；代價是 Users 表若抖動，所有帶 JWT 的請求
+// 會一起 401（客戶端可能誤判成 token 失效而強制登出）。若日後要改善可用性，正解是
+// 讓本函式回可分辨的錯誤型別、由端點對「暫時性故障」回 503 而非 401，
+// 不要改成 fail-open。
+// 成本：每個帶 JWT 的請求 +1 次 Users 單筆強一致讀。
 func VerifyTokenWithUserPwGate(ctx context.Context, tokenString string) (*JWTClaims, error) {
 	claims, err := VerifyToken(tokenString)
 	if err != nil {
