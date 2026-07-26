@@ -164,6 +164,31 @@ func VerifyToken(tokenString string) (*JWTClaims, error) {
 	return nil, errors.New("invalid token")
 }
 
+func authorizerStringValue(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+// AuthorizerUserID extracts the verified userId written by the Lambda authorizer.
+// Use this for API Gateway REST API events after a route is protected by RyojakuUserAuth.
+func AuthorizerUserID(request events.APIGatewayProxyRequest) string {
+	if request.RequestContext.Authorizer == nil {
+		return ""
+	}
+	return authorizerStringValue(request.RequestContext.Authorizer["userId"])
+}
+
+// AuthorizerUserIDV2 extracts the verified userId written by the Lambda authorizer.
+// Use this for API Gateway HTTP API payload v2 events after a route is protected by RyojakuUserAuth.
+func AuthorizerUserIDV2(request events.APIGatewayV2HTTPRequest) string {
+	if request.RequestContext.Authorizer == nil || request.RequestContext.Authorizer.Lambda == nil {
+		return ""
+	}
+	return authorizerStringValue(request.RequestContext.Authorizer.Lambda["userId"])
+}
+
 // GetUserIdentifier extracts userId from JWT or Fallback to Query Params
 // This is the core of Phase 1 Compatibility
 func GetUserIdentifier(request events.APIGatewayProxyRequest) (string, bool) {

@@ -68,9 +68,9 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		return events.APIGatewayV2HTTPResponse{StatusCode: 200, Headers: headers, Body: ""}, nil
 	}
 
-	userID := request.QueryStringParameters["userId"]
+	userID := shared.AuthorizerUserIDV2(request)
 	if userID == "" {
-		return errorResponse(headers, http.StatusBadRequest, "Missing userId")
+		return errorResponse(headers, http.StatusUnauthorized, "unauthorized")
 	}
 
 	// 1. Get accurate Taipei time

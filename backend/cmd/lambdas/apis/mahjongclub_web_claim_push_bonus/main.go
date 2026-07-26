@@ -43,7 +43,7 @@ type APIResponse struct {
 }
 
 type ClaimRequest struct {
-	UserID   string `json:"userId"`
+	UserID string `json:"userId"`
 }
 
 const BonusPoints = 360
@@ -65,14 +65,16 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}, nil
 	}
 
+	userID := shared.AuthorizerUserIDV2(request)
+	if userID == "" {
+		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
+	}
+
 	var req ClaimRequest
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return errorResponse(headers, http.StatusBadRequest, "Invalid request body"), nil
 	}
-
-	if req.UserID == "" {
-		return errorResponse(headers, http.StatusBadRequest, "UserID is required"), nil
-	}
+	req.UserID = userID
 
 	// 1. Verify if user has subscribed to push (Optional check for extra safety)
 	subscribed, err := checkPushSubscription(ctx, req.UserID)
@@ -98,16 +100,16 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}
 		// A more robust way to check for conditional check failure in DynamoDB V2
 		if err.Error() != "" && (fmt.Sprintf("%v", err) != "") {
-             // Fallback error if we can't be sure it's a duplicate claim
-             // In a real scenario, we'd parse the error more carefully
+			// Fallback error if we can't be sure it's a duplicate claim
+			// In a real scenario, we'd parse the error more carefully
 		}
-		
+
 		// Let's re-verify if they already claimed if the transaction failed
 		user, _ := shared.GetUserInfo(ctx, dynamoClient, tablePrefix, req.UserID)
 		if user != nil && user.HasClaimedPushBonus {
 			return errorResponse(headers, http.StatusBadRequest, "您已經領取過獎勵囉！"), nil
 		}
-		
+
 		return errorResponse(headers, http.StatusInternalServerError, "領取獎勵失敗，請稍後再試"), nil
 	}
 
@@ -124,18 +126,18 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		meta := map[string]interface{}{
 			"claimedAt": time.Now().Format(time.RFC3339),
 		}
-		
+
 		shared.RecordPointChangeShadow(
-			logCtx, 
-			dynamoClient, 
-			tablePrefix, 
-			req.UserID, 
-			BonusPoints, 
-			shared.PointTypeCredit, 
-			user.Points-BonusPoints, 
-			user.Points, 
-			"開啟推播通知獎勵", 
-			"push_notification_bonus", 
+			logCtx,
+			dynamoClient,
+			tablePrefix,
+			req.UserID,
+			BonusPoints,
+			shared.PointTypeCredit,
+			user.Points-BonusPoints,
+			user.Points,
+			"開啟推播通知獎勵",
+			"push_notification_bonus",
 			meta,
 		)
 	}()
@@ -151,8 +153,8 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	}()
 
 	return successResponse(headers, map[string]interface{}{
-		"points":   BonusPoints,
-		"message":  "恭喜領取成功！",
+		"points":  BonusPoints,
+		"message": "恭喜領取成功！",
 	}), nil
 }
 
