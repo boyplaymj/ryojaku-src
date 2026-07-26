@@ -2068,6 +2068,21 @@ Resources:
       Name: !Sub 'ryojaku-${Stage}-ws'
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: '$request.body.action'
+  WsAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref WebSocketApi
+      Name: RyojakuWsAuth
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FnAuthorizer.Arn}/invocations'
+      IdentitySource: ['route.request.querystring.token']
+  WsAuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FnAuthorizer.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/authorizers/*'
   WsIntegconnect:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
@@ -2080,6 +2095,8 @@ Resources:
       ApiId: !Ref WebSocketApi
       RouteKey: '$connect'
       Target: !Sub 'integrations/${WsIntegconnect}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WsAuthorizer
   WsPermconnect:
     Type: AWS::Lambda::Permission
     Properties:
@@ -2122,6 +2139,13 @@ Resources:
       FunctionName: !Ref FnChatWsSendMessage
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+  WsStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn: [WsRouteconnect, WsRoutedisconnect, WsRoutesendMessage]
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: !Ref Stage
+      AutoDeploy: true
 
   # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
   AuthorizerHttpApiPermission:

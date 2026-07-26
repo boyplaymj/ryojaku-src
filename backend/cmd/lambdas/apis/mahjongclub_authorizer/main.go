@@ -67,8 +67,18 @@ func allow(userID, email, methodArn string) events.APIGatewayCustomAuthorizerRes
 
 func Handler(ctx context.Context, ev events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
 	token := extractBearer(ev.Headers)
+
+	// WebSocket 專用退路：瀏覽器的 WebSocket API 無法自訂 header，token 只能走 query string。
+	// 這條退路不會削弱 REST / HTTP API：那兩者的 Identity 設為 Headers:[Authorization]，
+	// 缺 header 時 API Gateway 會在「還沒叫到本函式」之前就回 401，故走不到這裡。
+	// 代價：token 會出現在 WS 連線 URL → 可能被 API Gateway 存取日誌記下。
+	// 日後強化方向是改發短效 WS ticket（見 SECURITY_AUTH_BYPASS.md）。
+	if token == "" && ev.QueryStringParameters != nil {
+		token = strings.TrimSpace(ev.QueryStringParameters["token"])
+	}
+
 	if token == "" {
-		log.Printf("[AUTHZ] 拒絕：缺少 Bearer token, arn=%s", ev.MethodArn)
+		log.Printf("[AUTHZ] 拒絕：缺少 token, arn=%s", ev.MethodArn)
 		return events.APIGatewayCustomAuthorizerResponse{}, errUnauthorized
 	}
 

@@ -221,7 +221,14 @@ def fn_block(f):
     return "\n".join(b)
 
 def ws_block(ws):
-    """WebSocket API + 3 routes ($connect/$disconnect/sendMessage)。"""
+    """WebSocket API + 3 routes ($connect/$disconnect/sendMessage)。
+
+    S3：$connect 掛 REQUEST authorizer。
+    WebSocket 只有 $connect 這一個 route 能掛 authorizer —— 但這樣就夠了，因為
+    sendMessage 不從訊息內容取身分，而是用 ConnectionID 反查 ChatConnections
+    (getUserIDByConnection)。只要 $connect 寫進連線表的是「已驗證的 userId」，
+    sendMessage 自動就安全，不必也不能另外掛閘。
+    """
     if not ws:
         return ""
     out = ["", "  # ---------- WebSocket API ----------",
@@ -230,7 +237,23 @@ def ws_block(ws):
            "    Properties:",
            "      Name: !Sub 'ryojaku-${Stage}-ws'",
            "      ProtocolType: WEBSOCKET",
-           "      RouteSelectionExpression: '$request.body.action'"]
+           "      RouteSelectionExpression: '$request.body.action'",
+           # 瀏覽器 WebSocket 無法帶自訂 header，故 identity source 取 query string 的 token。
+           "  WsAuthorizer:",
+           "    Type: AWS::ApiGatewayV2::Authorizer",
+           "    Properties:",
+           "      ApiId: !Ref WebSocketApi",
+           "      Name: RyojakuWsAuth",
+           "      AuthorizerType: REQUEST",
+           f"      AuthorizerUri: !Sub 'arn:aws:apigateway:${{AWS::Region}}:lambda:path/2015-03-31/functions/${{{AUTHZ_LID}.Arn}}/invocations'",
+           "      IdentitySource: ['route.request.querystring.token']",
+           "  WsAuthorizerPermission:",
+           "    Type: AWS::Lambda::Permission",
+           "    Properties:",
+           f"      FunctionName: !GetAtt {AUTHZ_LID}.Arn",
+           "      Action: lambda:InvokeFunction",
+           "      Principal: apigateway.amazonaws.com",
+           "      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/authorizers/*'"]
     for f in ws:
         lid = logical(f["name"]); route = f["path"]
         rk = re.sub(r"[^A-Za-z]", "", route) or "Route"
@@ -246,13 +269,30 @@ def ws_block(ws):
            "    Properties:",
            "      ApiId: !Ref WebSocketApi",
            f"      RouteKey: '{route}'",
-           f"      Target: !Sub 'integrations/${{WsInteg{rk}}}'",
+           f"      Target: !Sub 'integrations/${{WsInteg{rk}}}'"]
+        # 只有 $connect 能掛 authorizer；$disconnect / sendMessage 掛了會被 CFN 拒絕。
+        if route == "$connect":
+            out += ["      AuthorizationType: CUSTOM",
+                    "      AuthorizerId: !Ref WsAuthorizer"]
+        out += [
            f"  WsPerm{rk}:",
            "    Type: AWS::Lambda::Permission",
            "    Properties:",
            f"      FunctionName: !Ref {lid}",
            "      Action: lambda:InvokeFunction",
            "      Principal: apigateway.amazonaws.com"]
+    # WebSocket API 一直沒有 Stage/Deployment —— get-stages 與 get-deployments 都回空，
+    # 亦即 Outputs 廣告的 wss://.../stg 是個從未存在過的幽靈網址，staging 的 WS 從來沒通過。
+    # (REST/HTTP 由 SAM 的 Serverless::Api/HttpApi 自動建 stage，只有這個手刻的 WS 漏了。)
+    # AutoDeploy=true 讓路由/authorizer 變更自動重新部署，免去手動 Deployment 的老問題。
+    route_lids = ["WsRoute" + (re.sub(r"[^A-Za-z]", "", f["path"]) or "Route") for f in ws]
+    out += ["  WsStage:",
+            "    Type: AWS::ApiGatewayV2::Stage",
+            "    DependsOn: [" + ", ".join(route_lids) + "]",
+            "    Properties:",
+            "      ApiId: !Ref WebSocketApi",
+            "      StageName: !Ref Stage",
+            "      AutoDeploy: true"]
     return "\n".join(out)
 
 fns = [f for f in MAN if f["apiType"] != "WEBSOCKET"]

@@ -11,6 +11,9 @@ bootstrap
 tmp_build
 tmp_verify_user
 **/mahjongclub_*/mahjongclub_*
+# `go build ./cmd/lambdas/apis/xxx/` 會把執行檔吐在「當下目錄」(通常是 backend/)，
+# 名稱=套件目錄名，容易誤 commit 23M ELF。正途只有 build_all.sh 產的 build/<art>/bootstrap。
+backend/mahjongclub_*
 # secrets — NEVER commit (quarantined at /opt/sml/ryojaku-secrets)
 .env
 .env.*
