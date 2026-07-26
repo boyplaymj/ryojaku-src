@@ -57,7 +57,15 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Stage
-      Cors: "'*'"
+      # ⚠️ 不可退回字串簡寫 Cors: "'*'" —— 那只設 AllowOrigin，不設 AllowHeaders，
+      # preflight 回應就不會有 Access-Control-Allow-Headers，瀏覽器會擋掉每一個帶
+      # Content-Type: application/json 或 Authorization 的請求（等於整個前端不能用）。
+      # curl 不執行 CORS，所以這個洞不會被任何 curl 煙霧測試抓到，只有真瀏覽器會爆。
+      # AllowHeaders 必須涵蓋前端 apiRequest 實際送出的四個 header。
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Content-Type,Authorization,X-App-Version,X-Platform'"
+        AllowMethods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
       Auth:
         Authorizers:
           RyojakuUserAuth:
@@ -71,6 +79,13 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Stage
+      # HTTP API 原本完全沒有 CORS 設定（get-api 回 CorsConfiguration: null、
+      # preflight 直接 404），故其下所有端點在瀏覽器中一律不可用。
+      # 注意與上面 REST 的寫法不同：HTTP API 用純字串列表，不加內層單引號。
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders: [Content-Type, Authorization, X-App-Version, X-Platform]
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
       Auth:
         Authorizers:
           RyojakuUserAuth:
