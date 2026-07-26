@@ -660,7 +660,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/chat/upload-url', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/chat/upload-url'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -688,7 +693,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/chat-mark-read', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/chat-mark-read'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -788,7 +798,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/community-add-comment', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/community-add-comment'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -816,7 +831,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/community-create-post', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/community-create-post'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -900,7 +920,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/community-get-upload-url', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/community-get-upload-url'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -956,7 +981,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/community-like-comment', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/community-like-comment'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -984,7 +1014,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/community-like-post', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/community-like-post'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1220,7 +1255,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/get-upload-url', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/get-upload-url'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1590,7 +1630,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/subscribe-push', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/subscribe-push'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1651,7 +1696,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/unsubscribe-push', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/unsubscribe-push'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:

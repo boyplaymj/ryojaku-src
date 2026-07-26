@@ -52,6 +52,22 @@ AUTHORIZER_PILOT = {
     "submit-rating",          # REST_V1 POST /submit-rating
     "accept-registration",    # HTTP_V2 POST /registrations/accept
     "reject-registration",    # HTTP_V2 POST /registrations/reject
+
+    # S2-C：C 級「代他人發言／冒名內容」8 支（全 REST_V1 POST）。
+    #  掛閘前實測 10 支（含下方 D 級 2 支）不帶 Authorization 全部進業務邏輯，
+    #  回 400 欄位驗證錯誤而非 401 —— 身分完全由 request body 的 userId 自稱。
+    "community-create-post",    # /community-create-post
+    "community-add-comment",    # /community-add-comment
+    "community-like-post",      # /community-like-post
+    "community-like-comment",   # /community-like-comment
+    "community-get-upload-url", # /community-get-upload-url   ← 可代他人取得 S3 上傳授權
+    "get-upload-url",           # /get-upload-url             ← 同上
+    "chat-get-upload-url",      # /chat/upload-url（名稱與路徑不同名）← 同上
+    "chat-mark-read",           # /chat-mark-read
+
+    # S2-D：D 級「讀取他人私有資料」剩餘 2 支。其餘 D 級已於 S1／S2-A／S3 掛完。
+    "subscribe-push",         # /subscribe-push    ← 可代他人註冊推播裝置
+    "unsubscribe-push",       # /unsubscribe-push  ← 可代他人退掉推播
 }
 
 def needs_authorizer(f):
