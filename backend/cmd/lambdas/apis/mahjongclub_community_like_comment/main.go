@@ -222,7 +222,13 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"}, headers)
 	}
 
-	if req.PostID == "" || req.CommentID == "" || req.UserID == "" {
+	// 身分一律取自 authorizer（S5-D）：不再信 request body 自稱的 userId，
+	// 否則登入者只要把 body 的 userId 換成別人，就能以他人名義對留言按讚（C 級冒名內容）。
+	req.UserID = shared.AuthorizerUserID(request)
+	if req.UserID == "" {
+		return respond(http.StatusUnauthorized, Response{Success: false, Error: "unauthorized"}, headers)
+	}
+	if req.PostID == "" || req.CommentID == "" {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing required fields"}, headers)
 	}
 

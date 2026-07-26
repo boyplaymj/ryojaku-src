@@ -52,12 +52,19 @@ func init() {
 }
 
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// 使用 GetUserIdentifierWithTracking 取得 userID 並記錄 Token 使用統計
-	userID, _ := shared.GetUserIdentifierWithTracking(request, "chat_get_rooms")
+	// 身分一律取自 authorizer（S5-D）。原本用 GetUserIdentifierWithTracking，
+	// 其底層 GetUserIdentifier 是 Phase 1 相容層：JWT 優先，失敗則 fallback 回
+	// query param 的 userId／lineID；且此處把 hasToken 丟給 _ 忽略，
+	// 等同接受「登入者帶 ?userId=<他人> 讀取別人的聊天室清單」。
+	userID := shared.AuthorizerUserID(request)
+	// 保留原本的 Token 使用統計副作用：能走到這裡必然是通過 authorizer 的 JWT 請求。
+	if userID != "" {
+		shared.RecordTokenUsage("chat_get_rooms", true)
+	}
 	// 記錄流量統計
 	shared.RecordTraffic(ctx, dbClient, tablePrefix, "chat", "get_rooms")
 	if userID == "" {
-		return errorResponse(http.StatusBadRequest, "Missing userId")
+		return errorResponse(http.StatusUnauthorized, "unauthorized")
 	}
 
 	tableName := tablePrefix + "ChatUserMemberships"

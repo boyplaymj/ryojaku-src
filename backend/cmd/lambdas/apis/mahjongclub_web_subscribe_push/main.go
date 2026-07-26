@@ -101,8 +101,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Validate required fields
-	if req.UserID == "" || req.Subscription.Endpoint == "" || req.DeviceID == "" {
-		response := Response{Success: false, Error: "Missing required fields (userId, endpoint, deviceId)"}
+	// 身分一律取自 authorizer（S5-D）：不再信 request body 自稱的 userId，
+	// 否則登入者只要把 body 的 userId 換成別人，就能以他人名義替別人註冊推播裝置。
+	req.UserID = shared.AuthorizerUserID(request)
+	if req.UserID == "" {
+		response := Response{Success: false, Error: "unauthorized"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
+	if req.Subscription.Endpoint == "" || req.DeviceID == "" {
+		response := Response{Success: false, Error: "Missing required fields (endpoint, deviceId)"}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,

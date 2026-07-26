@@ -75,8 +75,14 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return errorResponse(http.StatusBadRequest, "Invalid request body", headers)
 	}
 
-	if req.UserID == "" || req.RoomID == "" {
-		return errorResponse(http.StatusBadRequest, "Missing userId or roomId", headers)
+	// 身分一律取自 authorizer（S5-D）：不再信 request body 自稱的 userId，
+	// 否則登入者只要把 body 的 userId 換成別人，就能以他人名義把別人的聊天室標成已讀。
+	req.UserID = shared.AuthorizerUserID(request)
+	if req.UserID == "" {
+		return errorResponse(http.StatusUnauthorized, "unauthorized", headers)
+	}
+	if req.RoomID == "" {
+		return errorResponse(http.StatusBadRequest, "Missing roomId", headers)
 	}
 
 	tableName := tablePrefix + "ChatUserMemberships"

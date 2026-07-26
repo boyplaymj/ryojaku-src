@@ -113,12 +113,14 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 
 // handleGetNotifications gets notifications for a user with pagination
 func handleGetNotifications(ctx context.Context, request events.APIGatewayV2HTTPRequest, headers map[string]string) (events.APIGatewayV2HTTPResponse, error) {
-	userID := request.QueryStringParameters["userId"]
+	// 身分一律取自 authorizer（S5-D）。本支是 HTTP_V2，故用 AuthorizerUserIDV2。
+	// 原本讀 query param 的 userId：登入者帶 ?userId=<他人> 即可讀取別人的通知（D 級）。
+	userID := shared.AuthorizerUserIDV2(request)
 	if userID == "" {
-		response := GetNotificationsResponse{Success: false, Error: "缺少用戶 ID"}
+		response := GetNotificationsResponse{Success: false, Error: "unauthorized"}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayV2HTTPResponse{
-			StatusCode: http.StatusBadRequest,
+			StatusCode: http.StatusUnauthorized,
 			Headers:    headers,
 			Body:       string(body),
 		}, nil
