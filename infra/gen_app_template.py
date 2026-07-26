@@ -26,10 +26,19 @@ def logical(name):  # kebab → PascalCase LogicalId
 # 不會被誤掛（register / login / forgot 被掛上去會直接鎖死註冊流程）。
 AUTHORIZER_NAME = "RyojakuUserAuth"
 AUTHORIZER_PILOT = {
-    "ledger",        # REST_V1  ANY  /ledger        D級唯讀
-    "user-profile",  # REST_V1  ANY  /user-profile  D級唯讀
-    "my-games",      # REST_V1  POST /my-games      D級唯讀
-    "notifications", # HTTP_V2  ANY  /notifications D級唯讀（同時驗證 HTTP API 路徑）
+    # S1 pilot：REST_V1 / HTTP_V2 authorizer 機制驗證。
+    "ledger",        # REST_V1  ANY  /ledger
+    "user-profile",  # REST_V1  ANY  /user-profile
+    "my-games",      # REST_V1  POST /my-games
+    "notifications", # HTTP_V2  ANY  /notifications
+
+    # S2-A：低風險讀取 / 狀態查詢。
+    "chat-get-history",       # REST_V1 GET  /chat/history
+    "chat-get-room-info",     # REST_V1 GET  /chat/room-info
+    "chat-get-rooms",         # REST_V1 GET  /chat/rooms
+    "subscription-status",    # REST_V1 POST /subscription-status
+    "daily-bonus",            # HTTP_V2 POST /daily-bonus
+    "claim-push-bonus",       # HTTP_V2 POST /claim-push-bonus
 }
 
 def needs_authorizer(f):

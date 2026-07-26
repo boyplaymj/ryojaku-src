@@ -561,7 +561,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/chat/history', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/chat/history'
+            Method: get
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -589,7 +594,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/chat/room-info', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/chat/room-info'
+            Method: get
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -617,7 +627,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/chat/rooms', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/chat/rooms'
+            Method: get
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1025,7 +1040,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/daily-bonus', Method: POST }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/daily-bonus'
+            Method: POST
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1563,7 +1583,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/subscription-status', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/subscription-status'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1619,7 +1644,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/claim-push-bonus', Method: POST }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/claim-push-bonus'
+            Method: POST
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
