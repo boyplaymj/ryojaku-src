@@ -191,8 +191,16 @@ func checkPushSubscription(ctx context.Context, userID string) (bool, error) {
 		Limit: aws.Int32(1),
 	})
 	if err != nil {
-		log.Printf("Error querying legacy table: %v", err)
-		return false, err
+		// 舊表查詢失敗不影響結果，只記錄日誌。
+		// PushSubscriptions 是遷移遺留的舊表，staging 根本沒建（01-tables.yaml 只定義了
+		// PushSubscriptions_MultiDevice），查詢必回 ResourceNotFoundException。
+		// 原本這裡 return false, err，導致「新表無訂閱」的使用者一律 500
+		// （Failed to verify push status）＝ 這支 A 級金流端點整支不能用。
+		// 舊表查不到就是沒有舊訂閱，本來就是正常狀態，不該當成錯誤。
+		// 其餘四處引用舊表的程式（subscription-status / push_notification /
+		// admin-push-all / admin-analysis）本來就都 fail-soft，只有這裡漏了。
+		log.Printf("Failed to query legacy table (視為無舊訂閱): %v", err)
+		return false, nil
 	}
 
 	if len(legacyResult.Items) > 0 {
