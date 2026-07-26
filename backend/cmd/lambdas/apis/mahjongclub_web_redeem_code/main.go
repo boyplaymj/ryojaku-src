@@ -114,14 +114,33 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (Respo
 		}, nil
 	}
 
-	// Get user ID from query parameters
-	userID := request.QueryStringParameters["userId"]
-	if userID == "" {
-		userID = request.QueryStringParameters["lineID"]
+	// 身分驗證（S4）。本支是 Function URL（FunctionUrlConfig AuthType: NONE），
+	// API Gateway 的 Lambda authorizer 掛不上去，只能在程式內驗。
+	// 修補前：完全不需要任何憑證，帶 ?userId=<任何人> 就能代其兌換序號（A 級金流），
+	// 而且 Function URL 直接暴露在公網，連「先登入」都不需要。
+	//
+	// 刻意不照 event-commands 的寫法（它用裸 jwt.Parse，只驗簽章不查 pwChangedAt，
+	// 因此改密碼／登出全裝置之後的舊 token 仍然通行）。這裡走
+	// shared.VerifyTokenWithUserPwGate —— 與 API Gateway authorizer 同一套驗證，
+	// 自動繼承 pwChangedAt 撤銷語意，兩條入口的安全語意才不會分岔。
+	//
+	// Function URL 會把 header 名稱正規化為小寫，但仍保留大寫寫法的容錯。
+	authHeader := request.Headers["authorization"]
+	if authHeader == "" {
+		authHeader = request.Headers["Authorization"]
 	}
-
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
+	}
+	claims, authErr := shared.VerifyTokenWithUserPwGate(ctx, strings.TrimPrefix(authHeader, "Bearer "))
+	if authErr != nil {
+		// fail-closed：驗不過（含撤銷、DB 讀不到）一律拒絕，不退回 query param。
+		log.Printf("redeem-code auth rejected: %v", authErr)
+		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
+	}
+	userID := claims.UserID
 	if userID == "" {
-		return errorResponse(headers, http.StatusBadRequest, "Missing userId or lineID parameter"), nil
+		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
 	}
 
 	// Parse request body
