@@ -263,3 +263,49 @@ func RemoveUserFromChatRoom(ctx context.Context, dbClient *dynamodb.Client, tabl
 
 	return err
 }
+
+// IsRoomMember 檢查 userID 是否為 roomID 的成員。
+//
+// 為什麼需要這道檢查：chat-get-history / chat-get-room-info 原本只吃 roomId，
+// 完全不驗呼叫者身分與該room的關係。掛上 authorizer 之後雖然擋掉了未登入者，
+// 但任何「已登入」的使用者只要列舉／猜到 roomId，仍可讀取任意聊天室的完整歷史
+// 與成員名單 —— 這是水平越權，光是把身分改成取自 JWT 並不能解決。
+//
+// 實作說明：ChatUserMemberships 的 SK 是 "LastMessageTime#RoomID"，
+// 呼叫端不可能預先知道 LastMessageTime，因此無法用 GetItem 直接命中；
+// 只能以 PK(UserID) Query 後再依 RoomID 過濾（與 chat-mark-read 既有查法一致）。
+// 由於 Query 只掃該使用者自己的 membership，筆數等於他加入的聊天室數，成本可接受。
+//
+// 回傳 error 時呼叫端必須 fail-closed（視為無權限），不可放行。
+func IsRoomMember(ctx context.Context, dbClient *dynamodb.Client, tablePrefix, userID, roomID string) (bool, error) {
+	if userID == "" || roomID == "" {
+		return false, nil
+	}
+
+	tableName := tablePrefix + "ChatUserMemberships"
+	var lastKey map[string]types.AttributeValue
+	for {
+		out, err := dbClient.Query(ctx, &dynamodb.QueryInput{
+			TableName:              &tableName,
+			KeyConditionExpression: aws.String("UserID = :uid"),
+			FilterExpression:       aws.String("RoomID = :rid"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":uid": &types.AttributeValueMemberS{Value: userID},
+				":rid": &types.AttributeValueMemberS{Value: roomID},
+			},
+			ExclusiveStartKey: lastKey,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(out.Items) > 0 {
+			return true, nil
+		}
+		// FilterExpression 是在讀取之後才套用的，某一頁沒有命中不代表沒有；
+		// 必須翻完所有分頁才能斷定「不是成員」，否則會出現偽陰性。
+		if out.LastEvaluatedKey == nil || len(out.LastEvaluatedKey) == 0 {
+			return false, nil
+		}
+		lastKey = out.LastEvaluatedKey
+	}
+}

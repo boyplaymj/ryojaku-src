@@ -59,6 +59,23 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return errorResponse(http.StatusBadRequest, "Missing roomId")
 	}
 
+	// 水平越權修補：本支原本只吃 roomId，不驗呼叫者與該聊天室的關係。
+	// 掛上 authorizer 只擋掉未登入者，任何「已登入」使用者仍可列舉／猜 roomId
+	// 讀取任意聊天室的完整歷史訊息，故必須額外驗成員資格。
+	userID := shared.AuthorizerUserID(request)
+	if userID == "" {
+		return errorResponse(http.StatusUnauthorized, "unauthorized")
+	}
+	isMember, memErr := shared.IsRoomMember(ctx, dbClient, tablePrefix, userID, roomID)
+	if memErr != nil {
+		// fail-closed：查不出來就不放行，不可因為 DB 出錯而變成人人可讀。
+		log.Printf("Failed to verify room membership (user=%s room=%s): %v", userID, roomID, memErr)
+		return errorResponse(http.StatusInternalServerError, "Failed to verify room membership")
+	}
+	if !isMember {
+		return errorResponse(http.StatusForbidden, "You are not a member of this chat room")
+	}
+
 	limit := 50
 	if l := request.QueryStringParameters["limit"]; l != "" {
 		if val, err := strconv.Atoi(l); err == nil && val > 0 {

@@ -60,6 +60,23 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return errorResponse(http.StatusBadRequest, "Missing roomId")
 	}
 
+	// 水平越權修補：本支原本只吃 roomId，不驗呼叫者與該聊天室的關係。
+	// 掛上 authorizer 只擋掉未登入者，任何「已登入」使用者仍可列舉／猜 roomId
+	// 取得任意聊天室的成員名單（含各成員的暱稱／頭像），故必須額外驗成員資格。
+	userID := shared.AuthorizerUserID(request)
+	if userID == "" {
+		return errorResponse(http.StatusUnauthorized, "unauthorized")
+	}
+	isMember, memErr := shared.IsRoomMember(ctx, dbClient, tablePrefix, userID, roomID)
+	if memErr != nil {
+		// fail-closed：查不出來就不放行。
+		log.Printf("Failed to verify room membership (user=%s room=%s): %v", userID, roomID, memErr)
+		return errorResponse(http.StatusInternalServerError, "Failed to verify room membership")
+	}
+	if !isMember {
+		return errorResponse(http.StatusForbidden, "You are not a member of this chat room")
+	}
+
 	// 1. Get Room Metadata
 	roomTableName := tablePrefix + "ChatRooms"
 	roomResult, err := dbClient.GetItem(ctx, &dynamodb.GetItemInput{
