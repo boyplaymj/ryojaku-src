@@ -40,6 +40,18 @@ AUTHORIZER_PILOT = {
     "chat-get-room-info",     # REST_V1 GET  /chat/room-info      D 級讀取
     "chat-get-rooms",         # REST_V1 GET  /chat/rooms          D 級讀取
     "subscription-status",    # REST_V1 POST /subscription-status D 級讀取
+
+    # S2-B：B 級「代他人執行破壞性動作」7 支（SECURITY_AUTH_BYPASS.md §3）。
+    #  掛閘前實測：7 支不帶 Authorization 全部直接進業務邏輯（回 404「找不到此團局」等
+    #  業務錯誤而非 401），亦即任何人都能代他人取消團局／退報名／審核申請。
+    #  注意 manifest 名稱與路徑不同名：accept/reject-registration 的路徑是 /registrations/*。
+    "cancel-game",            # REST_V1 POST /cancel-game
+    "cancel-registration",    # REST_V1 POST /cancel-registration
+    "create-game",            # REST_V1 POST /create-game
+    "game-register",          # REST_V1 POST /game-register
+    "submit-rating",          # REST_V1 POST /submit-rating
+    "accept-registration",    # HTTP_V2 POST /registrations/accept
+    "reject-registration",    # HTTP_V2 POST /registrations/reject
 }
 
 def needs_authorizer(f):

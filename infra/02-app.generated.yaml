@@ -1012,7 +1012,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/create-game', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/create-game'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1126,7 +1131,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/game-register', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/game-register'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1387,7 +1397,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/registrations/reject', Method: POST }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/registrations/reject'
+            Method: POST
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1415,7 +1430,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/registrations/accept', Method: POST }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/registrations/accept'
+            Method: POST
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1443,7 +1463,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/cancel-game', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/cancel-game'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1471,7 +1496,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/cancel-registration', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/cancel-registration'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1527,7 +1557,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/submit-rating', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/submit-rating'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
