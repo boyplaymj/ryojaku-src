@@ -32,13 +32,14 @@ AUTHORIZER_PILOT = {
     "my-games",      # REST_V1  POST /my-games
     "notifications", # HTTP_V2  ANY  /notifications
 
-    # S2-A：低風險讀取 / 狀態查詢。
-    "chat-get-history",       # REST_V1 GET  /chat/history
-    "chat-get-room-info",     # REST_V1 GET  /chat/room-info
-    "chat-get-rooms",         # REST_V1 GET  /chat/rooms
-    "subscription-status",    # REST_V1 POST /subscription-status
-    "daily-bonus",            # HTTP_V2 POST /daily-bonus
-    "claim-push-bonus",       # HTTP_V2 POST /claim-push-bonus
+    # S2-A（風險分級見 SECURITY_AUTH_BYPASS.md §3；原註記為「低風險」有誤，已更正：
+    #  daily-bonus 與 claim-push-bonus 是 A 級金流，會直接發點數，不是低風險讀取。）
+    "daily-bonus",            # HTTP_V2 POST /daily-bonus         ← A 級金流
+    "claim-push-bonus",       # HTTP_V2 POST /claim-push-bonus    ← A 級金流
+    "chat-get-history",       # REST_V1 GET  /chat/history        D 級讀取
+    "chat-get-room-info",     # REST_V1 GET  /chat/room-info      D 級讀取
+    "chat-get-rooms",         # REST_V1 GET  /chat/rooms          D 級讀取
+    "subscription-status",    # REST_V1 POST /subscription-status D 級讀取
 }
 
 def needs_authorizer(f):
