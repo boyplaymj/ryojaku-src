@@ -75,19 +75,24 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	userID := shared.AuthorizerUserID(request)
+	if userID == "" {
+		return respond(http.StatusUnauthorized, Response{Success: false, Error: "unauthorized"}, headers)
+	}
+
 	var req Request
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"}, headers)
 	}
 
-	if req.UserID == "" || req.RoomID == "" || req.FileName == "" {
-		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing userId, roomId or fileName"}, headers)
+	if req.RoomID == "" || req.FileName == "" {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing roomId or fileName"}, headers)
 	}
 
 	// Generate S3 key: chat/{roomId}/{userId}/{timestamp}_{filename}
 	now := time.Now()
 	timestamp := now.Unix()
-	key := fmt.Sprintf("chat/%s/%s/%d_%s", req.RoomID, req.UserID, timestamp, req.FileName)
+	key := fmt.Sprintf("chat/%s/%s/%d_%s", req.RoomID, userID, timestamp, req.FileName)
 
 	// Create presigned URL for PUT request with Cache-Control
 	presignedReq, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{

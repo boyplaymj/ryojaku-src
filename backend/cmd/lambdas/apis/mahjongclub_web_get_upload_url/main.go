@@ -87,18 +87,23 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	userID := shared.AuthorizerUserID(request)
+	if userID == "" {
+		return respond(http.StatusUnauthorized, Response{Success: false, Error: "unauthorized"}, headers)
+	}
+
 	var req Request
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"}, headers)
 	}
 
-	if req.UserID == "" || req.FileName == "" {
-		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing userId or fileName"}, headers)
+	if req.FileName == "" {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing fileName"}, headers)
 	}
 
 	// Generate S3 key: avatars/{userId}/{timestamp}_{filename}
 	timestamp := time.Now().Unix()
-	key := fmt.Sprintf("avatars/%s/%d_%s", req.UserID, timestamp, req.FileName)
+	key := fmt.Sprintf("avatars/%s/%d_%s", userID, timestamp, req.FileName)
 
 	// Create presigned URL for PUT request
 	presignedReq, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{

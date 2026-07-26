@@ -74,13 +74,17 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	if shared.AuthorizerUserID(request) == "" {
+		return respond(http.StatusUnauthorized, Response{Success: false, Error: "unauthorized"}, headers)
+	}
+
 	var req Request
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"}, headers)
 	}
 
-	if req.UserID == "" || req.FileName == "" {
-		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing userId or fileName"}, headers)
+	if req.FileName == "" {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing fileName"}, headers)
 	}
 
 	// Generate S3 key: posts/{year}{month}/{timestamp}_{uuid}_{filename}
