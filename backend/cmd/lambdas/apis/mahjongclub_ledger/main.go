@@ -183,10 +183,11 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Headers: headers, Body: ""}, nil
 	}
 
-	userID := request.QueryStringParameters["userId"]
+	// 身分一律取自 authorizer（S5-C）。原本讀 query param 的 userId，
+	// 登入者只要帶 ?userId=<他人> 就能看別人的帳本明細（A 級：金流/資產）。
+	userID := shared.AuthorizerUserID(request)
 	if userID == "" {
-		// Try to fallback to authenticated user if available in context (not implemented here but good to have)
-		return errorResponse(http.StatusBadRequest, "Missing userId", headers)
+		return errorResponse(http.StatusUnauthorized, "unauthorized", headers)
 	}
 
 	switch request.HTTPMethod {

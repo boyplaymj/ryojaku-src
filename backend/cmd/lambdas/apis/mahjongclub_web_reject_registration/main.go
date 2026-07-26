@@ -91,33 +91,20 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	var userID string
 	var err error
 
-	// Try to get userId parameter first (for APP users)
-	userID = request.QueryStringParameters["userId"]
-
-	// If userId is not provided, try lineID (for LINE Bot users)
+	// 身分一律取自 authorizer（S5-C）。本支是 HTTP_V2，故用 AuthorizerUserIDV2
+	// （讀 RequestContext.Authorizer.Lambda），與 REST 的 AuthorizerUserID 不同，別用錯。
+	//   原本讀 query param 的 userId：登入者帶 ?userId=<團主> 即可代團主否決報名。
+	//   lineID：LINE legacy 相容層，自 S2-B 掛上 authorizer 後已無法到達（已實測 401）。
+	// 刻意不留 fallback：authorizer context 缺失時必須 fail-closed。
+	userID = shared.AuthorizerUserIDV2(request)
 	if userID == "" {
-		encryptedLineID := request.QueryStringParameters["lineID"]
-		if encryptedLineID == "" {
-			response := Response{Success: false, Error: "Missing userId or lineID parameter"}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayV2HTTPResponse{
-				StatusCode: http.StatusBadRequest,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
-
-		// Decrypt LINE ID
-		userID, err = decryptLineID(encryptedLineID)
-		if err != nil {
-			response := Response{Success: false, Error: "Failed to decrypt LINE ID"}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayV2HTTPResponse{
-				StatusCode: http.StatusUnauthorized,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
+		response := Response{Success: false, Error: "unauthorized"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayV2HTTPResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
 	}
 
 	// Parse request body

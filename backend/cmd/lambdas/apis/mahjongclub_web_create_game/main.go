@@ -231,36 +231,19 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	var userID string
 	var err error
 
-	// Try to get userId parameter first (for APP users)
-	userID = request.QueryStringParameters["userId"]
-
-	// If userId is not provided, try lineID (for LINE Bot users)
+	// 身分一律取自 authorizer（S5-C），不再讀 query param 的 userId／lineID：
+	//   userId：登入者帶 ?userId=<他人> 即可用別人的身分與點數開團（會扣他人 120 點）。
+	//   lineID：LINE legacy 相容層，自 S2-B 掛上 authorizer 後已無法到達（已實測 401）。
+	// 刻意不留 fallback：authorizer context 缺失時必須 fail-closed。
+	userID = shared.AuthorizerUserID(request)
 	if userID == "" {
-		encryptedLineID := request.QueryStringParameters["lineID"]
-		log.Printf("Encrypted LINE ID: %s", encryptedLineID)
-		if encryptedLineID == "" {
-			log.Printf("ERROR: Missing userId or lineID parameter")
-			response := Response{Success: false, Error: "Missing userId or lineID parameter"}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayProxyResponse{
-				StatusCode: http.StatusBadRequest,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
-
-		// Decrypt LINE ID
-		userID, err = db.DecryptLineID(encryptedLineID)
-		if err != nil {
-			log.Printf("ERROR: Failed to decrypt LINE ID: %v", err)
-			response := Response{Success: false, Error: "Failed to decrypt LINE ID"}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayProxyResponse{
-				StatusCode: http.StatusUnauthorized,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
+		response := Response{Success: false, Error: "unauthorized"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
 	}
 	log.Printf("User ID: %s", userID)
 
