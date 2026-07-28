@@ -74,6 +74,12 @@ Resources:
             Identity:
               Headers: [Authorization]
               ReauthorizeEvery: 0
+          RyojakuAdminAuth:
+            FunctionArn: !GetAtt FnAdminAuthorizer.Arn
+            FunctionPayloadType: REQUEST
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
@@ -95,6 +101,13 @@ Resources:
             Identity:
               Headers: [Authorization]
               ReauthorizeEvery: 0
+          RyojakuAdminAuth:
+            FunctionArn: !GetAtt FnAdminAuthorizer.Arn
+            AuthorizerPayloadFormatVersion: 1.0
+            EnableSimpleResponses: false
+            Identity:
+              Headers: [Authorization]
+              ReauthorizeEvery: 0
 
   FnAdminActivities:
     Type: AWS::Serverless::Function
@@ -104,7 +117,12 @@ Resources:
       Events:
         Http0:
           Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/admin/activities', Method: ANY }
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: '/admin/activities'
+            Method: ANY
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -132,7 +150,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/admins', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/admins'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -160,7 +183,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/analysis', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/analysis'
+            Method: get
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -188,7 +216,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/dashboard/stats', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/dashboard/stats'
+            Method: get
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -244,7 +277,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/logs', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/logs'
+            Method: get
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -272,7 +310,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/moderation', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/moderation'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -300,7 +343,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/point-history', Method: get }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/point-history'
+            Method: get
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -328,7 +376,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/push-all', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/push-all'
+            Method: post
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -356,7 +409,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/users', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/users'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -384,7 +442,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/versions', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/versions'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -412,7 +475,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/admin/vouchers', Method: any }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/vouchers'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -2166,6 +2234,30 @@ Resources:
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
 
+  FnAdminAuthorizer:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_admin_authorizer
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-authorizer'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
   FnAuthorizer:
     Type: AWS::Serverless::Function
     Properties:
@@ -2282,6 +2374,16 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt FnAuthorizer.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/*'
+
+
+  # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
+  AdminAuthorizerHttpApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FnAdminAuthorizer.Arn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/*'

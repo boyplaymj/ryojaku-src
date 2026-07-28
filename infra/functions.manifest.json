@@ -847,6 +847,17 @@
       ]
     },
     {
+      "name": "admin-authorizer",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_admin_authorizer",
+      "apiType": "AUTHORIZER",
+      "method": "NONE",
+      "path": "",
+      "auth": "public",
+      "tables": [
+        "AdminUsers"
+      ]
+    },
+    {
       "name": "authorizer",
       "projectPath": "cmd/lambdas/apis/mahjongclub_authorizer",
       "apiType": "AUTHORIZER",

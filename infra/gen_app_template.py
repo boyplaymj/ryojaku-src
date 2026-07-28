@@ -24,7 +24,10 @@ def logical(name):  # kebab → PascalCase LogicalId
 # 兩種 apiType 上都成立、且前端不會斷。
 # S2 才把這裡改成 `f["auth"] == "user"` 全面套用 —— 屆時務必確認 auth:public 端點
 # 不會被誤掛（register / login / forgot 被掛上去會直接鎖死註冊流程）。
-AUTHORIZER_NAME = "RyojakuUserAuth"
+USER_AUTHORIZER_NAME = "RyojakuUserAuth"
+ADMIN_AUTHORIZER_NAME = "RyojakuAdminAuth"
+USER_AUTHORIZER_FUNCTION = "authorizer"
+ADMIN_AUTHORIZER_FUNCTION = "admin-authorizer"
 AUTHORIZER_PILOT = {
     # S1 pilot：REST_V1 / HTTP_V2 authorizer 機制驗證。
     "ledger",        # REST_V1  ANY  /ledger
@@ -70,34 +73,54 @@ AUTHORIZER_PILOT = {
     "unsubscribe-push",       # /unsubscribe-push  ← 可代他人退掉推播
 }
 
+def authorizer_for(f):
+    if f["name"] in AUTHORIZER_PILOT:
+        return USER_AUTHORIZER_NAME
+    if f.get("auth") == "admin" and f.get("apiType") in ("REST_V1", "HTTP_V2"):
+        return ADMIN_AUTHORIZER_NAME
+    return None
+
 def needs_authorizer(f):
-    return f["name"] in AUTHORIZER_PILOT
+    return authorizer_for(f) is not None
+
+def authorizer_lid(name):
+    if name == USER_AUTHORIZER_NAME:
+        return logical(USER_AUTHORIZER_FUNCTION)
+    if name == ADMIN_AUTHORIZER_NAME:
+        return logical(ADMIN_AUTHORIZER_FUNCTION)
+    raise ValueError(f"unknown authorizer: {name}")
 
 # Identity.ReauthorizeEvery = 0 → 關閉 authorizer 結果快取。
 # 必須關：快取會讓「改密碼／登出全裝置」後的撤銷延後到 TTL 到期才生效，
 # 直接抵銷 shared.VerifyTokenWithUserPwGate 那道閘的意義。
 # 若日後為了成本要開，必須明確記錄 TTL＝撤銷生效的最壞延遲。
 # 注意縮排：Auth 是 Properties 底下的屬性（6 空格），不是與 Properties 同級（4 空格）。
-AUTH_BLOCK_REST = f"""      Auth:
-        Authorizers:
-          {AUTHORIZER_NAME}:
-            FunctionArn: !GetAtt {{lid}}.Arn
-            FunctionPayloadType: REQUEST
-            Identity:
-              Headers: [Authorization]
-              ReauthorizeEvery: 0
-"""
+def auth_block_rest(names):
+    if not names:
+        return ""
+    lines = ["      Auth:", "        Authorizers:"]
+    for name in names:
+        lines += [f"          {name}:",
+                  f"            FunctionArn: !GetAtt {authorizer_lid(name)}.Arn",
+                  "            FunctionPayloadType: REQUEST",
+                  "            Identity:",
+                  "              Headers: [Authorization]",
+                  "              ReauthorizeEvery: 0"]
+    return "\n".join(lines)
 
-AUTH_BLOCK_HTTP = f"""      Auth:
-        Authorizers:
-          {AUTHORIZER_NAME}:
-            FunctionArn: !GetAtt {{lid}}.Arn
-            AuthorizerPayloadFormatVersion: 1.0
-            EnableSimpleResponses: false
-            Identity:
-              Headers: [Authorization]
-              ReauthorizeEvery: 0
-"""
+def auth_block_http(names):
+    if not names:
+        return ""
+    lines = ["      Auth:", "        Authorizers:"]
+    for name in names:
+        lines += [f"          {name}:",
+                  f"            FunctionArn: !GetAtt {authorizer_lid(name)}.Arn",
+                  "            AuthorizerPayloadFormatVersion: 1.0",
+                  "            EnableSimpleResponses: false",
+                  "            Identity:",
+                  "              Headers: [Authorization]",
+                  "              ReauthorizeEvery: 0"]
+    return "\n".join(lines)
 
 HEAD = """AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
@@ -209,7 +232,7 @@ DDB_POLICY = """      Policies:
 # S1 試點實測踩到，故在此明確補上。
 HTTP_AUTHZ_PERMISSION = """
   # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
-  AuthorizerHttpApiPermission:
+  {perm_lid}:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt {lid}.Arn
@@ -233,7 +256,7 @@ def fn_block(f):
     ev = f["apiType"]
     methods = ["ANY"] if f["method"] == "ANY" else f["method"].split(",")
     # 掛 authorizer 的端點改用區塊式 Properties（inline flow mapping 塞不下巢狀 Auth）。
-    authz = needs_authorizer(f)
+    authz = authorizer_for(f)
     if ev == "REST_V1":
         b.append("      Events:")
         for i, m in enumerate(methods):
@@ -244,7 +267,7 @@ def fn_block(f):
                       f"            Path: '{path}'",
                       f"            Method: {m.lower()}",
                       "            Auth:",
-                      f"              Authorizer: {AUTHORIZER_NAME}"]
+                      f"              Authorizer: {authz}"]
             else:
                 b += [f"          Properties: {{ RestApiId: !Ref RestApi, Path: '{path}', Method: {m.lower()} }}"]
     elif ev == "HTTP_V2":
@@ -257,7 +280,7 @@ def fn_block(f):
                       f"            Path: '{path}'",
                       f"            Method: {m.upper()}",
                       "            Auth:",
-                      f"              Authorizer: {AUTHORIZER_NAME}"]
+                      f"              Authorizer: {authz}"]
             else:
                 b += [f"          Properties: {{ ApiId: !Ref HttpApi, Path: '{path}', Method: {m.upper()} }}"]
     elif ev == "AUTHORIZER":
@@ -353,21 +376,30 @@ ws = [f for f in MAN if f["apiType"] == "WEBSOCKET"]
 
 # 只有真的有端點掛 authorizer 時才在 API 上宣告 Authorizers，
 # 否則產出一個沒人引用的 authorizer 定義（無害但徒增雜訊）。
-AUTHZ_LID = logical("authorizer")
-_rest_authz = any(needs_authorizer(f) and f["apiType"] == "REST_V1" for f in MAN)
-_http_authz = any(needs_authorizer(f) and f["apiType"] == "HTTP_V2" for f in MAN)
-head = HEAD.replace("__REST_AUTH__",
-                    AUTH_BLOCK_REST.format(lid=AUTHZ_LID).rstrip("\n") if _rest_authz else "")
-head = head.replace("__HTTP_AUTH__",
-                    AUTH_BLOCK_HTTP.format(lid=AUTHZ_LID).rstrip("\n") if _http_authz else "")
+AUTHZ_LID = logical(USER_AUTHORIZER_FUNCTION)
+_rest_authorizers = []
+_http_authorizers = []
+for _name in (USER_AUTHORIZER_NAME, ADMIN_AUTHORIZER_NAME):
+    if any(authorizer_for(f) == _name and f["apiType"] == "REST_V1" for f in MAN):
+        _rest_authorizers.append(_name)
+    if any(authorizer_for(f) == _name and f["apiType"] == "HTTP_V2" for f in MAN):
+        _http_authorizers.append(_name)
+head = HEAD.replace("__REST_AUTH__", auth_block_rest(_rest_authorizers))
+head = head.replace("__HTTP_AUTH__", auth_block_http(_http_authorizers))
 
 parts = [head]
 for f in MAN:  # function 本體(含 WS 的 function)
     parts.append(fn_block(f))
     parts.append("")
 parts.append(ws_block(ws))
-if _http_authz:
-    parts.append(HTTP_AUTHZ_PERMISSION.format(lid=AUTHZ_LID))
+for _name in _http_authorizers:
+    _perm_lid = "AuthorizerHttpApiPermission"
+    if _name == ADMIN_AUTHORIZER_NAME:
+        _perm_lid = "AdminAuthorizerHttpApiPermission"
+    parts.append(HTTP_AUTHZ_PERMISSION.format(
+        perm_lid=_perm_lid,
+        lid=authorizer_lid(_name),
+    ))
 parts += ["",
           "Outputs:",
           "  RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }",
