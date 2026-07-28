@@ -31,4 +31,6 @@ build/
 
 # migration 彩排產物
 migration/_synthetic/
-migration/__pycache__/
+
+# Python 快取(infra/ 的驗收腳本被 import 或 py_compile 時會產生,原規則只蓋 migration/)
+__pycache__/
