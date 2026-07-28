@@ -1201,7 +1201,23 @@ Resources:
     Properties:
       CodeUri: ../build/apis__mahjongclub_event_commands
       FunctionName: !Sub 'ryojaku-${Stage}-event-commands'
-      FunctionUrlConfig: { AuthType: NONE }
+      Events:
+        Rest0:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/event-commands'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
+        Rest1:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/event-commands/{proxy+}'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1500,7 +1516,15 @@ Resources:
     Properties:
       CodeUri: ../build/apis__mahjongclub-redeem
       FunctionName: !Sub 'ryojaku-${Stage}-redeem-points'
-      FunctionUrlConfig: { AuthType: NONE }
+      Events:
+        Rest0:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/redeem-codes/{proxy+}'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
       Policies:
         - Version: '2012-10-17'
           Statement:

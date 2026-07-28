@@ -58,9 +58,9 @@ BLOCKED = (401, 403)
 # http 欄位：
 #   "gated"        —— 掛在 API Gateway 上、authorizer 生效。無 token 與 user 應被擋、admin 應通過。
 #   "route-missing" —— 路由根本不存在，API Gateway 對所有人回 403 Missing Authentication Token，
-#                      連 admin 也進不去。這是已知缺口，不是 authorizer 的功勞，故獨立標記：
-#                      event-commands   → 是 Lambda URL(AuthType=NONE)，不在 REST API 上，
-#                                         authorizer 掛不上去（§5.2 不符項②，待 P3）
+#                      連 admin 也進不去。這是已知缺口，不是 authorizer 的功勞，故獨立標記。
+#                      **P3 之後已無此類端點**（event-commands 與 redeem-points 都已搬進 REST API），
+#                      機制保留供日後再出現缺口時使用。
 # ⚠️ 路徑欄自 P2 起一律填「Console (`admin_frontend/src/services/api.ts`) 實際呼叫的路徑」，
 #    不是我方 IaC 曾經發明的路徑。這樣本腳本同時也是 §3.2 路由對齊的回歸網：任何一條被改回
 #    IaC 自創路徑，這裡就會變成 403 Missing Authentication Token 而 fail。
@@ -79,7 +79,12 @@ TARGETS = [
     ("ryojaku-stg-admin-vouchers",           "GET",  "/admin/vouchers",       "V1", "gated"),
     # vouchers 的 bare 與子路徑都要活（bare GET 列表、子路徑 POST update/delete），故多測一條。
     ("ryojaku-stg-admin-vouchers",           "POST", "/admin/vouchers/update", "V1", "gated"),
-    ("ryojaku-stg-event-commands",           "GET",  "/event-commands",       "V1", "route-missing"),
+    # P3：以下兩支原本是 Lambda URL(AuthType=NONE)，已搬進主 REST API 並掛上 authorizer。
+    # redeem-points 尤其關鍵 —— /redeem-codes/generate 會產生可兌換點數的序號，
+    # 本支若哪天回到「無 token 也能通」，這裡就會 fail。（探測固定打唯讀的 /stats，不印序號。）
+    ("ryojaku-stg-event-commands",           "GET",  "/event-commands",       "V1", "gated"),
+    ("ryojaku-stg-event-commands",           "GET",  "/event-commands/stats", "V1", "gated"),
+    ("ryojaku-stg-redeem-points",            "GET",  "/redeem-codes/stats",   "V1", "gated"),
 ]
 
 

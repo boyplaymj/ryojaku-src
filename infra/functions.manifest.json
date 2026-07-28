@@ -419,9 +419,9 @@
     {
       "name": "event-commands",
       "projectPath": "cmd/lambdas/apis/mahjongclub_event_commands",
-      "apiType": "LAMBDA_URL",
+      "apiType": "REST_V1",
       "method": "ANY",
-      "path": "/{proxy+}?",
+      "path": "/event-commands?,/event-commands/{proxy+}?",
       "auth": "admin",
       "tables": [
         "EventCommands",
@@ -539,10 +539,10 @@
     {
       "name": "redeem-points",
       "projectPath": "cmd/lambdas/apis/mahjongclub-redeem",
-      "apiType": "LAMBDA_URL",
-      "method": "POST",
-      "path": "/redeem?",
-      "auth": "public",
+      "apiType": "REST_V1",
+      "method": "ANY",
+      "path": "/redeem-codes/{proxy+}?",
+      "auth": "admin",
       "tables": [
         "RedeemCodes",
         "Users"

@@ -1,6 +1,11 @@
+// P3（設計冊 D2、§5.3）：原本這裡有三個位址 —— 主 API、序號 API(另一座 API Gateway)、
+// event-commands(Lambda URL, AuthType=NONE)。後兩者走的 requestExternal() **完全不送
+// Authorization**，等於序號產生與活動指令是無驗證的公開端點。
+// 現已把 /redeem-codes/* 與 /event-commands/* 一併併入我方主 REST API 並掛上 admin authorizer，
+// 故三個位址收斂為一個、requestExternal() 整個移除。
+// （BASE_URL 目前仍寫死指向工程師的 prod，D1 參數化是 P4 的事 —— 但收斂成單一常數後，
+//   P4 只需要改這一行，不必再處理三套位址。）
 export const BASE_URL = 'https://yg7y0xkb50.execute-api.ap-southeast-1.amazonaws.com';
-export const VOUCHER_BASE_URL = 'https://00pox0hvv4.execute-api.ap-southeast-1.amazonaws.com/prod';
-export const EVENT_COMMAND_BASE_URL = 'https://5yas775i27gfb2al7s7seq64da0wdgmj.lambda-url.ap-southeast-1.on.aws';
 
 const handleUnauthorized = () => {
     localStorage.removeItem('adminToken');
@@ -33,26 +38,33 @@ const request = async (url: string, options: RequestInit = {}) => {
     return data;
 };
 
-const requestExternal = async (baseUrl: string, endpoint: string, options: RequestInit = {}) => {
-    // Some external APIs might not need the admin token or might need a different one. 
-    // For now we assume they are public or use the same auth if needed, 
-    // but the reference Implementation didn't seem to use Auth headers in the JS files provided.
-    // However, we should check if we need to pass headers. 
-    // The reference `api.js` didn't send Authorization headers.
-
-    const url = new URL(baseUrl + endpoint);
-    if (options.body && typeof options.body === 'string') {
-        // If body is present, ensure Content-Type is set
-        options.headers = {
-            'Content-Type': 'application/json',
-            ...options.headers
-        };
+// 下載序號 CSV 專用：後端直接把 CSV 當 body 回傳，不是 JSON，故不能走 request()。
+// 也不能用 window.open() —— 新分頁沒辦法帶 Authorization header，端點補上驗證後會 401。
+// 改為帶 token fetch 成 blob，再用暫時性的 <a download> 觸發下載。
+const requestBlob = async (url: string, filename: string) => {
+    const token = localStorage.getItem('adminToken');
+    if (!token) {
+        handleUnauthorized();
+        throw new Error('No token found');
     }
 
-    const res = await fetch(url.toString(), options);
-    const data = await res.json();
-    if (!res.ok) throw new Error((data && data.error) || 'Request failed');
-    return data;
+    const res = await fetch(BASE_URL + url, { headers: { 'Authorization': `Bearer ${token}` } });
+
+    if (res.status === 401) {
+        handleUnauthorized();
+        throw new Error('Session expired');
+    }
+    if (!res.ok) throw new Error('Download failed');
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
 };
 
 export const api = {
@@ -103,19 +115,19 @@ export const api = {
     },
     vouchers: {
         getStats: async () => {
-            const res = await requestExternal(VOUCHER_BASE_URL, '/redeem-codes/stats');
+            const res = await request('/redeem-codes/stats');
             return res.data;
         },
         getUsageTrend: async (days = 30) => {
-            const res = await requestExternal(VOUCHER_BASE_URL, `/redeem-codes/usage-trend?days=${days}`);
+            const res = await request(`/redeem-codes/usage-trend?days=${days}`);
             return res.data;
         },
         getBatches: async (limit = 20) => {
-            const res = await requestExternal(VOUCHER_BASE_URL, `/redeem-codes/batches?limit=${limit}`);
+            const res = await request(`/redeem-codes/batches?limit=${limit}`);
             return res.data;
         },
         generate: async (data: { quantity: number; points: number; createdBy: string }) => {
-            const res = await requestExternal(VOUCHER_BASE_URL, '/redeem-codes/generate', {
+            const res = await request('/redeem-codes/generate', {
                 method: 'POST',
                 body: JSON.stringify(data)
             });
@@ -144,41 +156,42 @@ export const api = {
                 body: JSON.stringify({ code })
             });
         },
-        // Helper for download URL
-        getDownloadUrl: (batchId: string) => `${VOUCHER_BASE_URL}/redeem-codes/batch/${batchId}/download`
+        // 下載該批次序號 CSV。原本是回傳裸 URL 給 window.open()，端點補驗證後那條路必 401。
+        downloadBatch: (batchId: string) =>
+            requestBlob(`/redeem-codes/batch/${batchId}/download`, `codes_${batchId}.csv`)
     },
     eventCommands: {
         getStats: async () => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, '/event-commands/stats');
+            const res = await request('/event-commands/stats');
             return res.data;
         },
         list: async () => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, '/event-commands');
+            const res = await request('/event-commands');
             return res.data; // The reference returns { success: true, data: [...] }
         },
         create: async (data: any) => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, '/event-commands', {
+            const res = await request('/event-commands', {
                 method: 'POST',
                 body: JSON.stringify(data)
             });
             return res;
         },
         updateStatus: async (commandId: string, isActive: boolean) => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, '/event-commands/update', {
+            const res = await request('/event-commands/update', {
                 method: 'POST',
                 body: JSON.stringify({ commandId, isActive })
             });
             return res;
         },
         delete: async (commandId: string) => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, '/event-commands/delete', {
+            const res = await request('/event-commands/delete', {
                 method: 'POST',
                 body: JSON.stringify({ commandId })
             });
             return res;
         },
         getRedemptions: async (commandId: string) => {
-            const res = await requestExternal(EVENT_COMMAND_BASE_URL, `/event-commands/redemptions?commandId=${commandId}`);
+            const res = await request(`/event-commands/redemptions?commandId=${commandId}`);
             return res.data;
         }
     },

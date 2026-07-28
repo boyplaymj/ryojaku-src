@@ -16,12 +16,16 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/golang-jwt/jwt/v5"
+
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 )
 
 var (
 	dynamoClient *dynamodb.Client
 	tableName    = os.Getenv("TABLE_NAME")
 	tablePrefix  = redeemTablePrefix() // S2: 讀 TABLE_PREFIX，不再寫死 prod 前綴
+	jwtSecret    = requireJWTSecret()  // P3: 本支原本完全沒有身分驗證，見下方 handler 的 AUTH 段
 )
 
 // redeemTablePrefix 讀 TABLE_PREFIX env，預設 prod 前綴以相容既有部署
@@ -31,6 +35,36 @@ func redeemTablePrefix() string {
 		p = "MahjongClub_"
 	}
 	return p
+}
+
+// jwtSecret 於 init 讀取並要求非空 —— 這支的 /redeem-codes/generate 會產生「可兌換點數的序號」，
+// 缺 secret 時絕不能退化成「不驗證就放行」（設計冊 §3.3）。故 fail-closed 到 log.Fatal，
+// 讓 Lambda 冷啟直接失敗、端點整支不可用，而不是靜默變成無驗證。
+func requireJWTSecret() string {
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		log.Fatal("JWT_SECRET is required")
+	}
+	return s
+}
+
+// validateToken 驗簽並取 claims。與其餘 admin 支一致：僅回錯，不 panic。
+func validateToken(authHeader string) (jwt.MapClaims, error) {
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid claims")
+	}
+	return claims, nil
 }
 
 func init() {
@@ -121,13 +155,32 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (Respon
 		}, nil
 	}
 
+	// AUTH（P3，設計冊 §3.3）——本支原本**完全沒有任何身分驗證**，只因為被錯部成 Function URL、
+	// request.Path 永遠為空而全部回 404，漏洞被 bug 遮住。改成正確的 REST 整合會讓它立刻變成
+	// 「任何人都能自己印可兌換點數的序號」，故整合方式與驗證必須同一批上線，不可分兩步。
+	//
+	// 角色要求對齊同一頁的 admin-vouchers（super_admin）—— Console 的 Vouchers 頁同時打
+	// /admin/vouchers 與 /redeem-codes/*，兩者門檻不一致的話會出現「看得到卻印不了」的怪狀態。
+	authHeader := request.Headers["Authorization"]
+	if authHeader == "" {
+		authHeader = request.Headers["authorization"]
+	}
+	claims, err := validateToken(authHeader)
+	if err != nil {
+		return errorResponse(headers, http.StatusUnauthorized, "Unauthorized"), nil
+	}
+	if !adminrole.Allows(claims, adminrole.SuperAdmin) {
+		return errorResponse(headers, http.StatusForbidden, "Forbidden"), nil
+	}
+	operator := adminrole.SubjectOf(claims)
+
 	// Route handling
 	path := request.Path
 	method := request.HTTPMethod
 
 	switch {
 	case path == "/redeem-codes/generate" && method == "POST":
-		return handleGenerateCodes(ctx, request, headers)
+		return handleGenerateCodes(ctx, request, headers, operator)
 	case path == "/redeem-codes/stats" && method == "GET":
 		return handleGetStats(ctx, headers)
 	case path == "/redeem-codes/batches" && method == "GET":
@@ -142,11 +195,15 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (Respon
 	}
 }
 
-func handleGenerateCodes(ctx context.Context, request events.APIGatewayProxyRequest, headers map[string]string) (Response, error) {
+func handleGenerateCodes(ctx context.Context, request events.APIGatewayProxyRequest, headers map[string]string, operator string) (Response, error) {
 	var req GenerateRequest
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return errorResponse(headers, http.StatusBadRequest, "Invalid request body"), nil
 	}
+
+	// createdBy 一律以 token 的 sub 覆蓋。原本直接採信 request body 的 createdBy，
+	// 等於印鈔稽核欄位由呼叫端自填、可任意冒名。
+	req.CreatedBy = operator
 
 	// Validation
 	if req.Quantity < 1 || req.Quantity > 10000 {

@@ -80,9 +80,13 @@ const Vouchers: React.FC = () => {
         }
     };
 
-    const downloadBatch = (batchId: string) => {
-        const url = api.vouchers.getDownloadUrl(batchId);
-        window.open(url, '_blank');
+    // 改走帶 token 的 blob 下載：端點補上 admin 驗證後，window.open() 那條路一定 401。
+    const downloadBatch = async (batchId: string) => {
+        try {
+            await api.vouchers.downloadBatch(batchId);
+        } catch (error: any) {
+            alert('下載失敗: ' + error.message);
+        }
     };
 
     // Prepare chart data

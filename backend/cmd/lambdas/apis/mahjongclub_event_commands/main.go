@@ -94,16 +94,23 @@ type UpdateCommandRequest struct {
 	CodeCount *int   `json:"codeCount,omitempty"`
 }
 
-func handler(ctx context.Context, request events.LambdaFunctionURLRequest) (Response, error) {
-	// Extract path from RequestContext
-	path := request.RequestContext.HTTP.Path
-	method := request.RequestContext.HTTP.Method
+// P3（設計冊 §5.2 不符項②）：本支原本是 Function URL（AuthType=NONE）——一個永遠敞開、
+// authorizer 掛不上去的公開入口，只靠下方的程式碼閘單層防守。改掛主 REST API 之後由
+// RyojakuAdminAuth 先擋一層，程式碼閘退居縱深防禦（保留，不移除）。
+// 事件型別隨之由 payload 2.0 改為 REST v1：路徑／方法改讀 request.Path／request.HTTPMethod，
+// Headers、Body、QueryStringParameters 兩種事件同形，不需改。
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (Response, error) {
+	path := request.Path
+	method := request.HTTPMethod
 
 	log.Printf("Received request: %s %s", method, path)
 
-	// Headers (CORS is handled by Lambda Function URL)
+	// 改掛 REST API 後 CORS 不再由 Function URL 代勞，需自行帶（與其餘 admin 支一致；P5 統一收斂）。
 	headers := map[string]string{
-		"Content-Type": "application/json",
+		"Access-Control-Allow-Origin":  "*",
+		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Headers": "Content-Type, Authorization",
+		"Content-Type":                 "application/json",
 	}
 
 	// Handle OPTIONS request
