@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -47,9 +49,14 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	if authHeader == "" {
 		authHeader = request.Headers["authorization"]
 	}
-	_, err := validateToken(authHeader)
+	claims, err := validateToken(authHeader)
 	if err != nil {
 		return errorResponse(401, "Unauthorized"), nil
+	}
+
+	// 本支原本只驗簽不看 role，普通使用者的 token 可讀稽核日誌（DESIGN.md §3.1）。
+	if !adminrole.Allows(claims, adminrole.Admin, adminrole.SuperAdmin) {
+		return errorResponse(403, "Forbidden"), nil
 	}
 
 	tableName := tablePrefix + "AdminAuditLogs"

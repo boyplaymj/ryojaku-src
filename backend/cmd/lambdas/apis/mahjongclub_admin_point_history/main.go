@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/golang-jwt/jwt/v5"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 	"mahjongclub-backend/cmd/lambdas/shared"
 )
 
@@ -78,8 +79,9 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return errorResponse(headers, http.StatusUnauthorized, "Unauthorized")
 	}
 
-	adminRole := claims["role"].(string)
-	if adminRole != "super_admin" && adminRole != "admin" && adminRole != "super" {
+	// 原本是裸斷言 claims["role"].(string)，user token 無 role claim 時 panic → 502（DESIGN.md §3.1）。
+	// "super" 不在 AdminUsers 實際的 role 值域（只有 admin / super_admin），但 P0 不混入語意變更，原樣保留。
+	if !adminrole.Allows(claims, adminrole.SuperAdmin, adminrole.Admin, "super") {
 		return errorResponse(headers, http.StatusForbidden, "Forbidden")
 	}
 

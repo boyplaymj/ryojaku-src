@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -94,8 +95,14 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return events.APIGatewayProxyResponse{StatusCode: 401, Headers: headers, Body: `{"error":"Unauthorized"}`}, nil
 	}
 
-	currentUserRole := claims["role"].(string)
-	currentUsername := claims["sub"].(string)
+	// 原本是裸斷言 claims["role"].(string)，user token 無 role claim 時 panic → 502（DESIGN.md §3.1）。
+	// PATCH 分支不在下面的 switch 裡擋 role（改自己的設定要放行 admin），所以先在這裡設一道底線閘，
+	// 否則 role 取空字串後 PATCH 會帶著空的 operator 走進 updateAdmin。
+	if !adminrole.Allows(claims, adminrole.SuperAdmin, adminrole.Admin) {
+		return events.APIGatewayProxyResponse{StatusCode: 403, Headers: headers, Body: `{"error":"Forbidden"}`}, nil
+	}
+	currentUserRole := adminrole.Of(claims)
+	currentUsername := adminrole.SubjectOf(claims)
 
 	// Admin CRUD usually restricted to super_admin
 	// But let people update their own settings if needed?

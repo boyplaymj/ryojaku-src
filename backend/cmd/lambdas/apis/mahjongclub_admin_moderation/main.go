@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -94,10 +95,10 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return events.APIGatewayProxyResponse{StatusCode: 401, Headers: headers, Body: `{"error":"Unauthorized"}`}, nil
 	}
 
-	operator := claims["sub"].(string)
-	adminRole := claims["role"].(string)
+	operator := adminrole.SubjectOf(claims)
 
-	if adminRole != "super_admin" {
+	// 原本是裸斷言 claims["role"].(string)，user token 無 role claim 時 panic → 502（DESIGN.md §3.1）。
+	if !adminrole.Allows(claims, adminrole.SuperAdmin) {
 		return events.APIGatewayProxyResponse{StatusCode: 403, Headers: headers, Body: `{"error":"Forbidden"}`}, nil
 	}
 

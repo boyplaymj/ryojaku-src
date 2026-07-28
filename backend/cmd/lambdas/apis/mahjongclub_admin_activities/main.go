@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -58,7 +59,11 @@ func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) 
 	if err != nil {
 		return errorResponse(http.StatusUnauthorized, "Unauthorized")
 	}
-	adminUser := claims["sub"].(string)
+	// 本支原本只驗簽不看 role，普通使用者的 token 可讀寫系統設定（DESIGN.md §3.1）。
+	if !adminrole.Allows(claims, adminrole.Admin, adminrole.SuperAdmin) {
+		return errorResponse(http.StatusForbidden, "Forbidden")
+	}
+	adminUser := adminrole.SubjectOf(claims)
 
 	tableName := tablePrefix + "AdminConfigs"
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -68,13 +69,13 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	table := tablePrefix + "AdminConfigs"
 
 	// Check if GET or POST
-	adminRole := claims["role"].(string)
-	if adminRole != "super_admin" {
+	// 原本是裸斷言 claims["role"].(string)，user token 無 role claim 時 panic → 502（DESIGN.md §3.1）。
+	if !adminrole.Allows(claims, adminrole.SuperAdmin) {
 		return errorResponse(403, "Forbidden"), nil
 	}
 
 	if request.HTTPMethod == "POST" {
-		adminUser := claims["sub"].(string)
+		adminUser := adminrole.SubjectOf(claims)
 		return handleUpdateConfig(ctx, request, table, adminUser)
 	}
 

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -210,12 +212,21 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		token = request.Headers["authorization"]
 	}
 
-	_, err := ValidateToken(token, cfg.JWTSecret)
+	claims, err := ValidateToken(token, cfg.JWTSecret)
 	if err != nil {
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusUnauthorized,
 			Headers:    headers,
 			Body:       `{"success":false,"error":"Unauthorized"}`,
+		}, nil
+	}
+
+	// 本支原本只驗簽不看 role，普通使用者的 token 可讀全站統計（DESIGN.md §3.1）。
+	if !adminrole.Allows(claims, adminrole.Admin, adminrole.SuperAdmin) {
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusForbidden,
+			Headers:    headers,
+			Body:       `{"success":false,"error":"Forbidden"}`,
 		}, nil
 	}
 

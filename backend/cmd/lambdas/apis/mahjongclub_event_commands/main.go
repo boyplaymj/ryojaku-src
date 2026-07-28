@@ -11,6 +11,8 @@ import (
 
 	"strings"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -135,10 +137,14 @@ func handler(ctx context.Context, request events.LambdaFunctionURLRequest) (Resp
 		return errorResponseLocal(headers, http.StatusUnauthorized, "Invalid token"), nil
 	}
 
-	claims := token.Claims.(jwt.MapClaims)
-	role := claims["role"].(string)
+	// 兩處原本都是裸斷言：token.Claims 與 claims["role"]，
+	// user token 無 role claim 時 panic → 502 而非 403（DESIGN.md §3.1）。
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return errorResponseLocal(headers, http.StatusUnauthorized, "Invalid token"), nil
+	}
 
-	if role != "super_admin" {
+	if !adminrole.Allows(claims, adminrole.SuperAdmin) {
 		return errorResponseLocal(headers, http.StatusForbidden, "Forbidden"), nil
 	}
 

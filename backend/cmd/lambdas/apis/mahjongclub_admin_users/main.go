@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"mahjongclub-backend/cmd/lambdas/adminrole"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -76,8 +78,9 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return errorResponse(401, "Unauthorized", headers), nil
 	}
 
-	adminRole := claims["role"].(string)
-	if adminRole != "super_admin" && adminRole != "admin" && adminRole != "super" {
+	// 原本是裸斷言 claims["role"].(string)，user token 無 role claim 時 panic → 502（DESIGN.md §3.1）。
+	// "super" 不在 AdminUsers 實際的 role 值域（只有 admin / super_admin），但 P0 不混入語意變更，原樣保留。
+	if !adminrole.Allows(claims, adminrole.SuperAdmin, adminrole.Admin, "super") {
 		return errorResponse(403, "Forbidden", headers), nil
 	}
 
