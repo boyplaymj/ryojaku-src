@@ -17,8 +17,9 @@
 #            panic 會讓 invoke 回 FunctionError=Unhandled。
 #
 # ⚠️ 本檔的期望值是「釘住現況」而非「照理想寫」。下面兩個常數與 route-missing 標記
-#    記錄的是 2026-07-28 的實測行為；當 authorizer 改回 Deny policy、或 P2 把路由補齊時，
-#    本腳本會**主動 fail**，逼人回來更新期望值 —— 這是刻意的，不要改成寬鬆比對放過去。
+#    記錄的是 2026-07-28 的實測行為；當 authorizer 改回 Deny policy、或 P3 把 event-commands
+#    搬進 REST API 時，本腳本會**主動 fail**，逼人回來更新期望值 —— 這是刻意的，不要改成
+#    寬鬆比對放過去。
 #
 # 用法： python3 verify_admin_role_gate.py [任意標籤]
 
@@ -58,7 +59,6 @@ BLOCKED = (401, 403)
 #   "gated"        —— 掛在 API Gateway 上、authorizer 生效。無 token 與 user 應被擋、admin 應通過。
 #   "route-missing" —— 路由根本不存在，API Gateway 對所有人回 403 Missing Authentication Token，
 #                      連 admin 也進不去。這是已知缺口，不是 authorizer 的功勞，故獨立標記：
-#                      admin-moderation → /admin/moderation/reports 子路徑不存在（§3.2，待 P2）
 #                      event-commands   → 是 Lambda URL(AuthType=NONE)，不在 REST API 上，
 #                                         authorizer 掛不上去（§5.2 不符項②，待 P3）
 # (Lambda 名, HTTP method, HTTP 路徑, 事件型別, http 模式)
@@ -68,7 +68,7 @@ TARGETS = [
     ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis",       "V1", "gated"),
     ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/dashboard/stats", "V1", "gated"),
     ("ryojaku-stg-admin-logs",               "GET",  "/admin/logs",           "V1", "gated"),
-    ("ryojaku-stg-admin-moderation",         "GET",  "/admin/moderation/reports", "V1", "route-missing"),
+    ("ryojaku-stg-admin-moderation",         "GET",  "/admin/moderation/reports", "V1", "gated"),
     ("ryojaku-stg-admin-point-history",      "GET",  "/admin/point-history",  "V1", "gated"),
     ("ryojaku-stg-admin-push-all",           "POST", "/admin/push-all",       "V1", "gated"),
     ("ryojaku-stg-admin-users",              "GET",  "/admin/users",          "V1", "gated"),
@@ -169,7 +169,7 @@ def invoke_probe(fn: str, method: str, path: str, kind: str, token: str):
 def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
     """P1：authorizer 層。gated 者無 token/user 被擋、admin 通過；route-missing 者三者皆 403。"""
     if mode == "route-missing":
-        # 這裡刻意連 admin 也斷言 403：等 P2／P3 把路由補好，本行會 fail，
+        # 這裡刻意連 admin 也斷言 403：等 P3 把 route-missing 端點搬進 REST API，本行會 fail，
         # 提醒把該支從 route-missing 改回 gated，而不是讓已修好的缺口悄悄留著標記。
         for who, code in (("無 token", none_code), ("user", user_code), ("admin", admin_code)):
             if code != 403:
@@ -226,7 +226,7 @@ def main():
     if missing:
         names = ", ".join(t[0].replace("ryojaku-stg-", "") for t in TARGETS if t[4] == "route-missing")
         print(f"⚠️  另有 {missing} 支路由不存在、authorizer 掛不上（{names}）—— "
-              f"目前只靠 P0 程式碼閘防守，待 P2／P3 處理（設計冊 §5.2）")
+              f"目前只靠 P0 程式碼閘防守，待 P3 處理（設計冊 §5.2）")
     return 0
 
 

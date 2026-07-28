@@ -77,7 +77,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_moderation",
       "apiType": "REST_V1",
       "method": "ANY",
-      "path": "/admin/moderation?",
+      "path": "/admin/moderation/{proxy+}?",
       "auth": "admin",
       "tables": [
         "Users",

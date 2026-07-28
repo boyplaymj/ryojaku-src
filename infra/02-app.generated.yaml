@@ -312,7 +312,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: '/admin/moderation'
+            Path: '/admin/moderation/{proxy+}'
             Method: any
             Auth:
               Authorizer: RyojakuAdminAuth
