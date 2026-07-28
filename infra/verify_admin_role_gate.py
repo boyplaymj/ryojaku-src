@@ -37,9 +37,17 @@ REST_BASE = "https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg"
 # HTTP API uses an explicit stg stage, not $default.
 HTTP_BASE = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com/stg"
 
-# authorizer 目前對「沒 token」與「有效 user token 但非 admin」都回 errors.New("Unauthorized")，
-# API Gateway 兩者都映射成 401。設計冊 §5 的 P1 驗收要求 user token 是 403（要回明確的 Deny
-# policy 才拿得到），此項待拍板 —— 見 §5.2 不符項①。這裡先釘 401，改掉時本腳本會 fail。
+# authorizer 對「沒 token」與「有效 user token 但非 admin」都回 errors.New("Unauthorized")，
+# API Gateway 兩者都映射成 401、不區分 —— 這是**已拍板的設計**，不是待修的 bug。
+#
+# 設計冊 §5 原訂 P1 驗收是「user token 403」，2026-07-28 以決策 D8 推翻，改為維持 401：
+#   ① 401 不透露「你的 token 有效、只是不是 admin」，資訊洩漏較少。
+#   ② 原本擔心的「Console 登入迴圈」經查不成立 —— Console 的 adminToken 只可能來自
+#      /admin/login，而該支只發給 AdminUsers 裡的帳號，一般使用者的 token 進不到那個欄位。
+#
+# ⚠️ 若你看到這兩個常數相同、想把 HTTP_EXPECT_USER 改成 403「修好它」—— 別改，
+#    先讀設計冊 D8 與 §5.2。要 403 得讓 authorizer 回明確的 Deny policy（回 error 一律 401），
+#    那等於推翻 D8，是決策不是修 bug。
 HTTP_EXPECT_NO_TOKEN = 401
 HTTP_EXPECT_USER = 401
 
@@ -172,7 +180,7 @@ def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
         bad.append(f"[HTTP] {fn}: 無 token 得到 {none_code} (want {HTTP_EXPECT_NO_TOKEN})")
     if user_code != HTTP_EXPECT_USER:
         bad.append(f"[HTTP] {fn}: user token 得到 {user_code} (want {HTTP_EXPECT_USER})"
-                   f"{' —— 若已改成回 Deny policy，請把 HTTP_EXPECT_USER 改成 403' if user_code == 403 else ''}")
+                   f"{' —— authorizer 若已刻意改回 Deny policy(推翻設計冊 D8)，才把 HTTP_EXPECT_USER 改 403' if user_code == 403 else ''}")
     if admin_code in BLOCKED:
         bad.append(f"[HTTP] {fn}: admin token 被擋下 ({admin_code})，authorizer 應放行")
 
