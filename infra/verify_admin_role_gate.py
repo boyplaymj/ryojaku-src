@@ -61,19 +61,24 @@ BLOCKED = (401, 403)
 #                      連 admin 也進不去。這是已知缺口，不是 authorizer 的功勞，故獨立標記：
 #                      event-commands   → 是 Lambda URL(AuthType=NONE)，不在 REST API 上，
 #                                         authorizer 掛不上去（§5.2 不符項②，待 P3）
+# ⚠️ 路徑欄自 P2 起一律填「Console (`admin_frontend/src/services/api.ts`) 實際呼叫的路徑」，
+#    不是我方 IaC 曾經發明的路徑。這樣本腳本同時也是 §3.2 路由對齊的回歸網：任何一條被改回
+#    IaC 自創路徑，這裡就會變成 403 Missing Authentication Token 而 fail。
 # (Lambda 名, HTTP method, HTTP 路徑, 事件型別, http 模式)
 TARGETS = [
     ("ryojaku-stg-admin-activities",         "GET",  "/admin/activities",     "V2", "gated"),
     ("ryojaku-stg-admin-admins",             "GET",  "/admin/admins",         "V1", "gated"),
-    ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis",       "V1", "gated"),
-    ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/dashboard/stats", "V1", "gated"),
+    ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis/users", "V1", "gated"),
+    ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/stats",         "V1", "gated"),
     ("ryojaku-stg-admin-logs",               "GET",  "/admin/logs",           "V1", "gated"),
     ("ryojaku-stg-admin-moderation",         "GET",  "/admin/moderation/reports", "V1", "gated"),
-    ("ryojaku-stg-admin-point-history",      "GET",  "/admin/point-history",  "V1", "gated"),
+    ("ryojaku-stg-admin-point-history",      "GET",  "/admin/users/points/history", "V1", "gated"),
     ("ryojaku-stg-admin-push-all",           "POST", "/admin/push-all",       "V1", "gated"),
     ("ryojaku-stg-admin-users",              "GET",  "/admin/users",          "V1", "gated"),
-    ("ryojaku-stg-admin-versions",           "GET",  "/admin/versions",       "V1", "gated"),
+    ("ryojaku-stg-admin-versions",           "GET",  "/admin/config/version", "V1", "gated"),
     ("ryojaku-stg-admin-vouchers",           "GET",  "/admin/vouchers",       "V1", "gated"),
+    # vouchers 的 bare 與子路徑都要活（bare GET 列表、子路徑 POST update/delete），故多測一條。
+    ("ryojaku-stg-admin-vouchers",           "POST", "/admin/vouchers/update", "V1", "gated"),
     ("ryojaku-stg-event-commands",           "GET",  "/event-commands",       "V1", "route-missing"),
 ]
 
@@ -214,6 +219,9 @@ def main():
         check_invoke(fn, iu, ia, iu_body, bad)
 
     print("-" * 96)
+    # P0 是「每支 lambda 的程式碼閘」，P1 是「每條路由的 authorizer」——
+    # vouchers 有兩條路由但只有一支 lambda，故兩者分別以「相異函式數」與「路由數」計。
+    fns = len({t[0] for t in TARGETS})
     gated = sum(1 for t in TARGETS if t[4] == "gated")
     missing = len(TARGETS) - gated
     if bad:
@@ -221,8 +229,8 @@ def main():
         for b in bad:
             print("   " + b)
         return 1
-    print(f"✅ P0 程式碼閘 {len(TARGETS)}/{len(TARGETS)}：user token 一律 403、無 panic、admin 未被擋")
-    print(f"✅ P1 authorizer {gated}/{gated}：無 token 與 user token 皆擋下、admin 通過")
+    print(f"✅ P0 程式碼閘 {fns}/{fns} 支：user token 一律 403、無 panic、admin 未被擋")
+    print(f"✅ P1 authorizer {gated}/{gated} 條路由：無 token 與 user token 皆擋下、admin 通過")
     if missing:
         names = ", ".join(t[0].replace("ryojaku-stg-", "") for t in TARGETS if t[4] == "route-missing")
         print(f"⚠️  另有 {missing} 支路由不存在、authorizer 掛不上（{names}）—— "

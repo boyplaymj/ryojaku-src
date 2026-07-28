@@ -243,7 +243,11 @@ HTTP_AUTHZ_PERMISSION = """
 
 def fn_block(f):
     lid = logical(f["name"])
-    path = f["path"].rstrip("?")
+    # path 允許以逗號列多條（同一支 lambda 掛多個路由）。用於「bare 路徑與子路徑都要」的支：
+    # 例如 admin-vouchers 的 GET /admin/vouchers 與 POST /admin/vouchers/{update,delete}
+    # —— 只留 {proxy+} 會讓 bare 消失，只留 bare 則子路徑 403。單條時行為與過去完全相同
+    # （事件鍵仍是 Rest0/Rest1…，不會讓既有函式的 generated yaml 產生無謂 diff）。
+    paths = [p.strip().rstrip("?") for p in f["path"].split(",") if p.strip()]
     # 預編產物：go build 出的 arm64 bootstrap 放在 build/<art>/bootstrap
     # (SAM makefile builder 會把單一 function 葉目錄複製到 scratch，失去 go module
     #  根、解不到跨套件 shared import；故改用預編 zip artifact，build 由 build_all.sh 控。)
@@ -259,30 +263,36 @@ def fn_block(f):
     authz = authorizer_for(f)
     if ev == "REST_V1":
         b.append("      Events:")
-        for i, m in enumerate(methods):
-            b += [f"        Rest{i}:", "          Type: Api"]
-            if authz:
-                b += ["          Properties:",
-                      "            RestApiId: !Ref RestApi",
-                      f"            Path: '{path}'",
-                      f"            Method: {m.lower()}",
-                      "            Auth:",
-                      f"              Authorizer: {authz}"]
-            else:
-                b += [f"          Properties: {{ RestApiId: !Ref RestApi, Path: '{path}', Method: {m.lower()} }}"]
+        i = 0
+        for path in paths:
+            for m in methods:
+                b += [f"        Rest{i}:", "          Type: Api"]
+                if authz:
+                    b += ["          Properties:",
+                          "            RestApiId: !Ref RestApi",
+                          f"            Path: '{path}'",
+                          f"            Method: {m.lower()}",
+                          "            Auth:",
+                          f"              Authorizer: {authz}"]
+                else:
+                    b += [f"          Properties: {{ RestApiId: !Ref RestApi, Path: '{path}', Method: {m.lower()} }}"]
+                i += 1
     elif ev == "HTTP_V2":
         b.append("      Events:")
-        for i, m in enumerate(methods):
-            b += [f"        Http{i}:", "          Type: HttpApi"]
-            if authz:
-                b += ["          Properties:",
-                      "            ApiId: !Ref HttpApi",
-                      f"            Path: '{path}'",
-                      f"            Method: {m.upper()}",
-                      "            Auth:",
-                      f"              Authorizer: {authz}"]
-            else:
-                b += [f"          Properties: {{ ApiId: !Ref HttpApi, Path: '{path}', Method: {m.upper()} }}"]
+        i = 0
+        for path in paths:
+            for m in methods:
+                b += [f"        Http{i}:", "          Type: HttpApi"]
+                if authz:
+                    b += ["          Properties:",
+                          "            ApiId: !Ref HttpApi",
+                          f"            Path: '{path}'",
+                          f"            Method: {m.upper()}",
+                          "            Auth:",
+                          f"              Authorizer: {authz}"]
+                else:
+                    b += [f"          Properties: {{ ApiId: !Ref HttpApi, Path: '{path}', Method: {m.upper()} }}"]
+                i += 1
     elif ev == "AUTHORIZER":
         # authorizer 本身不掛任何路由；它被 RestApi / HttpApi 的 Auth 區塊以 GetAtt 引用。
         pass

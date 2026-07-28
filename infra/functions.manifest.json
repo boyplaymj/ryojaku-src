@@ -28,7 +28,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_analysis",
       "apiType": "REST_V1",
       "method": "GET",
-      "path": "/admin/analysis?",
+      "path": "/admin/analysis/{proxy+}?",
       "auth": "admin",
       "tables": [
         "Games",
@@ -42,7 +42,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_dashboard_get_stats",
       "apiType": "REST_V1",
       "method": "GET",
-      "path": "/admin/dashboard/stats?",
+      "path": "/admin/stats?",
       "auth": "admin",
       "tables": [
         "Games",
@@ -90,7 +90,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_point_history",
       "apiType": "REST_V1",
       "method": "GET",
-      "path": "/admin/point-history?",
+      "path": "/admin/users/points/history?",
       "auth": "admin",
       "tables": [
         "Users",
@@ -126,7 +126,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_versions",
       "apiType": "REST_V1",
       "method": "ANY",
-      "path": "/admin/versions?",
+      "path": "/admin/config/version?",
       "auth": "admin",
       "tables": [
         "AdminConfigs"
@@ -137,7 +137,7 @@
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_vouchers",
       "apiType": "REST_V1",
       "method": "ANY",
-      "path": "/admin/vouchers?",
+      "path": "/admin/vouchers?,/admin/vouchers/{proxy+}?",
       "auth": "admin",
       "tables": [
         "Vouchers",

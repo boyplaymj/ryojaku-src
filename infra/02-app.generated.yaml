@@ -185,7 +185,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: '/admin/analysis'
+            Path: '/admin/analysis/{proxy+}'
             Method: get
             Auth:
               Authorizer: RyojakuAdminAuth
@@ -218,7 +218,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: '/admin/dashboard/stats'
+            Path: '/admin/stats'
             Method: get
             Auth:
               Authorizer: RyojakuAdminAuth
@@ -345,7 +345,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: '/admin/point-history'
+            Path: '/admin/users/points/history'
             Method: get
             Auth:
               Authorizer: RyojakuAdminAuth
@@ -444,7 +444,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: '/admin/versions'
+            Path: '/admin/config/version'
             Method: any
             Auth:
               Authorizer: RyojakuAdminAuth
@@ -478,6 +478,14 @@ Resources:
           Properties:
             RestApiId: !Ref RestApi
             Path: '/admin/vouchers'
+            Method: any
+            Auth:
+              Authorizer: RyojakuAdminAuth
+        Rest1:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/vouchers/{proxy+}'
             Method: any
             Auth:
               Authorizer: RyojakuAdminAuth
