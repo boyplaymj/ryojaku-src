@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# P0 驗收：admin 端點的 role 閘（設計冊 tools/ryojaku-admin-migration/DESIGN.md §3.1）。
+# P0 ＋ P1 驗收：admin 端點的 role 閘與 authorizer
+# （設計冊 tools/ryojaku-admin-migration/DESIGN.md §3.1、§5.1、§5.2）。
 #
 # 為什麼自己簽 token 而不是走 /admin/login：
 #   我們手上沒有 s2admin 的明文密碼，但有 SSM 的 JWT_SECRET（deploy_app.sh 也是這樣取）。
@@ -8,12 +9,18 @@
 #   claims 形狀比照真貨：user = shared.GenerateToken（userId/email/sub/exp/iat，無 role）、
 #   admin = mahjongclub_admin_login（sub/role/exp）。
 #
-# 兩條路都測：
-#   HTTP  —— 攻擊者實際看得到的路徑（部分端點因 §3.2 路由不齊會是 404/403-Missing-Auth，屬預期）。
-#   INVOKE —— 直接對 Lambda 丟合成事件，繞開路由，確保 12 支「每一支」的程式碼閘都驗到，
-#            並且能分辨 502(panic) 與 403(擋下)：panic 會讓 invoke 回 FunctionError=Unhandled。
+# 兩條路都測，兩條都斷言：
+#   HTTP  —— 攻擊者實際看得到的路徑，驗的是 P1 的 authorizer（擋在 Lambda 之前）。
+#            三種身分都打：不帶 token／user token／admin token。
+#   INVOKE —— 直接對 Lambda 丟合成事件，繞開路由，驗的是 P0 的程式碼閘（縱深防禦的第二層），
+#            確保 12 支「每一支」都驗到，且能分辨 502(panic) 與 403(擋下)：
+#            panic 會讓 invoke 回 FunctionError=Unhandled。
 #
-# 用法： python3 verify_admin_role_gate.py [--before|--after]
+# ⚠️ 本檔的期望值是「釘住現況」而非「照理想寫」。下面兩個常數與 route-missing 標記
+#    記錄的是 2026-07-28 的實測行為；當 authorizer 改回 Deny policy、或 P2 把路由補齊時，
+#    本腳本會**主動 fail**，逼人回來更新期望值 —— 這是刻意的，不要改成寬鬆比對放過去。
+#
+# 用法： python3 verify_admin_role_gate.py [任意標籤]
 
 import base64
 import hashlib
@@ -30,20 +37,36 @@ REST_BASE = "https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg"
 # HTTP API uses an explicit stg stage, not $default.
 HTTP_BASE = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com/stg"
 
-# (Lambda 名, HTTP method, HTTP 路徑, 事件型別)
+# authorizer 目前對「沒 token」與「有效 user token 但非 admin」都回 errors.New("Unauthorized")，
+# API Gateway 兩者都映射成 401。設計冊 §5 的 P1 驗收要求 user token 是 403（要回明確的 Deny
+# policy 才拿得到），此項待拍板 —— 見 §5.2 不符項①。這裡先釘 401，改掉時本腳本會 fail。
+HTTP_EXPECT_NO_TOKEN = 401
+HTTP_EXPECT_USER = 401
+
+# 擋下＝401 或 403 都算；放行＝兩者皆非（有走到業務層，可能是 200 也可能是 400 缺參數）。
+BLOCKED = (401, 403)
+
+# http 欄位：
+#   "gated"        —— 掛在 API Gateway 上、authorizer 生效。無 token 與 user 應被擋、admin 應通過。
+#   "route-missing" —— 路由根本不存在，API Gateway 對所有人回 403 Missing Authentication Token，
+#                      連 admin 也進不去。這是已知缺口，不是 authorizer 的功勞，故獨立標記：
+#                      admin-moderation → /admin/moderation/reports 子路徑不存在（§3.2，待 P2）
+#                      event-commands   → 是 Lambda URL(AuthType=NONE)，不在 REST API 上，
+#                                         authorizer 掛不上去（§5.2 不符項②，待 P3）
+# (Lambda 名, HTTP method, HTTP 路徑, 事件型別, http 模式)
 TARGETS = [
-    ("ryojaku-stg-admin-activities",         "GET",  "/admin/activities",     "V2"),
-    ("ryojaku-stg-admin-admins",             "GET",  "/admin/admins",         "V1"),
-    ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis",       "V1"),
-    ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/dashboard/stats", "V1"),
-    ("ryojaku-stg-admin-logs",               "GET",  "/admin/logs",           "V1"),
-    ("ryojaku-stg-admin-moderation",         "GET",  "/admin/moderation/reports", "V1"),
-    ("ryojaku-stg-admin-point-history",      "GET",  "/admin/point-history",  "V1"),
-    ("ryojaku-stg-admin-push-all",           "POST", "/admin/push-all",       "V1"),
-    ("ryojaku-stg-admin-users",              "GET",  "/admin/users",          "V1"),
-    ("ryojaku-stg-admin-versions",           "GET",  "/admin/versions",       "V1"),
-    ("ryojaku-stg-admin-vouchers",           "GET",  "/admin/vouchers",       "V1"),
-    ("ryojaku-stg-event-commands",           "GET",  "/event-commands",       "V1"),
+    ("ryojaku-stg-admin-activities",         "GET",  "/admin/activities",     "V2", "gated"),
+    ("ryojaku-stg-admin-admins",             "GET",  "/admin/admins",         "V1", "gated"),
+    ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis",       "V1", "gated"),
+    ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/dashboard/stats", "V1", "gated"),
+    ("ryojaku-stg-admin-logs",               "GET",  "/admin/logs",           "V1", "gated"),
+    ("ryojaku-stg-admin-moderation",         "GET",  "/admin/moderation/reports", "V1", "route-missing"),
+    ("ryojaku-stg-admin-point-history",      "GET",  "/admin/point-history",  "V1", "gated"),
+    ("ryojaku-stg-admin-push-all",           "POST", "/admin/push-all",       "V1", "gated"),
+    ("ryojaku-stg-admin-users",              "GET",  "/admin/users",          "V1", "gated"),
+    ("ryojaku-stg-admin-versions",           "GET",  "/admin/versions",       "V1", "gated"),
+    ("ryojaku-stg-admin-vouchers",           "GET",  "/admin/vouchers",       "V1", "gated"),
+    ("ryojaku-stg-event-commands",           "GET",  "/event-commands",       "V1", "route-missing"),
 ]
 
 
@@ -77,11 +100,13 @@ def make_tokens(secret: str):
     return user, admin
 
 
-def http_probe(method: str, path: str, kind: str, token: str):
+def http_probe(method: str, path: str, kind: str, token):
+    """token=None 代表完全不帶 Authorization header。"""
     base = HTTP_BASE if kind == "V2" else REST_BASE
     data = b"{}" if method == "POST" else None
     req = urllib.request.Request(base + path, data=data, method=method)
-    req.add_header("Authorization", "Bearer " + token)
+    if token is not None:
+        req.add_header("Authorization", "Bearer " + token)
     if data:
         req.add_header("Content-Type", "application/json")
     try:
@@ -133,35 +158,67 @@ def invoke_probe(fn: str, method: str, path: str, kind: str, token: str):
     return resp.get("statusCode", "?"), str(resp.get("body", ""))[:100]
 
 
+def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
+    """P1：authorizer 層。gated 者無 token/user 被擋、admin 通過；route-missing 者三者皆 403。"""
+    if mode == "route-missing":
+        # 這裡刻意連 admin 也斷言 403：等 P2／P3 把路由補好，本行會 fail，
+        # 提醒把該支從 route-missing 改回 gated，而不是讓已修好的缺口悄悄留著標記。
+        for who, code in (("無 token", none_code), ("user", user_code), ("admin", admin_code)):
+            if code != 403:
+                bad.append(f"[HTTP] {fn}: {who} 得到 {code}，"
+                           f"但此支標記為 route-missing(預期三者皆 403)。路由若已補好請改標記為 gated")
+        return
+    if none_code != HTTP_EXPECT_NO_TOKEN:
+        bad.append(f"[HTTP] {fn}: 無 token 得到 {none_code} (want {HTTP_EXPECT_NO_TOKEN})")
+    if user_code != HTTP_EXPECT_USER:
+        bad.append(f"[HTTP] {fn}: user token 得到 {user_code} (want {HTTP_EXPECT_USER})"
+                   f"{' —— 若已改成回 Deny policy，請把 HTTP_EXPECT_USER 改成 403' if user_code == 403 else ''}")
+    if admin_code in BLOCKED:
+        bad.append(f"[HTTP] {fn}: admin token 被擋下 ({admin_code})，authorizer 應放行")
+
+
+def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list):
+    """P0：Lambda 內的程式碼閘。繞開路由，12 支每支都要擋住 user token 且不 panic。"""
+    if user_code != 403:
+        bad.append(f"[INVOKE] {fn}: user token 得到 {user_code} (want 403) {user_body}")
+    if admin_code in (403, "PANIC"):
+        bad.append(f"[INVOKE] {fn}: admin token 得到 {admin_code} (不該被擋)")
+
+
 def main():
     label = sys.argv[1] if len(sys.argv) > 1 else "--run"
     secret = get_secret()
     user_tok, admin_tok = make_tokens(secret)
 
     print(f"=== {label}  ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===")
-    print(f"{'function':38} {'H:user':>8} {'H:admin':>8} {'I:user':>8} {'I:admin':>8}")
-    print("-" * 78)
+    print(f"{'function':38} {'H:none':>7} {'H:user':>7} {'H:admin':>7} "
+          f"{'I:user':>7} {'I:admin':>7}  mode")
+    print("-" * 96)
     bad = []
-    for fn, method, path, kind in TARGETS:
+    for fn, method, path, kind, mode in TARGETS:
+        hn, _ = http_probe(method, path, kind, None)
         hu, _ = http_probe(method, path, kind, user_tok)
         ha, _ = http_probe(method, path, kind, admin_tok)
         iu, iu_body = invoke_probe(fn, method, path, kind, user_tok)
         ia, _ = invoke_probe(fn, method, path, kind, admin_tok)
-        print(f"{fn:38} {hu!s:>8} {ha!s:>8} {iu!s:>8} {ia!s:>8}")
-        # 驗收條件只看 INVOKE 那兩欄（HTTP 受 §3.2 路由不齊影響，另階段處理）：
-        #   user token 必須是 403；admin token 不得是 403/PANIC。
-        if iu != 403:
-            bad.append(f"{fn}: user token 得到 {iu} (want 403) {iu_body}")
-        if ia in (403, "PANIC"):
-            bad.append(f"{fn}: admin token 得到 {ia} (不該被擋)")
+        print(f"{fn:38} {hn!s:>7} {hu!s:>7} {ha!s:>7} {iu!s:>7} {ia!s:>7}  {mode}")
+        check_http(fn, mode, hn, hu, ha, bad)
+        check_invoke(fn, iu, ia, iu_body, bad)
 
-    print("-" * 78)
+    print("-" * 96)
+    gated = sum(1 for t in TARGETS if t[4] == "gated")
+    missing = len(TARGETS) - gated
     if bad:
-        print("❌ 未達 P0 驗收：")
+        print(f"❌ 未通過（{len(bad)} 項）：")
         for b in bad:
             print("   " + b)
         return 1
-    print("✅ 12/12：user token 一律 403、admin token 均未被擋、無 panic")
+    print(f"✅ P0 程式碼閘 {len(TARGETS)}/{len(TARGETS)}：user token 一律 403、無 panic、admin 未被擋")
+    print(f"✅ P1 authorizer {gated}/{gated}：無 token 與 user token 皆擋下、admin 通過")
+    if missing:
+        names = ", ".join(t[0].replace("ryojaku-stg-", "") for t in TARGETS if t[4] == "route-missing")
+        print(f"⚠️  另有 {missing} 支路由不存在、authorizer 掛不上（{names}）—— "
+              f"目前只靠 P0 程式碼閘防守，待 P2／P3 處理（設計冊 §5.2）")
     return 0
 
 
