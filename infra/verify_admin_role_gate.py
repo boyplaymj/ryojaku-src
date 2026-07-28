@@ -27,7 +27,8 @@ import urllib.request
 
 REGION = "ap-southeast-1"
 REST_BASE = "https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg"
-HTTP_BASE = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com"
+# HTTP API uses an explicit stg stage, not $default.
+HTTP_BASE = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com/stg"
 
 # (Lambda 名, HTTP method, HTTP 路徑, 事件型別)
 TARGETS = [
