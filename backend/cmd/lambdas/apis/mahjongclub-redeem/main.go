@@ -41,9 +41,9 @@ func redeemTablePrefix() string {
 // 缺 secret 時絕不能退化成「不驗證就放行」（設計冊 §3.3）。故 fail-closed 到 log.Fatal，
 // 讓 Lambda 冷啟直接失敗、端點整支不可用，而不是靜默變成無驗證。
 func requireJWTSecret() string {
-	s := os.Getenv("JWT_SECRET")
+	s := os.Getenv("ADMIN_JWT_SECRET")
 	if s == "" {
-		log.Fatal("JWT_SECRET is required")
+		log.Fatal("ADMIN_JWT_SECRET is required")
 	}
 	return s
 }

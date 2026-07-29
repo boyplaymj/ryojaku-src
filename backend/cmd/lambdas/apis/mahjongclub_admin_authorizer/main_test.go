@@ -18,7 +18,7 @@ func signedToken(t *testing.T, claims jwt.MapClaims, secret string) string {
 }
 
 func TestVerifyAdminTokenAllowsAdminRoles(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("ADMIN_JWT_SECRET", "test-secret")
 	token := signedToken(t, jwt.MapClaims{
 		"sub":  "s2admin",
 		"role": "super_admin",
@@ -35,7 +35,7 @@ func TestVerifyAdminTokenAllowsAdminRoles(t *testing.T) {
 }
 
 func TestVerifyAdminTokenRejectsUserTokenWithoutRole(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("ADMIN_JWT_SECRET", "test-secret")
 	token := signedToken(t, jwt.MapClaims{
 		"userId": "APP_123",
 		"email":  "user@example.com",
@@ -49,19 +49,19 @@ func TestVerifyAdminTokenRejectsUserTokenWithoutRole(t *testing.T) {
 }
 
 func TestVerifyAdminTokenRejectsMissingSecret(t *testing.T) {
-	old := os.Getenv("JWT_SECRET")
-	t.Setenv("JWT_SECRET", "")
+	old := os.Getenv("ADMIN_JWT_SECRET")
+	t.Setenv("ADMIN_JWT_SECRET", "")
 	if old == "" {
-		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("ADMIN_JWT_SECRET")
 	}
 
 	if _, err := verifyAdminToken("not-a-token"); err == nil {
-		t.Fatal("verifyAdminToken should reject missing JWT_SECRET")
+		t.Fatal("verifyAdminToken should reject missing ADMIN_JWT_SECRET")
 	}
 }
 
 func TestVerifyAdminTokenRejectsUnexpectedSigningMethod(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("ADMIN_JWT_SECRET", "test-secret")
 	token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
 		"sub":  "s2admin",
 		"role": "super_admin",

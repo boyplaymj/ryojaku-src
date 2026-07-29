@@ -132,7 +132,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (Respon
 	}
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-	jwtSecret := os.Getenv("JWT_SECRET")
+	jwtSecret := os.Getenv("ADMIN_JWT_SECRET")
 	if jwtSecret == "" {
 		return errorResponseLocal(headers, http.StatusInternalServerError, "Server auth misconfigured"), nil
 	}

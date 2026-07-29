@@ -212,11 +212,11 @@ func main() {
 	lambda.Start(handler)
 }
 
-// requireJWTSecret：fail-closed 讀 JWT_SECRET(移除 default-secret-change-me 死 fallback,AUTH_SYSTEM_DESIGN §6.1)。
+// requireJWTSecret：fail-closed 讀 ADMIN_JWT_SECRET(移除 default-secret-change-me 死 fallback,AUTH_SYSTEM_DESIGN §6.1)。
 func requireJWTSecret() string {
-	s := os.Getenv("JWT_SECRET")
+	s := os.Getenv("ADMIN_JWT_SECRET")
 	if s == "" {
-		panic("JWT_SECRET not configured — refusing admin JWT with a known default")
+		panic("ADMIN_JWT_SECRET not configured — refusing admin JWT with a known default")
 	}
 	return s
 }

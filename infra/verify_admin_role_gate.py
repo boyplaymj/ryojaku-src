@@ -102,22 +102,52 @@ def sign(payload: dict, secret: str) -> str:
     return f"{head}.{body}.{b64(mac)}"
 
 
-def get_secret() -> str:
+def _ssm(name: str) -> str:
     out = subprocess.run(
         ["aws", "ssm", "get-parameter", "--region", REGION,
-         "--name", "/ryojaku/stg/JWT_SECRET", "--with-decryption",
+         "--name", name, "--with-decryption",
          "--query", "Parameter.Value", "--output", "text"],
         capture_output=True, text=True, check=True)
     return out.stdout.strip()
 
 
-def make_tokens(secret: str):
+def get_secret() -> str:
+    """user 端簽章金鑰。app 使用者的 token 用這把簽。"""
+    return _ssm("/ryojaku/stg/JWT_SECRET")
+
+
+def get_admin_secret() -> str:
+    """D5：admin 端專用簽章金鑰。與 user 那把分離後，兩者互不通用。"""
+    return _ssm("/ryojaku/stg/ADMIN_JWT_SECRET")
+
+
+def make_tokens(secret: str, admin_secret: str = None):
+    """回 (user, admin, forged) 三種 token。
+
+    D5 之前 user 與 admin 共用同一把金鑰，只靠 role claim 區分 —— 那代表「任何能拿到
+    JWT_SECRET 的地方（或任何 user token 簽發路徑上的疏漏）都可能被拿去簽出 admin token」。
+    分離之後，第三種 token（forged）就是這道防線的探針：
+
+        forged = 用 **user 的金鑰** 簽一個 role=super_admin 的 token
+
+    D5 之前它會被完全接受（簽章對、role 對）；D5 之後必須在驗簽階段就被打掉。
+    這是本腳本唯一能證明「金鑰真的分離了」的斷言 —— 只看 admin token 能通過是不夠的，
+    那在共用金鑰時也會通過。
+    """
+    if admin_secret is None:
+        admin_secret = secret
     now = int(time.time())
     exp = now + 3600
     user = sign({"userId": "p0-probe-user", "email": "p0probe@example.com",
                  "sub": "p0-probe-user", "iat": now, "exp": exp}, secret)
-    admin = sign({"sub": "s2admin", "role": "super_admin", "exp": exp}, secret)
-    return user, admin
+    admin = sign({"sub": "s2admin", "role": "super_admin", "exp": exp}, admin_secret)
+    forged = sign({"sub": "s2admin", "role": "super_admin", "exp": exp}, secret)
+    # norole：用 **admin 金鑰** 簽、但沒有 role claim。
+    # D5 之後 user token 在驗簽就被打掉（401），再也走不到 P0 的 role 閘 ——
+    # 若不補這一種，P0 那道「缺 role claim 不可 panic、要回 403」的回歸網會被 D5 悄悄退休。
+    # 這正是 P0 當初修的形狀（裸斷言 claims["role"].(string) 會 panic 成 502）。
+    norole = sign({"sub": "s2admin", "exp": exp}, admin_secret)
+    return user, admin, forged, norole
 
 
 def http_probe(method: str, path: str, kind: str, token):
@@ -198,34 +228,73 @@ def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
 
 
 def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list):
-    """P0：Lambda 內的程式碼閘。繞開路由，12 支每支都要擋住 user token 且不 panic。"""
-    if user_code != 403:
-        bad.append(f"[INVOKE] {fn}: user token 得到 {user_code} (want 403) {user_body}")
+    """P0：Lambda 內的程式碼閘。繞開路由，每支都要擋住 user token 且不 panic。
+
+    ⚠️ D5 之後期望值由「403」放寬為「401 或 403」：兩把金鑰分離後，user token 在**驗簽階段**
+    就被打掉（401），根本走不到 role 閘（403）。兩者都是「擋下且沒 panic」，都算通過。
+    真正還在驗 role 閘的是 check_norole —— 那支用 admin 金鑰簽但缺 role claim，
+    是 D5 之後唯一打得到程式碼閘的形狀。
+    """
+    if user_code not in BLOCKED:
+        bad.append(f"[INVOKE] {fn}: user token 得到 {user_code} (want 401/403) {user_body}")
+    if user_code == "PANIC":
+        bad.append(f"[INVOKE] {fn}: user token 造成 panic {user_body}")
     if admin_code in (403, "PANIC"):
         bad.append(f"[INVOKE] {fn}: admin token 得到 {admin_code} (不該被擋)")
+
+
+def check_norole(fn: str, code, body: str, bad: list):
+    """P0 的真正回歸網（D5 後）：admin 金鑰簽、但缺 role claim → 必須 403，且絕不 panic。"""
+    if code == "PANIC":
+        bad.append(f"[NOROLE] {fn}: 缺 role claim 造成 panic（P0 的 502 回歸了）{body}")
+    elif code != 403:
+        bad.append(f"[NOROLE] {fn}: 缺 role claim 得到 {code} (want 403) {body}")
+
+
+def check_forged(fn: str, http_code, invoke_code, invoke_body: str, bad: list):
+    """D5：用 **user 金鑰** 簽的 role=super_admin token 必須在驗簽階段就被打掉。
+
+    這是整份腳本裡唯一能證明「兩把金鑰真的分離」的斷言。只驗「admin token 能通過」
+    是不夠的 —— 共用同一把金鑰時它一樣會通過。若哪天有人把 admin 支改回讀 JWT_SECRET，
+    或誤把兩個 SSM 參數設成同一個值，這裡就會 fail。
+    """
+    if http_code not in BLOCKED:
+        bad.append(f"[FORGED/HTTP] {fn}: 用 user 金鑰簽的 super_admin token 得到 {http_code}，"
+                   f"應被擋（D5 金鑰分離失效？檢查該支是否還在讀 JWT_SECRET）")
+    if invoke_code not in (401, 403):
+        bad.append(f"[FORGED/INVOKE] {fn}: 同上，程式碼閘得到 {invoke_code} {invoke_body}")
 
 
 def main():
     label = sys.argv[1] if len(sys.argv) > 1 else "--run"
     secret = get_secret()
-    user_tok, admin_tok = make_tokens(secret)
+    admin_secret = get_admin_secret()
+    if secret == admin_secret:
+        print("❌ D5 未成立：JWT_SECRET 與 ADMIN_JWT_SECRET 相同，金鑰並未分離")
+        return 1
+    user_tok, admin_tok, forged_tok, norole_tok = make_tokens(secret, admin_secret)
 
     print(f"=== {label}  ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===")
-    print(f"{'function':38} {'H:none':>7} {'H:user':>7} {'H:admin':>7} "
-          f"{'I:user':>7} {'I:admin':>7}  mode")
-    print("-" * 96)
+    print(f"{'function':38} {'H:none':>7} {'H:user':>7} {'H:admin':>7} {'H:forge':>7} "
+          f"{'I:user':>7} {'I:admin':>7} {'I:forge':>7} {'I:norole':>8}  mode")
+    print("-" * 122)
     bad = []
     for fn, method, path, kind, mode in TARGETS:
         hn, _ = http_probe(method, path, kind, None)
         hu, _ = http_probe(method, path, kind, user_tok)
         ha, _ = http_probe(method, path, kind, admin_tok)
+        hf, _ = http_probe(method, path, kind, forged_tok)
         iu, iu_body = invoke_probe(fn, method, path, kind, user_tok)
         ia, _ = invoke_probe(fn, method, path, kind, admin_tok)
-        print(f"{fn:38} {hn!s:>7} {hu!s:>7} {ha!s:>7} {iu!s:>7} {ia!s:>7}  {mode}")
+        if_, if_body = invoke_probe(fn, method, path, kind, forged_tok)
+        inr, inr_body = invoke_probe(fn, method, path, kind, norole_tok)
+        print(f"{fn:38} {hn!s:>7} {hu!s:>7} {ha!s:>7} {hf!s:>7} {iu!s:>7} {ia!s:>7} {if_!s:>7} {inr!s:>7}  {mode}")
         check_http(fn, mode, hn, hu, ha, bad)
         check_invoke(fn, iu, ia, iu_body, bad)
+        check_forged(fn, hf, if_, if_body, bad)
+        check_norole(fn, inr, inr_body, bad)
 
-    print("-" * 96)
+    print("-" * 122)
     # P0 是「每支 lambda 的程式碼閘」，P1 是「每條路由的 authorizer」——
     # vouchers 有兩條路由但只有一支 lambda，故兩者分別以「相異函式數」與「路由數」計。
     fns = len({t[0] for t in TARGETS})
@@ -236,7 +305,8 @@ def main():
         for b in bad:
             print("   " + b)
         return 1
-    print(f"✅ P0 程式碼閘 {fns}/{fns} 支：user token 一律 403、無 panic、admin 未被擋")
+    print(f"✅ P0 程式碼閘 {fns}/{fns} 支：缺 role claim 一律 403、無 panic、admin 未被擋")
+    print(f"✅ D5 金鑰分離 {len(TARGETS)}/{len(TARGETS)} 條：用 user 金鑰簽的 super_admin token 一律擋下")
     print(f"✅ P1 authorizer {gated}/{gated} 條路由：無 token 與 user token 皆擋下、admin 通過")
     if missing:
         names = ", ".join(t[0].replace("ryojaku-stg-", "") for t in TARGETS if t[4] == "route-missing")

@@ -29,9 +29,9 @@ func extractBearer(headers map[string]string) string {
 }
 
 func verifyAdminToken(tokenString string) (jwt.MapClaims, error) {
-	secret := os.Getenv("JWT_SECRET")
+	secret := os.Getenv("ADMIN_JWT_SECRET")
 	if secret == "" {
-		return nil, errors.New("JWT_SECRET not configured")
+		return nil, errors.New("ADMIN_JWT_SECRET not configured")
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {

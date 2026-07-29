@@ -139,6 +139,9 @@ Parameters:
   # 帶入 --parameter-overrides；CFN 不允許 ssm-secure 動態引用用在 Lambda 環境變數）。
   EncryptionKey: { Type: String, NoEcho: true }
   JwtSecret: { Type: String, NoEcho: true }
+  # D5：admin token 專用簽章金鑰。與 JwtSecret 分離後，user token 在**密碼學上**就不可能
+  # 被當成 admin token —— 在此之前兩者共用同一把，只靠 role claim 區分。
+  AdminJwtSecret: { Type: String, NoEcho: true }
   VapidPublicKey: { Type: String, NoEcho: true }
   VapidPrivateKey: { Type: String, NoEcho: true }
   VapidSubscriber: { Type: String, NoEcho: true }
@@ -166,6 +169,7 @@ Globals:
         COMMUNITY_BUCKET: !Sub 'ryojaku-${Stage}-community'
         ENCRYPTION_KEY: !Ref EncryptionKey
         JWT_SECRET: !Ref JwtSecret
+        ADMIN_JWT_SECRET: !Ref AdminJwtSecret
         VAPID_PUBLIC_KEY: !Ref VapidPublicKey
         VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
         VAPID_SUBSCRIBER: !Ref VapidSubscriber

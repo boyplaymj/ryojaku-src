@@ -9,6 +9,7 @@ mkdir -p "$TMPDIR"
 get(){ aws ssm get-parameter --region "$REGION" --name "$1" --with-decryption --query 'Parameter.Value' --output text; }
 ENC=$(get /ryojaku/stg/ENCRYPTION_KEY)
 JWT=$(get /ryojaku/stg/JWT_SECRET)
+AJWT=$(get /ryojaku/stg/ADMIN_JWT_SECRET)   # D5：admin 專用簽章金鑰
 VPUB=$(get /ryojaku/stg/VAPID_PUBLIC_KEY)
 VPRIV=$(get /ryojaku/stg/VAPID_PRIVATE_KEY)
 VSUB=$(get /ryojaku/stg/VAPID_SUBSCRIBER)
@@ -30,6 +31,6 @@ exec ~/.local/bin/sam deploy --config-env stg -t 02-app.generated.yaml \
   --no-confirm-changeset --no-fail-on-empty-changeset --resolve-s3 --region "$REGION" \
   --parameter-overrides \
     "TablePrefix=MahjongClubStg_" "Stage=stg" \
-    "EncryptionKey=$ENC" "JwtSecret=$JWT" \
+    "EncryptionKey=$ENC" "JwtSecret=$JWT" "AdminJwtSecret=$AJWT" \
     "VapidPublicKey=$VPUB" "VapidPrivateKey=$VPRIV" "VapidSubscriber=$VSUB" \
     "${EXTRA[@]}"
