@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.tuantuan.app',
+  appId: 'com.boyplaymj.ryojaku',
   appName: '両雀',
   webDir: 'dist'
 };

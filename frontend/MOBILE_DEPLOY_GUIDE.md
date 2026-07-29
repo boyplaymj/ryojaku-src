@@ -1,4 +1,4 @@
-# TuanTuan Mobile App Deployment Guide
+# 両雀 Mobile App Deployment Guide
 
 This guide explains how to turn your React web app into a native iOS and Android app using **Capacitor**.
 
@@ -21,8 +21,8 @@ In your project terminal (VS Code), run these commands:
 # Install Capacitor core and CLI
 npm install @capacitor/core @capacitor/cli
 
-# Initialize Capacitor (Name: TuanTuan, ID: com.tuantuan.app)
-npx cap init TuanTuan com.tuantuan.app
+# Initialize Capacitor (Name: 両雀, ID: com.boyplaymj.ryojaku)
+npx cap init 両雀 com.boyplaymj.ryojaku
 
 # Install Android and iOS platforms
 npm install @capacitor/android @capacitor/ios

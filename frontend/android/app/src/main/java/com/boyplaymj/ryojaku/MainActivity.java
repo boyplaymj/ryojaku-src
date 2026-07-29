@@ -1,4 +1,4 @@
-package com.tuantuan.app;
+package com.boyplaymj.ryojaku;
 
 import com.getcapacitor.BridgeActivity;
 
