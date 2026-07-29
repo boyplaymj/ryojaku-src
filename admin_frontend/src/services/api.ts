@@ -3,9 +3,19 @@
 // Authorization**，等於序號產生與活動指令是無驗證的公開端點。
 // 現已把 /redeem-codes/* 與 /event-commands/* 一併併入我方主 REST API 並掛上 admin authorizer，
 // 故三個位址收斂為一個、requestExternal() 整個移除。
-// （BASE_URL 目前仍寫死指向工程師的 prod，D1 參數化是 P4 的事 —— 但收斂成單一常數後，
-//   P4 只需要改這一行，不必再處理三套位址。）
-export const BASE_URL = 'https://yg7y0xkb50.execute-api.ap-southeast-1.amazonaws.com';
+// P4（決策 D1）：位址改由 build 時的環境變數注入，同一份原始碼可切 staging／prod。
+//
+// **刻意不給預設值**。原本寫死的是工程師的 prod（`yg7y0xkb50`）—— 若在這裡留成 fallback，
+// 一次漏設 mode 的 build 就會產生「看起來正常、實際打到別人正式環境」的 bundle，
+// 而且從畫面上完全看不出來。寧可 build 完一開啟就整頁報錯，也不要靜默打錯環境。
+const rawBaseUrl = import.meta.env.VITE_API_BASE_URL;
+if (!rawBaseUrl) {
+    throw new Error(
+        'VITE_API_BASE_URL 未設定 —— build 請走 deploy.sh（它會注入位址），本機開發請見 .env.example。'
+    );
+}
+// 結尾斜線會讓 BASE_URL + '/admin/...' 串出 '//admin/...'，API Gateway 視為不同路徑而 403。
+export const BASE_URL = rawBaseUrl.replace(/\/+$/, '');
 
 const handleUnauthorized = () => {
     localStorage.removeItem('adminToken');
