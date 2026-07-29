@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mahjongclub-backend/cmd/lambdas/adminrole"
+	"mahjongclub-backend/cmd/lambdas/apicors"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -262,7 +263,9 @@ func deleteAdmin(ctx context.Context, request events.APIGatewayProxyRequest, tab
 }
 
 func main() {
-	lambda.Start(handler)
+	// P5：業務函式的 return 沒帶 CORS 標頭（curl 看不出來、瀏覽器整頁壞）。
+	// 包在邊界統一補，避免逐處 return 補漏。見 §5.7 與 apicors 套件說明。
+	lambda.Start(apicors.WrapV1(handler))
 }
 
 // requireJWTSecret：fail-closed 讀 JWT_SECRET(移除 default-secret-change-me 死 fallback,AUTH_SYSTEM_DESIGN §6.1)。

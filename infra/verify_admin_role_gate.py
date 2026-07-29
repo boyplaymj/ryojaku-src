@@ -66,7 +66,9 @@ BLOCKED = (401, 403)
 #    IaC 自創路徑，這裡就會變成 403 Missing Authentication Token 而 fail。
 # (Lambda 名, HTTP method, HTTP 路徑, 事件型別, http 模式)
 TARGETS = [
-    ("ryojaku-stg-admin-activities",         "GET",  "/admin/activities",     "V2", "gated"),
+    # P5：本支原本掛在 HTTP API(V2)。Console 只有一個 BASE_URL 指向 REST API，
+    # 掛在另一座 API 上等於 Console 永遠打不到 —— 只有真瀏覽器點測會現形，故搬來 REST。
+    ("ryojaku-stg-admin-activities",         "GET",  "/admin/activities",     "V1", "gated"),
     ("ryojaku-stg-admin-admins",             "GET",  "/admin/admins",         "V1", "gated"),
     ("ryojaku-stg-admin-analysis",           "GET",  "/admin/analysis/users", "V1", "gated"),
     ("ryojaku-stg-admin-dashboard-get-stats", "GET",  "/admin/stats",         "V1", "gated"),

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"mahjongclub-backend/cmd/lambdas/adminrole"
+	"mahjongclub-backend/cmd/lambdas/apicors"
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -48,14 +49,18 @@ type ActivityConfig struct {
 	InfoValue string `json:"info_value" dynamodbav:"info_value"`
 }
 
-func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	if svc == nil {
 		cfg, _ := config.LoadDefaultConfig(ctx)
 		svc = dynamodb.NewFromConfig(cfg)
 	}
 
 	// Auth Check
-	claims, err := validateToken(request.Headers["authorization"])
+	authHeader := request.Headers["authorization"]
+	if authHeader == "" {
+		authHeader = request.Headers["Authorization"]
+	}
+	claims, err := validateToken(authHeader)
 	if err != nil {
 		return errorResponse(http.StatusUnauthorized, "Unauthorized")
 	}
@@ -67,7 +72,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) 
 
 	tableName := tablePrefix + "AdminConfigs"
 
-	switch request.RequestContext.HTTP.Method {
+	switch request.HTTPMethod {
 	case "GET":
 		return getActivityConfigs(ctx, tableName)
 	case "POST":
@@ -77,7 +82,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) 
 	}
 }
 
-func getActivityConfigs(ctx context.Context, table string) (events.APIGatewayV2HTTPResponse, error) {
+func getActivityConfigs(ctx context.Context, table string) (events.APIGatewayProxyResponse, error) {
 	// Scan for Activity: prefix
 	scanInput := &dynamodb.ScanInput{
 		TableName:        aws.String(table),
@@ -111,7 +116,7 @@ func getActivityConfigs(ctx context.Context, table string) (events.APIGatewayV2H
 	return successResponse(body)
 }
 
-func updateActivityConfigs(ctx context.Context, request events.APIGatewayV2HTTPRequest, table string, adminUser string) (events.APIGatewayV2HTTPResponse, error) {
+func updateActivityConfigs(ctx context.Context, request events.APIGatewayProxyRequest, table string, adminUser string) (events.APIGatewayProxyResponse, error) {
 	var body map[string]string
 	if err := json.Unmarshal([]byte(request.Body), &body); err != nil {
 		return errorResponse(http.StatusBadRequest, "Invalid JSON")
@@ -157,8 +162,8 @@ func validateToken(authHeader string) (jwt.MapClaims, error) {
 	return token.Claims.(jwt.MapClaims), nil
 }
 
-func successResponse(body []byte) (events.APIGatewayV2HTTPResponse, error) {
-	return events.APIGatewayV2HTTPResponse{
+func successResponse(body []byte) (events.APIGatewayProxyResponse, error) {
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers: map[string]string{
 			"Content-Type":                "application/json",
@@ -168,9 +173,9 @@ func successResponse(body []byte) (events.APIGatewayV2HTTPResponse, error) {
 	}, nil
 }
 
-func errorResponse(status int, message string) (events.APIGatewayV2HTTPResponse, error) {
+func errorResponse(status int, message string) (events.APIGatewayProxyResponse, error) {
 	body, _ := json.Marshal(map[string]interface{}{"success": false, "error": message})
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: status,
 		Headers: map[string]string{
 			"Content-Type":                "application/json",
@@ -181,5 +186,6 @@ func errorResponse(status int, message string) (events.APIGatewayV2HTTPResponse,
 }
 
 func main() {
-	lambda.Start(handleRequest)
+	// P5：改掛 REST API 後一併包 CORS（成功回應原本也沒帶標頭）。
+	lambda.Start(apicors.WrapV1(handleRequest))
 }

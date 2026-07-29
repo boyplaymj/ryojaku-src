@@ -190,7 +190,44 @@ Resources:
         AllowOrigin: "'*'"
         AllowHeaders: "'Content-Type,Authorization,X-App-Version,X-Platform'"
         AllowMethods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+      # P5（§5.7 根因③）：上面的 Cors 只管「正常回應與 preflight」，**管不到 API Gateway 自己
+      # 產生的錯誤回應**。authorizer 拒絕時回的 401 由 gateway 直接吐出、不經過任何 lambda，
+      # 因此沒有 CORS 標頭 —— 瀏覽器看到的是 CORS 失敗而不是 401。
+      #
+      # 後果不只是難看：admin_frontend 的 api.ts 靠 `res.status === 401` 清 token 跳登入頁，
+      # 而 fetch 在 CORS 層就 reject、根本拿不到 status，**session 過期時 Console 不會跳登入頁，
+      # 只會卡在看不懂的網路錯誤**。
+      #
+      # ⚠️ 用 SAM 的 GatewayResponses 屬性，不要另外寫 AWS::ApiGateway::GatewayResponse 資源 ——
+      # 後者會被 cfn-lint W3660 擋下（與 SAM 產生的 API Body 分屬兩處定義，可能漂移／留孤兒）。
+      # 一樣是 curl 驗不出來的一類（curl 不執行 CORS），驗收要用真瀏覽器。
+      GatewayResponses:
+        UNAUTHORIZED:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-App-Version,X-Platform'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+        ACCESS_DENIED:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-App-Version,X-Platform'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-App-Version,X-Platform'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-App-Version,X-Platform'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
 __REST_AUTH__
+
 
   HttpApi:
     Type: AWS::Serverless::HttpApi

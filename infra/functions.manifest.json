@@ -4,8 +4,8 @@
     {
       "name": "admin-activities",
       "projectPath": "cmd/lambdas/apis/mahjongclub_admin_activities",
-      "apiType": "HTTP_V2",
-      "method": "ANY",
+      "apiType": "REST_V1",
+      "method": "GET,POST",
       "path": "/admin/activities?",
       "auth": "admin",
       "tables": [
