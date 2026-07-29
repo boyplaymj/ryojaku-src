@@ -140,7 +140,15 @@ func deleteVoucher(ctx context.Context, request events.APIGatewayProxyRequest, t
 	var body struct {
 		Code string `json:"code"`
 	}
-	json.Unmarshal([]byte(request.Body), &body)
+	// 原本這行連 error 都不接：壞 JSON 或空 body 會靜默得到空 Code，拿空字串當 key 打
+	// DynamoDB → 驗證錯 → 回 500「Failed to delete voucher」，看起來像伺服器壞了，
+	// 其實是呼叫端參數錯。與同檔 updateVoucher 的作法對齊成 400。
+	if err := json.Unmarshal([]byte(request.Body), &body); err != nil {
+		return errorResponse(400, "Invalid JSON"), nil
+	}
+	if body.Code == "" {
+		return errorResponse(400, "Missing code"), nil
+	}
 
 	_, err := svc.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(table),

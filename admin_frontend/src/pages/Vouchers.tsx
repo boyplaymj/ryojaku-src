@@ -89,6 +89,10 @@ const Vouchers: React.FC = () => {
         }
     };
 
+    // 總數為 0 時 n/total 會是 NaN，畫面直接顯示「NaN% available」。
+    // 全新環境或全部序號被清掉時就會踩到（P4 點測實際看到）。下方 usageRate 早就有防，這裡補齊。
+    const pct = (n: number, total: number) => (total > 0 ? (n / total) * 100 : 0).toFixed(1);
+
     // Prepare chart data
     const statusData = stats ? [
         { name: '未使用', value: stats.unusedCodes },
@@ -152,7 +156,7 @@ const Vouchers: React.FC = () => {
                         <h3 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">未使用</h3>
                         <p className="text-3xl font-black text-emerald-400">{stats.unusedCodes.toLocaleString()}</p>
                         <p className="text-xs text-emerald-500/70 font-mono mt-1">
-                            {((stats.unusedCodes / stats.totalCodes) * 100).toFixed(1)}% available
+                            {pct(stats.unusedCodes, stats.totalCodes)}% available
                         </p>
                     </div>
                     <div className="bg-slate-900/50 backdrop-blur-xl border border-white/5 p-6 rounded-2xl relative overflow-hidden group hover:border-slate-500/30 transition-colors">
@@ -162,7 +166,7 @@ const Vouchers: React.FC = () => {
                         <h3 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">已使用</h3>
                         <p className="text-3xl font-black text-slate-200">{stats.usedCodes.toLocaleString()}</p>
                         <p className="text-xs text-slate-500 font-mono mt-1">
-                            {((stats.usedCodes / stats.totalCodes) * 100).toFixed(1)}% redeemed
+                            {pct(stats.usedCodes, stats.totalCodes)}% redeemed
                         </p>
                     </div>
                     <div className="bg-slate-900/50 backdrop-blur-xl border border-white/5 p-6 rounded-2xl relative overflow-hidden group hover:border-purple-500/30 transition-colors">
