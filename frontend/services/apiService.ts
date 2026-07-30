@@ -11,7 +11,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 if (!API_BASE_URL) {
   throw new Error(
     'VITE_API_BASE_URL 未設定。請在 build 前指定後端 API(staging 例: ' +
-    'https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg)。' +
+    'https://ryojaku-api.boyplaymj.com)。' +
     '此處刻意不留預設值,避免誤連正式環境。'
   );
 }
