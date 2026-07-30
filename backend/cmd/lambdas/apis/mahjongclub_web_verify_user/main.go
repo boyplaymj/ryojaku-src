@@ -234,6 +234,26 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	// Try to get userId parameter first (for APP users)
 	userID = request.QueryStringParameters["userId"]
 
+	// 🔴 觀測（2026-07-30，SECURITY_AUTH_BYPASS.md §5d-1）—— 這裡**刻意只記錄、不改行為**。
+	//
+	// 本端點兩條入口的安全性並不對等：
+	//   lineID= 走 db.DecryptLineID()，解密失敗回 401 → 密文本身即憑證
+	//   userId= 明文 APP_xxx 直查，零驗證           → 可枚舉他人，回應含 lineId／points／gender
+	//
+	// 不能直接關掉 userId= 這條，也不能對本端點掛 authorizer：
+	// verify-user 是 authService.loginWithLineId 的 fallback 登入路徑，呼叫當下還沒有 token，
+	// 掛 authorizer 會直接鎖死 LINE Bot 用戶登入。
+	//
+	// 而「我方 repo 前端不走 userId= 這條」不足以證明沒有呼叫者 —— Android bundle 內含
+	// loginWithLineId／verifyUser，且線上跑的是工程師較舊的版本，外部舊 App／LINE bot
+	// 是否在用只能向工程師確認。所以先觀測真實流量，再據以決定收緊方式，
+	// 不從「grep 不到」反推「沒人用」。
+	if userID != "" {
+		hasAuthHeader := request.Headers["Authorization"] != "" || request.Headers["authorization"] != ""
+		log.Printf("[AUTH-PROBE][verify-user] 走明文 userId= 入口 userId=%q hasAuthHeader=%t sourceIp=%s ua=%q",
+			userID, hasAuthHeader, request.RequestContext.Identity.SourceIP, request.Headers["User-Agent"])
+	}
+
 	// If userId is not provided, try lineID (for LINE Bot users)
 	if userID == "" {
 		encryptedLineID := request.QueryStringParameters["lineID"]

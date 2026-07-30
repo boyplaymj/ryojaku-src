@@ -64,7 +64,31 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// 使用 GetUserIdentifierWithTracking 取得 userID 並記錄 Token 使用統計
-	userID, _ := shared.GetUserIdentifierWithTracking(request, "web_user_info")
+	//
+	// 🔴 這裡原本寫 `userID, _ :=`，把第二個回傳值（verified）丟掉。
+	// GetUserIdentifier 系列在沒有有效 Authorization header 時會 fallback 到 ?userId=
+	// 並回傳 (queryUserID, false)。丟掉那個 false 的後果是：不帶任何憑證
+	// `GET /user-info?userId=<任意人>` 直接回該用戶的 points／isVerified／stats。
+	// （2026-07-30 staging 實打確認 200，見 SECURITY_AUTH_BYPASS.md §5d。）
+	//
+	// 收緊為「必須是驗證過的身分」。這不會改變任何已登入情境的行為：
+	// 有 token 時本函式回傳的一律是 JWT 內的 userID，query 的 ?userId= 根本不被採用
+	// （實打：帶 A 的 token 查 B，回的是 A）。亦即「查他人」從來就沒有生效過。
+	userID, verified := shared.GetUserIdentifierWithTracking(request, "web_user_info")
+	if !verified {
+		// 觀測用：留下來源特徵，用來判斷是否還有不帶 token 的舊客戶端在打這支。
+		log.Printf("[AUTH][user-info] 拒絕未驗證請求 queryUserId=%q sourceIp=%s ua=%q",
+			request.QueryStringParameters["userId"],
+			request.RequestContext.Identity.SourceIP,
+			request.Headers["User-Agent"])
+		response := Response{Success: false, Error: "需要登入"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
 	// 記錄流量統計
 	shared.RecordTraffic(ctx, dynamoClient, tablePrefix, "user", "get_info")
 	if userID == "" {
