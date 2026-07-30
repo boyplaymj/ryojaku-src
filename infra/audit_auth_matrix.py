@@ -36,6 +36,15 @@ PATS = [
  ("RAW_BODY",   r'(?i)\buserId\b"\s*:\s*|UserID\s+string\s+`json:"userId'),
  ("ROLE",       r'"(?:super_admin|admin)"'),
 ]
+# 🔴 剝註解後再掃。初版直接對原始碼跑正則，命中了 chat-ws-connect 註解裡
+# 「原本這裡直接吃 request.QueryStringParameters["userId"]」這句描述性文字，
+# 把一個已經修好的端點誤報成洞。被註解掉的程式碼照樣命中是正則掃碼的經典假陽性。
+def strip_comments(src):
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)      # 區塊註解
+    src = re.sub(r"^\s*//.*$", "", src, flags=re.M)       # 整行註解
+    src = re.sub(r"(?<!:)//[^\n\"`]*$", "", src, flags=re.M)  # 行尾註解(避開 http:// 與字串)
+    return src
+
 def scan(pp):
     d = os.path.join(BE, pp)
     if not os.path.isdir(d): return None, "目錄不存在"
@@ -43,7 +52,7 @@ def scan(pp):
     for dp,_,fs in os.walk(d):
         for f in fs:
             if f.endswith(".go"):
-                src += open(os.path.join(dp,f), errors="ignore").read() + "\n"
+                src += strip_comments(open(os.path.join(dp,f), errors="ignore").read()) + "\n"
     if not src: return None, "無 .go"
     hits = {}
     for k,p in PATS:
