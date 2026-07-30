@@ -27,10 +27,46 @@ EXTRA=()
 [ -n "$APPURL" ] && EXTRA+=("AppBaseUrl=$APPURL")
 
 python3 gen_app_template.py
-exec ~/.local/bin/sam deploy --config-env stg -t 02-app.generated.yaml \
-  --no-confirm-changeset --no-fail-on-empty-changeset --resolve-s3 --region "$REGION" \
-  --parameter-overrides \
-    "TablePrefix=MahjongClubStg_" "Stage=stg" \
-    "EncryptionKey=$ENC" "JwtSecret=$JWT" "AdminJwtSecret=$AJWT" \
-    "VapidPublicKey=$VPUB" "VapidPrivateKey=$VPRIV" "VapidSubscriber=$VSUB" \
-    "${EXTRA[@]}"
+
+# ---------------------------------------------------------------------------
+# 機密傳遞：走臨時 samconfig，不走命令列。
+#
+# 🔴 原本這裡是 `sam deploy --parameter-overrides "JwtSecret=$JWT" ...`。
+# 本檔開頭寫「值不落地、不進 git」—— 那兩點都成立，但漏了第三個面向：
+# **命令列參數會進 process cmdline**，於是整個部署期間（數分鐘），主機上任何
+# 使用者一句 `ps -ef` 就能讀到 JWT_SECRET／ADMIN_JWT_SECRET／ENCRYPTION_KEY／
+# VAPID 私鑰的明文（/proc/<pid>/cmdline 對同機使用者可讀，不需 root）。
+# 2026-07-30 實際發生過：例行 `ps` 診斷就把六個 secret 全印了出來。
+#
+# 改走 --config-file：值只存在於一個 umask 077 建立的暫存檔，位於 .tmp/
+# （.gitignore:30 已涵蓋，git check-ignore 實證），並由 trap 在任何結束路徑刪除。
+# 檔案短暫落地是刻意的取捨 —— 0600 檔案只有 owner 與 root 讀得到，
+# 遠比「整個部署期間對全體本機使用者敞開的 cmdline」窄。
+# ---------------------------------------------------------------------------
+PARAMS=("TablePrefix=MahjongClubStg_" "Stage=stg"
+        "EncryptionKey=$ENC" "JwtSecret=$JWT" "AdminJwtSecret=$AJWT"
+        "VapidPublicKey=$VPUB" "VapidPrivateKey=$VPRIV" "VapidSubscriber=$VSUB"
+        "${EXTRA[@]}")
+
+# fail-closed：值若含 " 或 \ 或換行會破壞 TOML 字串，可能被靜默截斷成錯誤的參數。
+# 寧可中止也不要送出一個「看起來成功、其實金鑰是半截」的部署。
+for kv in "${PARAMS[@]}"; do
+  case "$kv" in
+    *'"'*|*'\'*) echo "❌ 參數含 TOML 不安全字元，中止：${kv%%=*}" >&2; exit 1;;
+  esac
+  [ "$(printf '%s' "$kv" | wc -l)" -eq 0 ] || { echo "❌ 參數含換行，中止：${kv%%=*}" >&2; exit 1; }
+done
+
+umask 077
+CFG="$TMPDIR/samcfg.$$.toml"
+trap 'rm -f "$CFG"' EXIT INT TERM
+grep -v '^[[:space:]]*parameter_overrides' samconfig.toml > "$CFG"
+{
+  printf 'parameter_overrides = [\n'
+  for kv in "${PARAMS[@]}"; do printf '  "%s",\n' "$kv"; done
+  printf ']\n'
+} >> "$CFG"
+chmod 600 "$CFG"
+
+~/.local/bin/sam deploy --config-file "$CFG" --config-env stg -t 02-app.generated.yaml \
+  --no-confirm-changeset --no-fail-on-empty-changeset --resolve-s3 --region "$REGION"
