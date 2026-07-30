@@ -152,7 +152,8 @@
       "apiType": "REST_V1",
       "method": "ANY",
       "path": "/analytics/{proxy+}?",
-      "auth": "public",
+      "_authNote": "P0-a：原為 public。實打確認 GET /analytics/overview 無 token 回 200 與真實 Users/Games 統計，且 handler 內零驗證程式碼(見 PATH_RECONCILE.md §4)。全 repo 零呼叫者，改掛 admin authorizer 不影響任何 client。刻意不刪路由：保留可逆性，日後要接後台報表可直接用。",
+      "auth": "admin",
       "tables": [
         "Games",
         "Users",
