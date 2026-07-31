@@ -40,22 +40,55 @@ check(){ # $1=描述 $2=實際 $3=期望
 
 GID=""; HOST=""
 
-# 全表掃描：把 python 判斷式套到每張表，回傳符合者。$1=模式 delete|count
+# 🔴 錯誤旗標用**檔案**不用變數。
+#    第一版寫成 `AWS_ERR=1`,但每個呼叫都長成 `x=$(aws_json ...)` —— 命令替換是子 shell,
+#    變數改動傳不回父行程,於是旗標永遠是 0,AWS 全數失敗仍然綠燈。
+#    (這是本腳本第四個假綠,而且是「修好」之後才產生的;靠自己的失敗注入測試才抓到。)
+AWS_ERR_FLAG=$(mktemp)
+aws_failed(){ [ -s "$AWS_ERR_FLAG" ]; }
+
+# 🔴 包一層,讓 AWS 失敗不再被吞掉。
+#    原本 `aws ... 2>/dev/null | python`：指令失敗 → stdin 空 → json 解析失敗 →
+#    python 印 0 → 「0 筆殘留」→ 綠燈。權限不足／節流／表不存在全都會這樣靜默過關。
+#    這是本腳本第三次踩到同一個假綠家族(前兩次是 trap 覆蓋 rc、殘留只印不計分)。
+aws_json(){ # 用法：aws_json <aws 參數...>；成功印 JSON 回 0，失敗印錯誤到 stderr 回非 0
+  local out rc err
+  err=$(mktemp)
+  out=$(aws "$@" 2>"$err"); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  ❌ AWS 失敗（aws $*）：$(head -c 200 "$err" | tr '\n' ' ')" >&2
+    echo 1 >> "$AWS_ERR_FLAG"
+  else
+    printf '%s' "$out"
+  fi
+  rm -f "$err"
+  return "$rc"
+}
+
+# 全表掃描：把 python 判斷式套到每張表。$1=模式 delete|count。結果由 stdout 回傳筆數。
+# 任何一步失敗 → AWS_ERR=1，呼叫端據此判定為失敗（絕不當成 0 筆）。
 sweep(){
-  local mode="$1" total=0
-  for T in $(aws dynamodb list-tables --region "$REGION" --query 'TableNames' --output text \
-             | tr '\t' '\n' | grep "^${PREFIX}"); do
-    local keys n
-    keys=$(aws dynamodb describe-table --region "$REGION" --table-name "$T" \
-           --query 'Table.KeySchema[].AttributeName' --output json)
-    n=$(aws dynamodb scan --region "$REGION" --table-name "$T" --output json 2>/dev/null \
+  local mode="$1" total=0 tables keys scanjson n
+  tables=$(aws_json dynamodb list-tables --region "$REGION" --query 'TableNames' --output text) \
+    || { echo 0; return 1; }
+  for T in $(printf '%s' "$tables" | tr '\t' '\n' | grep "^${PREFIX}"); do
+    keys=$(aws_json dynamodb describe-table --region "$REGION" --table-name "$T" \
+           --query 'Table.KeySchema[].AttributeName' --output json) || continue
+    scanjson=$(aws_json dynamodb scan --region "$REGION" --table-name "$T" --output json) || continue
+    n=$(printf '%s' "$scanjson" \
       | T="$T" KEYS="$keys" HOST="$HOST" GID="$GID" MARK="$MARK" REGION="$REGION" MODE="$mode" python3 -c "
 import sys,json,os,subprocess
 keys=json.loads(os.environ['KEYS']); host=os.environ['HOST']; gid=os.environ['GID']
 mark=os.environ['MARK'].lower(); table=os.environ['T']; region=os.environ['REGION']
 mode=os.environ['MODE']
-try: items=json.load(sys.stdin).get('Items',[])
-except Exception: print(0); raise SystemExit
+# 🔴 解析失敗一律 rc=2,**不印 0** —— 把錯誤講成「沒有殘留」正是上一版的 bug。
+try: d=json.load(sys.stdin)
+except Exception as e:
+    print(f'  ❌ 掃描結果無法解析（{table}）：{e}', file=sys.stderr); raise SystemExit(2)
+items=d.get('Items',[])
+if d.get('LastEvaluatedKey'):
+    # 未分頁完 → 這一頁的 0 筆不代表整表 0 筆,同樣是假綠,故判為失敗。
+    print(f'  ❌ {table} 掃描未分頁完（LastEvaluatedKey 仍在）', file=sys.stderr); raise SystemExit(2)
 def mine(i):
     blob=json.dumps(i,ensure_ascii=False)
     return (mark in blob.lower()) or (host and host in blob) or (gid and gid in blob)
@@ -64,15 +97,19 @@ for i in items:
     if not mine(i) or not all(k in i for k in keys): continue
     hit+=1
     if mode=='delete':
-        subprocess.run(['aws','dynamodb','delete-item','--region',region,'--table-name',table,
-                        '--key',json.dumps({k:i[k] for k in keys})],
-                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        r=subprocess.run(['aws','dynamodb','delete-item','--region',region,'--table-name',table,
+                          '--key',json.dumps({k:i[k] for k in keys})],
+                         capture_output=True)
+        if r.returncode!=0:
+            print(f'  ❌ 刪除失敗（{table}）：{r.stderr.decode()[:160]}', file=sys.stderr); raise SystemExit(2)
         print(f'  刪 {table.split(\"_\",1)[-1]}', file=sys.stderr)
 print(hit)
 ")
-    total=$((total + ${n:-0}))
+    if [ $? -ne 0 ] || [ -z "$n" ]; then echo 1 >> "$AWS_ERR_FLAG"; continue; fi
+    total=$((total + n))
   done
   echo "$total"
+  return 0
 }
 
 cleanup(){
@@ -82,7 +119,16 @@ cleanup(){
   sweep delete >/dev/null
   local left
   left=$(sweep count)
-  if [ "$left" = "0" ]; then echo "  ✅ 本次測試資料已清空"; else echo "  ❌ 仍有 $left 筆殘留"; FAIL=$((FAIL+1)); fi
+  # 🔴 先看 AWS_ERR 再看筆數 —— 指令失敗時 left 也會是 0，
+  #    若照舊只看 left 就會把「掃不到」講成「沒有殘留」。
+  if aws_failed; then
+    echo "  ❌ 清理／掃描期間有 AWS 呼叫失敗 —— 無法確認是否清空（不當成通過）"
+    FAIL=$((FAIL+1))
+  elif [ "$left" = "0" ]; then
+    echo "  ✅ 本次測試資料已清空"
+  else
+    echo "  ❌ 仍有 $left 筆殘留"; FAIL=$((FAIL+1))
+  fi
 
   if [ "$CLEAN_ORPHANS" = "1" ]; then
     echo "── 孤兒清掃（--cleanup-orphans）──"
@@ -127,6 +173,7 @@ for i in items:
     fi
   fi
 
+  rm -f "$AWS_ERR_FLAG"
   # 主流程失敗優先；主流程成功但清理有問題也要紅
   [ "$rc" != "0" ] && { echo "  （主流程以 rc=$rc 結束）"; exit "$rc"; }
   [ "$FAIL" != "0" ] && exit 1
@@ -145,7 +192,12 @@ TS=$(date +%s)
 TEST_LINE_ID="U${MARK}lineid"
 REG=$(curl -s -X POST "$API/app-register" -H 'Content-Type: application/json' \
       -d "{\"email\":\"secreg+$TS@example.com\",\"password\":\"SecReg12345!\",\"displayName\":\"$MARK\"}")
-HOST=$(echo "$REG" | python3 -c "import sys,json;d=json.load(sys.stdin);print((d.get('data') or d.get('user') or {}).get('userId',''))")
+[ -z "$REG" ] && { echo "  ❌ 註冊無回應（API 不可達？）：API=$API"; exit 1; }
+HOST=$(echo "$REG" | python3 -c "
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+print((d.get('data') or d.get('user') or {}).get('userId',''))")
 HT=$(echo "$REG"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))")
 [ -z "$HOST" ] && { echo "  ❌ 註冊失敗：$REG"; exit 1; }
 echo "  主辦人 $HOST"
@@ -205,4 +257,6 @@ check "⑦【正控】帶有效 token → 200" \
 
 echo
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
-exit 0   # 實際退出碼由 EXIT trap 依 $FAIL 決定（見上方 cleanup）
+# 雙保險：這裡就把 FAIL 反映到退出碼，trap 再依 $? 與清理結果做最終判定。
+# 只靠 trap 讀 $FAIL 的話，日後有人改動 trap 就會再次假綠。
+exit $(( FAIL > 0 ? 1 : 0 ))
