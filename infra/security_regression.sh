@@ -36,8 +36,14 @@ CLEAN_ORPHANS=0
 [ "${1:-}" = "--cleanup-orphans" ] && CLEAN_ORPHANS=1
 
 FAIL=0
-pass(){ echo "  ✅ $1"; }
-fail(){ echo "  ❌ $1"; FAIL=$((FAIL+1)); }
+# 🔴 斷言總數一律由程式自己數，不准手寫。
+#    先前的檢查點與報告寫「17 項」，實際只有 16 —— 沒有來源的手抄數字不會報錯，
+#    只會被複製（外部查驗者照著引用了一次）。TOTAL 掛在 pass/fail 上，
+#    日後新增斷言會自動計入，不必再有人回頭數 check 的次數。
+#    ⚠️ pass/fail 必須在父 shell 執行才計得到數（同 :47 的子 shell 陷阱）。
+TOTAL=0
+pass(){ echo "  ✅ $1"; TOTAL=$((TOTAL+1)); }
+fail(){ echo "  ❌ $1"; TOTAL=$((TOTAL+1)); FAIL=$((FAIL+1)); }
 check(){ # $1=描述 $2=實際 $3=期望
   if [ "$2" = "$3" ]; then pass "$1（$2）"; else fail "$1：得到 $2，期望 $3"; fi
 }
@@ -348,7 +354,10 @@ check "⑮ 非成員取得同一房間 → 403"      "$(chatup "$OUTSIDER_T" "$C
 check "⑯ 成員帶不存在的房間 → 403"      "$(chatup "$HT" "GAME_${MARK}_NOPE")" 403
 
 echo
+echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL）══"
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
+# ⚠️ TOTAL 是「跑到的斷言數」不是「應有的斷言數」——腳本若在中途 exit，
+#    這個數會偏小。要判斷是否被截斷，看它跟上一次成功執行的數字有沒有掉。
 # 雙保險：這裡就把 FAIL 反映到退出碼，trap 再依 $? 與清理結果做最終判定。
 # 只靠 trap 讀 $FAIL 的話，日後有人改動 trap 就會再次假綠。
 exit $(( FAIL > 0 ? 1 : 0 ))

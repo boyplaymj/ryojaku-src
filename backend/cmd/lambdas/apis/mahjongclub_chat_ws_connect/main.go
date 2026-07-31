@@ -70,9 +70,14 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 	// 現改由 $connect 的 REQUEST authorizer 驗 JWT，把已驗證的 userId 放進
 	// authorizer context，本函式只從那裡取。
 	//
-	// 這一點修好，sendMessage 自動就安全了 —— 它不從訊息內容取身分，而是用
-	// ConnectionID 反查 ChatConnections（getUserIDByConnection），
-	// 讀到的就是這裡寫進去的、已驗證的 userId。
+	// 🔴 這一點修好，保證的是後續 route 拿到的**身分**是真的 —— 它們用 ConnectionID
+	// 反查 ChatConnections（getUserIDByConnection），讀到的是這裡寫進去的、
+	// 已驗證的 userId。範圍僅止於此。
+	//
+	// 原註解由此推論「sendMessage 自動就安全了」是錯的：那是身分驗證（authN），
+	// 不是授權（authZ）。「userId 是真的」不等於「這個 userId 有權對該 roomId
+	// 做這件事」—— 房間層級的成員檢查一律是各 handler 自己的責任
+	// （shared.IsRoomMember），$connect 這裡代不了勞。
 	userID := authorizedUserID(request)
 
 	log.Printf("Connect: ConnectionID=%s, UserID=%s", connectionID, userID)

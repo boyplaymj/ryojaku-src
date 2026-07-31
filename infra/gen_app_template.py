@@ -16,9 +16,16 @@ def logical(name):  # kebab → PascalCase LogicalId
 # ---------------------------------------------------------------------------
 # S1：Lambda Authorizer 掛載範圍。
 #
-# manifest 的 auth 欄位一直只是註解——CFN 模板裡 authorizer 數為 0，34 個標 auth:user
-# 的端點只有 5 個在程式內自驗 JWT，其餘不帶 token 即可冒充任意用戶
-# （見 tools/ryojaku-webapp/SECURITY_AUTH_BYPASS.md）。
+# 🔴 auth 欄位「部分接線」，別當它全是註解（原註解寫「一直只是註解」是錯的，已訂正）：
+#   auth: "admin"  → 已接線。authorizer_for() 讀它，14 顆 admin 端點自動掛
+#                    RyojakuAdminAuth。改這個值會真的改變產出，不是文件。
+#   auth: "user"   → 尚未接線。閘門仍由下面的 AUTHORIZER_PILOT 手工列舉決定。
+#   auth: "public" → 尚未接線（同上，只是還沒被列舉到而已，不是有人擋著）。
+#   tables         → 真·裝飾。產生器零讀取，IAM 一律發全域 DDB_POLICY。
+#
+# S1 起點是「CFN 模板裡 authorizer 數為 0，35 個標 auth:user 的端點只有 5 個在程式內
+# 自驗 JWT，其餘不帶 token 即可冒充任意用戶」（見 tools/ryojaku-webapp/SECURITY_AUTH_BYPASS.md）。
+# 那是**歷史起點**，不是現況。
 #
 # S1 先以「明確列舉」的方式試點，只掛少數唯讀端點，驗證機制在 REST_V1 與 HTTP_V2
 # 兩種 apiType 上都成立、且前端不會斷。
@@ -361,10 +368,14 @@ def ws_block(ws):
     """WebSocket API + 3 routes ($connect/$disconnect/sendMessage)。
 
     S3：$connect 掛 REQUEST authorizer。
-    WebSocket 只有 $connect 這一個 route 能掛 authorizer —— 但這樣就夠了，因為
-    sendMessage 不從訊息內容取身分，而是用 ConnectionID 反查 ChatConnections
-    (getUserIDByConnection)。只要 $connect 寫進連線表的是「已驗證的 userId」，
-    sendMessage 自動就安全，不必也不能另外掛閘。
+    WebSocket 只有 $connect 這一個 route 能掛 authorizer，$disconnect / sendMessage
+    掛了會被 CFN 拒絕。
+
+    🔴 這只解決**身分驗證**（你是誰），不解決**授權**（你能不能對這個房間做這件事）。
+    原註解寫「sendMessage 自動就安全」是把兩者混為一談 —— 由 ConnectionID 反查到的
+    userId 確實是真的，但「userId 是真的」不等於「這個 userId 有權操作該 roomId」。
+    房間層級的 ACL 只能在各 handler 裡做（shared.IsRoomMember），
+    模板這層掛不到、也不該讓讀的人以為掛到了。
     """
     if not ws:
         return ""
