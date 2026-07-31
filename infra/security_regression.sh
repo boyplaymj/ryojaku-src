@@ -38,7 +38,7 @@ check(){ # $1=描述 $2=實際 $3=期望
   if [ "$2" = "$3" ]; then pass "$1（$2）"; else fail "$1：得到 $2，期望 $3"; fi
 }
 
-GID=""; HOST=""
+GID=""; HOST=""; OUTSIDER=""
 
 # 🔴 錯誤旗標用**檔案**不用變數。
 #    第一版寫成 `AWS_ERR=1`,但每個呼叫都長成 `x=$(aws_json ...)` —— 命令替換是子 shell,
@@ -76,9 +76,10 @@ sweep(){
            --query 'Table.KeySchema[].AttributeName' --output json) || continue
     scanjson=$(aws_json dynamodb scan --region "$REGION" --table-name "$T" --output json) || continue
     n=$(printf '%s' "$scanjson" \
-      | T="$T" KEYS="$keys" HOST="$HOST" GID="$GID" MARK="$MARK" REGION="$REGION" MODE="$mode" python3 -c "
+      | T="$T" KEYS="$keys" HOST="$HOST" GID="$GID" OUTSIDER="$OUTSIDER" MARK="$MARK" REGION="$REGION" MODE="$mode" python3 -c "
 import sys,json,os,subprocess
 keys=json.loads(os.environ['KEYS']); host=os.environ['HOST']; gid=os.environ['GID']
+outsider=os.environ.get('OUTSIDER','')
 mark=os.environ['MARK'].lower(); table=os.environ['T']; region=os.environ['REGION']
 mode=os.environ['MODE']
 # 🔴 解析失敗一律 rc=2,**不印 0** —— 把錯誤講成「沒有殘留」正是上一版的 bug。
@@ -90,8 +91,13 @@ if d.get('LastEvaluatedKey'):
     # 未分頁完 → 這一頁的 0 筆不代表整表 0 筆,同樣是假綠,故判為失敗。
     print(f'  ❌ {table} 掃描未分頁完（LastEvaluatedKey 仍在）', file=sys.stderr); raise SystemExit(2)
 def mine(i):
+    # 🔴 每新增一個測試主體,都必須同時加進這個判準。
+    #    2026-07-31 實際踩到:加了第二個帳號(email 不含 MARK)卻沒加進來,
+    #    於是它的 AuthIdentities/AuthTokens 被漏掉 —— 而清理與驗收共用這個判準,
+    #    所以腳本一邊留下殘骸、一邊回報「已清空」。
     blob=json.dumps(i,ensure_ascii=False)
-    return (mark in blob.lower()) or (host and host in blob) or (gid and gid in blob)
+    return ((mark in blob.lower()) or (host and host in blob)
+            or (gid and gid in blob) or (outsider and outsider in blob))
 hit=0
 for i in items:
     if not mine(i) or not all(k in i for k in keys): continue
@@ -216,6 +222,24 @@ GID=$(curl -s -X POST "$API/create-game?userId=$HOST" -H "Authorization: Bearer 
 [ -z "$GID" ] && { echo "  ❌ 建團失敗"; exit 1; }
 echo "  團局 $GID"
 
+# 第二個帳號：用來驗「非成員不得取得該聊天室的上傳授權」。
+# displayName 帶 MARK，才會被 cleanup 的全表掃描認出來。
+REG2=$(curl -s -X POST "$API/app-register" -H 'Content-Type: application/json' \
+       -d "{\"email\":\"secreg2+$TS@example.com\",\"password\":\"SecReg12345!\",\"displayName\":\"$MARK\"}")
+OUTSIDER_T=$(echo "$REG2" | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('token',''))
+except Exception: pass")
+OUTSIDER=$(echo "$REG2" | python3 -c "import sys,json
+try: print((json.load(sys.stdin).get('data') or {}).get('userId',''))
+except Exception: pass")
+
+# 建一個只有 HOST 是成員的聊天室（roomId 帶 MARK 以便清理）
+CHATROOM="GAME_${MARK}_${TS}"
+aws dynamodb put-item --region "$REGION" --table-name "${PREFIX}ChatUserMemberships" --item "{
+  \"UserID\":{\"S\":\"$HOST\"},\"LastMessageTime#RoomID\":{\"S\":\"$CHATROOM\"},
+  \"RoomID\":{\"S\":\"$CHATROOM\"},\"Title\":{\"S\":\"$MARK\"},
+  \"UnreadCount\":{\"N\":\"0\"},\"ExpiryTime\":{\"N\":\"1900000000\"}}" >/dev/null 2>&1
+
 # 產生一段合法的 LINE 密文（供密文路徑正控用）。repo 內只有解密沒有加密，故自行 Seal。
 CIPHER=$(ENC=$(aws ssm get-parameter --region "$REGION" --name "$SSM_ENC_KEY" \
          --with-decryption --query 'Parameter.Value' --output text 2>/dev/null) \
@@ -279,6 +303,16 @@ check "⑩ image/svg+xml → 拒絕（可內嵌 script）" "$(upkey 'x.svg' 'ima
 check "⑪ text/html → 拒絕"                "$(upkey 'x.html' 'text/html')" REJECTED
 check "⑫【正控】一般 jpg → 通過"           "$(upkey 'photo.jpg' 'image/jpeg')" CLEAN
 check "⑬【正控】iPhone HEIC → 通過（白名單不可過窄）" "$(upkey 'IMG_1.heic' 'image/heic')" CLEAN
+
+echo
+echo "══ chat-get-upload-url：必須是該聊天室的成員 ══"
+chatup(){ curl -s -o /dev/null -w '%{http_code}' -X POST "$API/chat/upload-url" -H "Authorization: Bearer $1" \
+  -H 'Content-Type: application/json' \
+  -d "{\"roomId\":\"$2\",\"fileName\":\"x.png\",\"contentType\":\"image/png\"}"; }
+
+check "⑭【正控】成員取得上傳授權 → 200" "$(chatup "$HT" "$CHATROOM")" 200
+check "⑮ 非成員取得同一房間 → 403"      "$(chatup "$OUTSIDER_T" "$CHATROOM")" 403
+check "⑯ 成員帶不存在的房間 → 403"      "$(chatup "$HT" "GAME_${MARK}_NOPE")" 403
 
 echo
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
