@@ -71,6 +71,16 @@ AUTHORIZER_PILOT = {
     # S2-D：D 級「讀取他人私有資料」剩餘 2 支。其餘 D 級已於 S1／S2-A／S3 掛完。
     "subscribe-push",         # /subscribe-push    ← 可代他人註冊推播裝置
     "unsubscribe-push",       # /unsubscribe-push  ← 可代他人退掉推播
+
+    # S4（2026-07-31）：四支 upload 端點裡唯一的漏網者。
+    # 它 manifest 標 auth:"public"、又不在本名單 → **兩層都沒人管到它**。
+    # staging 實打：不帶任何憑證 POST 回 200 拿到預簽網址，PUT 回 200，
+    # 物件確實落進 ryojaku-stg-community。（另三支 upload 端點早在本名單內，故未認證會被擋。）
+    #
+    # 🔴 教訓：本名單是「明確列舉」，漏列**不會產生任何錯誤訊號** ——
+    # 掃蕩的涵蓋範圍等於這份名單，名單漏了，稽核也會跟著漏。新增 user 端點必須同步加入，
+    # 直到 S2 改成依 manifest 的 auth 欄位自動套用為止。
+    "event-get-upload-url",   # /event-get-upload-url  ← 未認證可寫入 S3
 }
 
 def authorizer_for(f):

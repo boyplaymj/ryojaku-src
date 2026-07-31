@@ -474,7 +474,7 @@
       "apiType": "REST_V1",
       "method": "POST",
       "path": "/event-get-upload-url?",
-      "auth": "public",
+      "auth": "user",
       "tables": []
     },
     {

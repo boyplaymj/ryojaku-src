@@ -1381,7 +1381,12 @@ Resources:
       Events:
         Rest0:
           Type: Api
-          Properties: { RestApiId: !Ref RestApi, Path: '/event-get-upload-url', Method: post }
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/event-get-upload-url'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:

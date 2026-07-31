@@ -57,9 +57,6 @@ func init() {
 }
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// 記錄 Token 使用統計
-	shared.RecordTokenUsageFromHeader(request, "event_get_upload_url")
-
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
 		"Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -74,14 +71,41 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// 🔴 這支原本 manifest 標 auth:"public"，等於 API Gateway 不掛 authorizer；
+	// handler 這裡也只呼叫 RecordTokenUsageFromHeader（純統計、不驗證），
+	// `userId` 直接取自 request body 且只檢查非空 —— 結果是**任何人不帶憑證**
+	// 都能拿到本 bucket 的預簽上傳網址並實際寫入。
+	// （2026-07-31 staging 實打：未帶憑證 POST 回 200，PUT 回 200，物件確實落地。）
+	//
+	// 這個洞躲過先前那輪 authorizer 掃蕩的原因，比「分類錯了」更迂迴一層：
+	// gen_app_template.py 的 authorizer 掛載**並不是**看 manifest 的 auth 欄位
+	// （該欄位到 S1 為止仍只是註解），而是看一份明確列舉的 AUTHORIZER_PILOT 名單。
+	// 本端點既沒進那份名單、manifest 又標成 public，於是兩層都沒有人管到它。
+	// 故本次三處一起補：manifest 改標 auth:"user"（為 S2 全面套用預備，現階段不生效）、
+	// 加入 AUTHORIZER_PILOT（閘門層，立即生效）、以及這裡改為必須是驗證過的身分（深度防禦）。
+	userID, verified := shared.GetUserIdentifierWithTracking(request, "event_get_upload_url")
+	if !verified {
+		log.Printf("[AUTH][event-get-upload-url] 拒絕未驗證請求 sourceIp=%s ua=%q",
+			request.RequestContext.Identity.SourceIP, request.Headers["User-Agent"])
+		return respond(http.StatusUnauthorized, Response{Success: false, Error: "需要登入"}, headers)
+	}
+
 	var req Request
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"}, headers)
 	}
 
-	if req.UserID == "" || req.FileName == "" {
-		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing userId or fileName"}, headers)
+	// userID 一律以 JWT 內的身分為準，不採用 body 的 `userId`（body 值可任意偽造）。
+	// 本端點的 S3 key 不含 userID（events/{年月}/…），故此處僅用於稽核日誌。
+	//
+	// 另三支 upload 端點取身分的機制與這裡不同但同樣安全：它們在 AUTHORIZER_PILOT 內，
+	// 直接用 `shared.AuthorizerUserID(request)` 讀 API Gateway authorizer 帶進來的 context
+	// （avatars/{userID}/、chat/{roomId}/{userID}/ 的 userID 都來自該處，不是 body）。
+	// 本端點因為原本不在 PILOT，走的是 handler 自驗那條路，故用 GetUserIdentifierWithTracking。
+	if req.FileName == "" {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing fileName"}, headers)
 	}
+	log.Printf("[event-get-upload-url] userId=%s fileName=%q", userID, req.FileName)
 
 	// Generate S3 key: events/{year}{month}/{timestamp}_{filename}
 	now := time.Now()
