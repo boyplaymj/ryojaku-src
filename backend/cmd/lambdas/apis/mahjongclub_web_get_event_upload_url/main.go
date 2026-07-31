@@ -105,13 +105,21 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if req.FileName == "" {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing fileName"}, headers)
 	}
-	log.Printf("[event-get-upload-url] userId=%s fileName=%q", userID, req.FileName)
+	// fileName 是使用者可控且會被串進 S3 key：帶 `/` 就能寫進別的前綴（見 shared/upload_utils.go）。
+	safeName, ok := shared.SanitizeUploadFileName(req.FileName)
+	if !ok {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "檔名不合法"}, headers)
+	}
+	if !shared.IsAllowedUploadContentType(req.ContentType) {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "不支援的檔案類型"}, headers)
+	}
+	log.Printf("[event-get-upload-url] userId=%s fileName=%q", userID, safeName)
 
 	// Generate S3 key: events/{year}{month}/{timestamp}_{filename}
 	now := time.Now()
 	timestamp := now.Unix()
 	yearMonth := now.Format("200601")
-	key := fmt.Sprintf("events/%s/%d_%s", yearMonth, timestamp, req.FileName)
+	key := fmt.Sprintf("events/%s/%d_%s", yearMonth, timestamp, safeName)
 
 	// Create presigned URL for PUT request
 	presignedReq, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{

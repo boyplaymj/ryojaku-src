@@ -256,6 +256,31 @@ check "⑦【正控】帶有效 token → 200" \
      -H 'Content-Type: application/json' -d '{"userId":"APP_SOMEONE_ELSE","fileName":"x.png","contentType":"image/png"}')" 200
 
 echo
+echo "══ F-4 上傳 key 淨化與類型白名單 ══"
+# key 取回後檢查「時間戳之後那一段是否還含分隔符」——
+# 只斷言「等於某個字串」的話，我把預期值寫錯就會一起錯；這裡直接驗性質。
+upkey(){ curl -s -X POST "$API/event-get-upload-url" -H "Authorization: Bearer $HT" \
+  -H 'Content-Type: application/json' \
+  -d "$(FN="$1" CT="$2" python3 -c "
+import json,os
+print(json.dumps({'userId':'x','fileName':os.environ['FN'],'contentType':os.environ['CT']}))")" \
+  | python3 -c "
+import sys,json
+d=json.load(sys.stdin); k=(d.get('data') or {}).get('key')
+if not k: print('REJECTED'); raise SystemExit
+# events/{年月}/{ts}_{檔名} —— 切掉前兩段後不該再出現 / 或 \\
+tail='/'.join(k.split('/')[2:])
+print('CLEAN' if ('/' not in tail and chr(92) not in tail) else 'DIRTY')
+" 2>/dev/null || echo ERR; }
+
+check "⑧ 帶路徑的檔名 → key 不得跨前綴" "$(upkey '../../avatars/victim/evil.png' 'image/png')" CLEAN
+check "⑨ 反斜線路徑 → key 不得跨前綴"   "$(upkey '..\..\x.png' 'image/png')" CLEAN
+check "⑩ image/svg+xml → 拒絕（可內嵌 script）" "$(upkey 'x.svg' 'image/svg+xml')" REJECTED
+check "⑪ text/html → 拒絕"                "$(upkey 'x.html' 'text/html')" REJECTED
+check "⑫【正控】一般 jpg → 通過"           "$(upkey 'photo.jpg' 'image/jpeg')" CLEAN
+check "⑬【正控】iPhone HEIC → 通過（白名單不可過窄）" "$(upkey 'IMG_1.heic' 'image/heic')" CLEAN
+
+echo
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
 # 雙保險：這裡就把 FAIL 反映到退出碼，trap 再依 $? 與清理結果做最終判定。
 # 只靠 trap 讀 $FAIL 的話，日後有人改動 trap 就會再次假綠。

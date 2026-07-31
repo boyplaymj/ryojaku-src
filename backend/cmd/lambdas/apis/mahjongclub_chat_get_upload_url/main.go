@@ -88,11 +88,25 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if req.RoomID == "" || req.FileName == "" {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "Missing roomId or fileName"}, headers)
 	}
+	// fileName 是使用者可控且會被串進 S3 key：帶 `/` 就能寫進別的前綴（見 shared/upload_utils.go）。
+	safeName, okName := shared.SanitizeUploadFileName(req.FileName)
+	if !okName {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "檔名不合法"}, headers)
+	}
+	if !shared.IsAllowedUploadContentType(req.ContentType) {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "不支援的檔案類型"}, headers)
+	}
+	// roomId 同樣會被串進 key。註：這只擋「寫進別的前綴」，
+	// **不驗證呼叫者是否為該聊天室成員** —— 那是另一個未修的問題。
+	safeRoom, okRoom := shared.SanitizeUploadPathSegment(req.RoomID)
+	if !okRoom {
+		return respond(http.StatusBadRequest, Response{Success: false, Error: "roomId 不合法"}, headers)
+	}
 
 	// Generate S3 key: chat/{roomId}/{userId}/{timestamp}_{filename}
 	now := time.Now()
 	timestamp := now.Unix()
-	key := fmt.Sprintf("chat/%s/%s/%d_%s", req.RoomID, userID, timestamp, req.FileName)
+	key := fmt.Sprintf("chat/%s/%s/%d_%s", safeRoom, userID, timestamp, safeName)
 
 	// Create presigned URL for PUT request with Cache-Control
 	presignedReq, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
