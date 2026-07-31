@@ -6,6 +6,10 @@
 #       SSM 讀取 /ryojaku/stg/ENCRYPTION_KEY 的權限（用於密文正控）
 # 退出碼：0 = 全過；非 0 = 有斷言失敗、前置失敗，或清理後仍有殘留
 #
+# ⚠️ **每小時最多跑 5 次**：本腳本每次註冊 2 個帳號，而 app-register 的限流是
+#    「每 IP 每小時 10 次」（`app_register/main.go` 的 CheckRateLimit(…, 10, 3600)）。
+#    超過後註冊會回「嘗試次數過多」，腳本會在前置階段明確失敗（不會偽裝成安全斷言失敗）。
+#
 # ── 設計要點（都是實際踩過才寫下來的）─────────────────────────────────
 #
 # 🔴 每個「應該被擋」都配一個「應該要通」。
@@ -140,42 +144,61 @@ cleanup(){
     echo "── 孤兒清掃（--cleanup-orphans）──"
     # 只有這條路徑才需要完整 Users 清單，因此必須分頁；抓不全就中止，
     # 否則會把「沒掃到那頁的合法使用者」的關聯資料當成孤兒刪掉。
-    local live
-    live=$(aws dynamodb scan --region "$REGION" --table-name "${PREFIX}Users" \
-           --projection-expression "userId" --output json --no-paginate 2>/dev/null \
-           | python3 -c "
+    # 🔴 這條是**明確的破壞性清理**，比一般掃描更不能靜默成功：
+    #    任何一步失敗都必須計入 FAIL，否則「什麼都沒刪」與「刪乾淨了」外觀相同。
+    #    故全程走 aws_json（會設錯誤旗標），刪除失敗也直接判失敗。
+    local live users_json
+    users_json=$(aws_json dynamodb scan --region "$REGION" --table-name "${PREFIX}Users" \
+                 --projection-expression "userId" --output json) || users_json=""
+    if [ -z "$users_json" ]; then
+      echo "  ❌ 取不到 Users 清單，孤兒清掃中止（不當成通過）"
+      FAIL=$((FAIL+1))
+      live="INCOMPLETE"
+    else
+      live=$(printf '%s' "$users_json" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 if d.get('LastEvaluatedKey'): print('INCOMPLETE'); raise SystemExit
 print(','.join(i['userId']['S'] for i in d.get('Items',[])))
 ")
+    fi
     if [ -z "$live" ] || [ "$live" = "INCOMPLETE" ]; then
       echo "  ⚠️ Users 清單不完整或取不到，跳過孤兒清掃（避免誤刪合法資料）"
+      [ "$live" = "INCOMPLETE" ] && { echo "  ❌ 清單不完整本身即為失敗"; FAIL=$((FAIL+1)); }
     else
-      for T in $(aws dynamodb list-tables --region "$REGION" --query 'TableNames' --output text \
-                 | tr '\t' '\n' | grep "^${PREFIX}"); do
-        keys=$(aws dynamodb describe-table --region "$REGION" --table-name "$T" \
-               --query 'Table.KeySchema[].AttributeName' --output json)
-        aws dynamodb scan --region "$REGION" --table-name "$T" --output json 2>/dev/null \
-          | T="$T" KEYS="$keys" LIVE="$live" REGION="$REGION" python3 -c "
+      local otables okeys oscan
+      otables=$(aws_json dynamodb list-tables --region "$REGION" --query 'TableNames' --output text) \
+        || { echo "  ❌ list-tables 失敗，孤兒清掃中止"; FAIL=$((FAIL+1)); otables=""; }
+      for T in $(printf '%s' "$otables" | tr '\t' '\n' | grep "^${PREFIX}"); do
+        okeys=$(aws_json dynamodb describe-table --region "$REGION" --table-name "$T" \
+               --query 'Table.KeySchema[].AttributeName' --output json) || continue
+        oscan=$(aws_json dynamodb scan --region "$REGION" --table-name "$T" --output json) || continue
+        printf '%s' "$oscan" \
+          | T="$T" KEYS="$okeys" LIVE="$live" REGION="$REGION" python3 -c "
 import sys,json,os,subprocess
 keys=json.loads(os.environ['KEYS']); live=set(os.environ['LIVE'].split(','))
 table=os.environ['T']; region=os.environ['REGION']
-try: items=json.load(sys.stdin).get('Items',[])
-except Exception: raise SystemExit
+try: d=json.load(sys.stdin)
+except Exception as e:
+    print(f'  ❌ 孤兒掃描結果無法解析（{table}）：{e}', file=sys.stderr); raise SystemExit(2)
+if d.get('LastEvaluatedKey'):
+    print(f'  ❌ {table} 未分頁完，孤兒清掃不可信', file=sys.stderr); raise SystemExit(2)
 def uid(i):
     for k in ('userId','UserID','hostUserId','viewerId','targetUserId','authorId'):
         if k in i: return list(i[k].values())[0]
     return None
-for i in items:
+for i in d.get('Items',[]):
     u=uid(i)
     if not u or u in live or not all(k in i for k in keys): continue
-    subprocess.run(['aws','dynamodb','delete-item','--region',region,'--table-name',table,
-                    '--key',json.dumps({k:i[k] for k in keys})],
-                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r=subprocess.run(['aws','dynamodb','delete-item','--region',region,'--table-name',table,
+                      '--key',json.dumps({k:i[k] for k in keys})], capture_output=True)
+    if r.returncode!=0:
+        print(f'  ❌ 孤兒刪除失敗（{table}）：{r.stderr.decode()[:160]}', file=sys.stderr); raise SystemExit(2)
     print(f'  刪孤兒 {table.split(\"_\",1)[-1]} ← {u}')
 "
+        [ $? -ne 0 ] && echo 1 >> "$AWS_ERR_FLAG"
       done
+      aws_failed && { echo "  ❌ 孤兒清掃期間有失敗"; FAIL=$((FAIL+1)); }
     fi
   fi
 
@@ -232,6 +255,16 @@ except Exception: pass")
 OUTSIDER=$(echo "$REG2" | python3 -c "import sys,json
 try: print((json.load(sys.stdin).get('data') or {}).get('userId',''))
 except Exception: pass")
+# 🔴 前置失敗必須在這裡就喊停，不能讓它流到斷言階段。
+#    實際踩過：REG2 因註冊限流失敗 → OUTSIDER_T 為空 → ⑮ 拿空 token 打，得到 401 而非 403
+#    → 畫面顯示「非成員取得同一房間：得到 401，期望 403」，看起來像**安全修補回歸了**，
+#    實際只是第二個帳號沒註冊成功。前置失敗偽裝成安全斷言失敗，比直接爆掉更糟。
+if [ -z "$OUTSIDER_T" ] || [ -z "$OUTSIDER" ]; then
+  echo "  ❌ 第二個測試帳號建立失敗，無法驗「非成員」情境。回應：$(printf '%s' "$REG2" | head -c 200)"
+  echo "     最常見原因：app-register 限流（每 IP 每小時 10 次，本腳本每次用 2 次）。"
+  echo "     解法：等到下一個整點窗口再跑，或從別的 IP 跑。"
+  exit 1
+fi
 
 # 建一個只有 HOST 是成員的聊天室（roomId 帶 MARK 以便清理）
 CHATROOM="GAME_${MARK}_${TS}"

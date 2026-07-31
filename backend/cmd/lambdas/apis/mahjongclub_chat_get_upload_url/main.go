@@ -105,8 +105,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if !shared.IsAllowedUploadContentType(req.ContentType) {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "不支援的檔案類型"}, headers)
 	}
-	// roomId 同樣會被串進 key。註：這只擋「寫進別的前綴」，
-	// **不驗證呼叫者是否為該聊天室成員** —— 那是另一個未修的問題。
+	// roomId 同樣會被串進 key，先淨化成單一片段；成員資格在下方另外查驗。
 	safeRoom, okRoom := shared.SanitizeUploadPathSegment(req.RoomID)
 	if !okRoom {
 		return respond(http.StatusBadRequest, Response{Success: false, Error: "roomId 不合法"}, headers)
