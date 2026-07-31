@@ -145,33 +145,46 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Determine requester userId and linked LineID
+	//
+	// 🔴 這裡原本把 body 的 `lineID` 直接當成呼叫者身分，且完全不驗證：
+	//   - 以 `APP_` 開頭 → 原樣採信為 requesterUserID；
+	//   - 否則嘗試解密，**解密失敗還是把原字串當 ID 用**（原 else 分支）。
+	// 而下方 isAuthorized 的判準正是「requesterUserID 等於主辦人或任一已加入玩家」，
+	// 通過就回傳所有人的 LINE 聯絡方式。兩者相加即為一條匿名可完成的攻擊鏈 ——
+	// 未授權時我們只清空 LINE ID，**但仍會吐出 hostUserId 與 joinedPlayers[].userId**，
+	// 所以攻擊者第一次匿名呼叫就拿到了第二次呼叫所需的「身分」。
+	// （2026-07-31 staging 端到端實證：兩次匿名請求即取得主辦人與全部玩家的 LINE ID。）
+	//
+	// 修法刻意**不掛 authorizer、不回 401**：真正的缺陷不是「匿名可以讀」，而是
+	// 「授權判斷採信了呼叫者自稱的身分」。掛閘門會鎖死可能存在的匿名瀏覽情境
+	// （線上跑的是工程師較舊的前端，其行為我方無法斷定，見 §5c），風險反而更高。
+	// 匿名者維持現狀：拿得到團局、LINE ID 被遮蔽。
 	requesterUserID := ""
 	requesterLineID := ""
-	if req.LineID != "" {
-		if strings.HasPrefix(req.LineID, "APP_") {
-			requesterUserID = req.LineID
-			// Fetch user to see if they have a linked LINE ID
-			u, err := getUser(ctx, requesterUserID)
-			if err == nil && u != nil {
-				if u.EncryptedLineID != "" {
-					decrypted, err := decryptLineID(u.EncryptedLineID)
-					if err == nil {
-						requesterLineID = decrypted
-					}
-				} else if u.LineID != "" {
-					requesterLineID = u.LineID
+
+	// ① 優先採用 JWT 驗證過的身分。verified 為 false 時一律不採用
+	//    （GetUserIdentifier 在無有效 token 時會 fallback 到 query param 並回 false）。
+	if jwtUserID, verified := shared.GetUserIdentifierWithTracking(request, "web_game_detail"); verified && jwtUserID != "" {
+		requesterUserID = jwtUserID
+		if u, err := getUser(ctx, requesterUserID); err == nil && u != nil {
+			if u.EncryptedLineID != "" {
+				if decrypted, err := decryptLineID(u.EncryptedLineID); err == nil {
+					requesterLineID = decrypted
 				}
+			} else if u.LineID != "" {
+				requesterLineID = u.LineID
 			}
+		}
+	} else if req.LineID != "" && !strings.HasPrefix(req.LineID, "APP_") {
+		// ② LINE 舊路徑：只有「密文解得開」才算通過 —— 密文本身即憑證。
+		//    解密失敗一律視為未驗證（原本的 fallback 是把原字串當 ID，等同零驗證）。
+		//    `APP_` 開頭的明文 userId 在此**一律不採信**：那是自稱，不是憑證。
+		if decrypted, err := decryptLineID(req.LineID); err == nil {
+			requesterUserID = decrypted
+			requesterLineID = decrypted
 		} else {
-			decrypted, err := decryptLineID(req.LineID)
-			if err == nil {
-				requesterUserID = decrypted
-				requesterLineID = decrypted
-			} else {
-				// If decryption fails, maybe it's already a decrypted ID or a raw ID
-				requesterUserID = req.LineID
-				requesterLineID = req.LineID
-			}
+			log.Printf("[AUTH][game-detail] lineID 解密失敗，視為未驗證 sourceIp=%s",
+				request.RequestContext.Identity.SourceIP)
 		}
 	}
 
