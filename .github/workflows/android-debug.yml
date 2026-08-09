@@ -1,0 +1,130 @@
+# 両雀 Android debug APK 建置
+#
+# 為什麼在 CI 而不是本機：官方 Android build-tools 沒有 Linux ARM64 版本。
+# 實測（2026-08-09，SML 主機 aarch64）：
+#   - repository2-3.xml 的 56 個 aarch64 條目 host-os 全是 macosx，Linux 一個都沒有
+#   - build-tools_r35_linux.zip 裡 aapt / aapt2 / aidl / zipalign 都是 x86-64 ELF
+#     （d8 與 apksigner 是 shell script 包 Java jar，那兩支反而跨平台可用）
+#   - 直接執行 aapt2 → cannot execute binary file: Exec format error (rc=126)
+#   - Amazon Linux 2023 也沒有 qemu-user-static 套件可裝
+# 所以 Android 一律在 x86_64 runner 上建。repo 是 public → Actions 分鐘數免費不限。
+#
+# ⚠️ 這裡刻意複製了 frontend/deploy-stg.sh 的 bundle 位址護欄。不是為了整齊，
+#    是因為 CI 是「產出手機上那份 binary」的地方 —— 護欄留在只跑網頁部署的腳本裡，
+#    對 App 沒有任何保護作用。dist 一旦燒進 APK，位址就改不掉了。
+
+name: Android debug APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/android-debug.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest   # x86_64，這是重點
+
+    env:
+      # 自訂網域，與 frontend/deploy-stg.sh 保持一致。
+      # ⚠️ 結尾「沒有」/stg —— base path mapping 掛在根，stage 由網域自己解析。
+      # ⚠️ 絕不可換成 *.execute-api.* 原始位址：API Gateway 一重建 ID 就變，
+      #    已安裝的 App 會同時變磚（下面的護欄會擋，含我方自己的 ID）。
+      VITE_API_BASE_URL: https://ryojaku-api.boyplaymj.com
+      VITE_WS_BASE_URL: wss://ryojaku-ws.boyplaymj.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build web bundle
+        working-directory: frontend
+        run: npm run build
+
+      # 出貨前自我驗證。三段都要有反面斷言 —— 只檢查「該有的有沒有」的話，
+      # 一個什麼都沒烘進去的空 bundle 也可能矇混過去。
+      - name: Verify bundle addresses
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          BUNDLE=$(ls dist/assets/*.js)
+          echo "檢查對象：$BUNDLE"
+          for want in ryojaku-api.boyplaymj.com ryojaku-ws.boyplaymj.com; do
+            grep -q "$want" $BUNDLE || { echo "❌ bundle 沒烘進 $want" >&2; exit 1; }
+          done
+          if grep -qE "yg7y0xkb50|00pox0hvv4|5yas775i27|ek5dythoh9" $BUNDLE; then
+            echo "❌ bundle 殘留工程師正式環境位址" >&2; exit 1
+          fi
+          if grep -q "execute-api" $BUNDLE; then
+            echo "❌ bundle 殘留 execute-api 原始位址（App 重建 API 就變磚）" >&2; exit 1
+          fi
+          echo "✔ bundle 位址檢查通過"
+
+      - name: Capacitor sync
+        working-directory: frontend
+        run: npx cap sync android
+
+      # 驗證 sync 真的把「這次」的 bundle 搬進去了，而不是沿用上一輪的殘留。
+      # 只看 cap sync 印 "Sync finished" 是不夠的 —— 它複製 0 個檔也會這樣印。
+      - name: Verify synced assets match this build
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          for f in dist/assets/*.js; do
+            base=$(basename "$f")
+            test -f "android/app/src/main/assets/public/assets/$base" \
+              || { echo "❌ Android 專案內找不到本次產物 $base" >&2; exit 1; }
+          done
+          echo "✔ Android assets 與本次 build 一致"
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        working-directory: frontend/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # 不只確認檔案存在 —— 讀出 APK 內的 package name 與版本，
+      # 確認產出的真的是 com.boyplaymj.ryojaku（appId 拆人質那次的改動有沒有生效）。
+      - name: Inspect APK
+        working-directory: frontend/android
+        run: |
+          set -euo pipefail
+          APK=$(find . -name '*-debug.apk' | head -1)
+          echo "APK = $APK ($(du -h "$APK" | cut -f1))"
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)
+          "$AAPT2" dump packagename "$APK"
+          "$AAPT2" dump badging "$APK" | grep -E "^package:|^application-label" || true
+          "$AAPT2" dump packagename "$APK" | grep -qx 'com.boyplaymj.ryojaku' \
+            || { echo "❌ package name 不是 com.boyplaymj.ryojaku" >&2; exit 1; }
+          echo "✔ package name 正確"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ryojaku-debug-apk
+          path: frontend/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
