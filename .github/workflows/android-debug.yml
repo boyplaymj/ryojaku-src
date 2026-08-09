@@ -95,11 +95,25 @@ jobs:
           done
           echo "✔ Android assets 與本次 build 一致"
 
-      - name: Install Android SDK packages
+      # ⚠️ 上一版直接呼叫裸的 `sdkmanager` 而失敗。ubuntu runner 的 Android SDK
+      # 本來就預裝了多個 platform / build-tools，而 cmdline-tools 的 bin 不保證在 PATH 上。
+      # 所以改成：先把實際看到的東西印出來，缺了才裝，且用絕對路徑呼叫。
+      # （這裡刻意把診斷放在最前面 —— CI log 是這個 step 唯一的觀測管道。）
+      - name: Ensure Android SDK packages
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+          echo "--- 預裝 platforms ---";   ls "$ANDROID_HOME/platforms"   2>/dev/null || echo "(none)"
+          echo "--- 預裝 build-tools ---"; ls "$ANDROID_HOME/build-tools" 2>/dev/null || echo "(none)"
+          SDKMANAGER=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1 || true)
+          echo "sdkmanager=${SDKMANAGER:-<not found>}"
+          if [ -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "✔ 已有 android-35，不需安裝"
+          else
+            [ -n "$SDKMANAGER" ] || { echo "❌ 缺 android-35 且找不到 sdkmanager" >&2; exit 1; }
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          fi
 
       - name: Build debug APK
         working-directory: frontend/android
@@ -116,9 +130,12 @@ jobs:
           APK=$(find . -name '*-debug.apk' | head -1)
           echo "APK = $APK ($(du -h "$APK" | cut -f1))"
           AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)
-          "$AAPT2" dump packagename "$APK"
           "$AAPT2" dump badging "$APK" | grep -E "^package:|^application-label" || true
-          "$AAPT2" dump packagename "$APK" | grep -qx 'com.boyplaymj.ryojaku' \
+          # 取第一行並去掉尾隨空白／CR 再比對。原本用 grep -qx 對整段輸出比對，
+          # 只要多吐一行或帶 \r 就會誤判成失敗 —— 那是斷言太脆，不是 build 壞掉。
+          PKG=$("$AAPT2" dump packagename "$APK" | head -1 | tr -d '\r' | xargs)
+          echo "package name = [$PKG]"
+          [ "$PKG" = "com.boyplaymj.ryojaku" ] \
             || { echo "❌ package name 不是 com.boyplaymj.ryojaku" >&2; exit 1; }
           echo "✔ package name 正確"
 
