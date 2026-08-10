@@ -354,6 +354,32 @@ check "⑮ 非成員取得同一房間 → 403"      "$(chatup "$OUTSIDER_T" "$C
 check "⑯ 成員帶不存在的房間 → 403"      "$(chatup "$HT" "GAME_${MARK}_NOPE")" 403
 
 echo
+echo "══ F-2 WebSocket sendMessage：必須是該聊天室的成員 ══"
+# 這段委派給 ws_room_authz_probe.sh —— 它要開 WebSocket 連線（python websockets），
+# 塞進這支純 curl 的腳本裡會把兩者都弄髒。
+#
+# 🔴 沿用本腳本已建的兩個帳號，**不讓它再註冊** —— app-register 每 IP 每小時只有 10 次，
+#    本腳本已用掉 2 次；讓子腳本再吃 2 次的話，連跑兩輪就撞限流，而限流的症狀
+#    （第二個帳號建不起來）在探針裡會顯示成前置失敗，看起來像測試自己壞了。
+#    ⚠️ token 走 export 不走命令列參數：本機 /proc 沒掛 hidepid，argv 是全機可讀的。
+PROBE="$(dirname "$0")/ws_room_authz_probe.sh"
+if [ -f "$PROBE" ]; then
+  WS_OUT=$(HOST_ID="$HOST" HOST_T="$HT" OUT_ID="$OUTSIDER" OUT_T="$OUTSIDER_T" \
+           REGION="$REGION" API="$API" PREFIX="$PREFIX" bash "$PROBE" 2>&1)
+  WS_RC=$?
+  # 🔴 三態，不可壓成二態：0=擋住、1=攻擊成立（安全回歸）、其他=前置失敗（**沒測到**）。
+  #    把「沒測到」算成通過，正是這支套件反覆踩過的假綠形狀。
+  case "$WS_RC" in
+    0) check "⑰ 非成員不得對他人房間送訊息（判準＝ChatMessages 表）" BLOCKED BLOCKED ;;
+    1) check "⑰ 非成員不得對他人房間送訊息（判準＝ChatMessages 表）" ATTACK_OK BLOCKED ;;
+    *) fail "⑰ WS 房間層授權：探針前置失敗（rc=$WS_RC），本項未測到"
+       printf '%s\n' "$WS_OUT" | sed 's/^/      | /' ;;
+  esac
+else
+  fail "⑰ 找不到 ws_room_authz_probe.sh —— F-2 回歸未被覆蓋"
+fi
+
+echo
 echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL）══"
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
 # ⚠️ TOTAL 是「跑到的斷言數」不是「應有的斷言數」——腳本若在中途 exit，

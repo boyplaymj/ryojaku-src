@@ -75,7 +75,32 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 		return events.APIGatewayProxyResponse{StatusCode: 403}, nil
 	}
 
-	// 2. Get User Name (Could be optimized by caching or session)
+	// 2. 房間層授權（水平越權修補）。
+	//
+	// $connect 的 authorizer 只做**身分驗證** —— 它保證 userID 是真的，不保證這個人
+	// 有權對 payload.RoomID 發言。在此之前，任何已登入者只要列舉／猜到 roomId，就能
+	// 把訊息寫進他不屬於的聊天室，並連帶觸發該房間的廣播、成員未讀數更新與推播通知。
+	// 2026-08-10 以 infra/ws_room_authz_probe.sh 對 staging 實證成立（非成員寫入 1 筆，
+	// 同一輪的成員正控也 1 筆，證明不是鏈路壞掉造成的假象）。
+	//
+	// 與 chat-get-upload-url（6f9d73b）同一個模式，不需要重新設計連線身分模型。
+	//
+	// 🔴 這道檢查必須擺在 PutItem **之前**：原本的流程是先把訊息寫進 ChatMessages，
+	//    之後才 getRoom(payload.RoomID)，而且 room 為 nil 時只是跳過廣播 ——
+	//    所以連「房間根本不存在」的 roomId 都寫得進去。擋在寫入後面等於沒擋。
+	isMember, memErr := shared.IsRoomMember(ctx, dbClient, tablePrefix, userID, payload.RoomID)
+	if memErr != nil {
+		// fail-closed：查不出來就不放行。不可因為 DB 出錯而退化成人人可寫 ——
+		// 那正是「最有利攻擊者」的那一側。
+		log.Printf("[chat-ws-send-message] 成員資格查驗失敗 user=%s room=%s: %v", userID, payload.RoomID, memErr)
+		return events.APIGatewayProxyResponse{StatusCode: 500}, nil
+	}
+	if !isMember {
+		log.Printf("[chat-ws-send-message] 非成員遭拒 user=%s room=%s", userID, payload.RoomID)
+		return events.APIGatewayProxyResponse{StatusCode: 403}, nil
+	}
+
+	// 3. Get User Name (Could be optimized by caching or session)
 	userName := "User"
 	user, _ := getUser(ctx, userID)
 	if user != nil {
@@ -95,7 +120,7 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 		TTL:         now.Add(7 * 24 * time.Hour).Unix(),
 	}
 
-	// 3. Save Message to DB
+	// 4. Save Message to DB
 	item, _ := attributevalue.MarshalMap(msg)
 	tableNameMsg := tablePrefix + "ChatMessages"
 	_, err = dbClient.PutItem(ctx, &dynamodb.PutItemInput{
@@ -107,7 +132,7 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 		return events.APIGatewayProxyResponse{StatusCode: 500}, nil
 	}
 
-	// 4. Update all members' Membership list (LastMessage & Time)
+	// 5. Update all members' Membership list (LastMessage & Time)
 	room, _ := getRoom(ctx, payload.RoomID)
 	if room != nil {
 		// If room title is missing, default "聊天室", or looks like a GameID, or missing metadata
@@ -146,7 +171,7 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 		}
 	}
 
-	// 5. Broadcast to connected members & Push to offline members
+	// 6. Broadcast to connected members & Push to offline members
 	if room != nil {
 		callbackAPI := os.Getenv("WS_API_ENDPOINT")
 		log.Printf("Broadcasting to %d members in room %s using endpoint %s", len(room.MemberIDs), payload.RoomID, callbackAPI)
