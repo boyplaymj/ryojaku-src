@@ -88,7 +88,13 @@ echo "  CloudFront 網域：$CF_DOMAIN"
 NEW_ARN="arn:aws:cloudfront::$ACCOUNT:distribution/$DIST_ID"
 aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text > /tmp/ryojaku-bucket-policy.json
 
-python3 - "$NEW_ARN" <<'PY'
+# 🔴 `|| rc=$?` 不可省。這支 python 拿 exit code 當控制流（10=要寫回），而本檔開頭有
+#    `set -e` —— 裸呼叫一個回傳非 0 的指令會**當場中止整支腳本**，下一行的 `rc=$?` 根本
+#    不會執行。實測過：中止碼 10，於是 distribution 建好了、桶 policy 沒更新、DNS 沒建，
+#    留下一個對全世界 403 的站；而且重跑也修不好（ARN 永遠加不進去 → 永遠 exit 10 → 永遠中止）。
+#    加上 `|| rc=$?` 讓它變成「受測試的指令」，set -e 就不會觸發。
+rc=0
+python3 - "$NEW_ARN" <<'PY' || rc=$?
 import json, sys
 arn = sys.argv[1]
 p = json.load(open('/tmp/ryojaku-bucket-policy.json'))
@@ -110,7 +116,6 @@ for st in p['Statement']:
 print('❌ 找不到帶 AWS:SourceArn 的 statement，中止', file=sys.stderr)
 sys.exit(1)
 PY
-rc=$?
 if [ $rc -eq 10 ]; then
   aws s3api put-bucket-policy --bucket "$BUCKET" --policy file:///tmp/ryojaku-bucket-policy-new.json
   echo "✔ 桶 policy 已更新"

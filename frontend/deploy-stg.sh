@@ -37,9 +37,21 @@ echo "  WS=$WS_BASE"
 echo "  目標=$S3_PREFIX  dist=$DIST_ID  URL=https://$SUBDOMAIN"
 
 [ -d node_modules ] || npm ci
-# 兩個變數都是 fail-closed：apiService.ts 缺 API 會 throw，chatService.ts 缺 WS 會拒絕連線。
+
+# 社群登入的 client id（都是**公開值**，前端本來就會內嵌，非機密）。
+# ⚠️ 缺值不擋部署，但前端會**靜默隱藏**那顆登入鈕（isGoogleConfigured / isLineConfigured
+#    直接回 false，不會報錯）—— 症狀是「按鈕不見了」，查起來完全沒有線索。故一定要明講。
+ssm(){ aws ssm get-parameter --region ap-southeast-1 --name "$1" --query 'Parameter.Value' --output text 2>/dev/null || true; }
+GCID=$(ssm /ryojaku/stg/GOOGLE_CLIENT_ID)
+LCID=$(ssm /ryojaku/stg/LINE_LOGIN_CHANNEL_ID)
+[ -n "$GCID" ] || echo "⚠️  未設 /ryojaku/stg/GOOGLE_CLIENT_ID → Google 登入鈕不會出現（見 DEPLOY_PREREQS ②）"
+[ -n "$LCID" ] || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_ID → LINE 登入鈕不會出現（見 DEPLOY_PREREQS ④）"
+
+# 前四個變數都是 fail-closed：apiService.ts 缺 API 會 throw，chatService.ts 缺 WS 會拒絕連線。
 # 這是刻意的 —— 工程師原本把 prod 的 WS（ek5dythoh9…/prod）寫死到連 env 都蓋不掉。
-VITE_API_BASE_URL="$API_BASE" VITE_WS_BASE_URL="$WS_BASE" npm run build
+VITE_API_BASE_URL="$API_BASE" VITE_WS_BASE_URL="$WS_BASE" \
+VITE_GOOGLE_CLIENT_ID="$GCID" VITE_LINE_LOGIN_CHANNEL_ID="$LCID" \
+  npm run build
 
 # 出貨前自我驗證：我方 staging 位址要在，工程師的四個正式位址一個都不准殘留。
 BUNDLE=$(ls dist/assets/*.js)
@@ -53,6 +65,19 @@ fi
 # 理由同上：這包 dist 就是 Capacitor 的 webDir，會原封不動變成手機上改不掉的那份。
 if grep -q "execute-api" $BUNDLE; then
   echo "❌ bundle 殘留 execute-api 原始位址（App 重建 API 就變磚），中止" >&2; exit 1
+fi
+# 有設就必須真的烘進去 ——「設了卻沒生效」比「沒設」難查得多：兩者的畫面一模一樣
+# （按鈕不見了），但前者你會以為自己已經設好了，根本不會回頭看這裡。
+[ -z "$GCID" ] || grep -qF "$GCID" $BUNDLE || { echo "❌ 有設 GOOGLE_CLIENT_ID 但沒烘進 bundle，中止" >&2; exit 1; }
+[ -z "$LCID" ] || grep -qF "$LCID" $BUNDLE || { echo "❌ 有設 LINE_LOGIN_CHANNEL_ID 但沒烘進 bundle，中止" >&2; exit 1; }
+
+# 🔴 反向護欄：channel **secret** 絕對不可以進 bundle。
+#    它只該待在 Lambda env（code 交換用）。這裡不比對「有沒有設成 VITE_*」而是直接
+#    在產物裡搜它的值 —— 任何管道（打錯變數名、被別的檔引用、複製貼上）漏出去都會被抓到。
+LSEC=$(aws ssm get-parameter --region ap-southeast-1 --name /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET \
+        --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)
+if [ -n "$LSEC" ] && grep -qF "$LSEC" $BUNDLE; then
+  echo "❌ LINE channel secret 出現在前端 bundle 裡！中止部署" >&2; exit 1
 fi
 echo "✔ bundle 位址檢查通過"
 
