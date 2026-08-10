@@ -15,6 +15,10 @@ import (
 
 const testChannelID = "1234567890"
 
+// nonce 現在是必填 —— 所有案例都要帶，否則會在真正想驗的守衛之前就被擋掉，
+// 那些負向案例就會變成「因為錯的理由而通過」。
+const testNonce = "srv-issued-nonce-abc"
+
 // okBody：一份「全部合法」的 verify 回應，測試再逐項改壞其中一欄。
 func okBody() map[string]interface{} {
 	return map[string]interface{}{
@@ -23,6 +27,7 @@ func okBody() map[string]interface{} {
 		"aud":     testChannelID,
 		"exp":     time.Now().Add(10 * time.Minute).Unix(),
 		"iat":     time.Now().Add(-1 * time.Minute).Unix(),
+		"nonce":   testNonce,
 		"name":    "阿明",
 		"picture": "https://profile.line-scdn.net/x",
 		"email":   "  Foo@Example.COM ",
@@ -54,7 +59,7 @@ func newStub(t *testing.T, status int, body interface{}) *map[string][]string {
 func TestVerifyLINEIDToken_NoChannelIDConfigured(t *testing.T) {
 	t.Setenv("LINE_LOGIN_CHANNEL_ID", "")
 	newStub(t, 200, okBody())
-	if _, err := VerifyLINEIDToken(context.Background(), "tok", ""); err != ErrLineChannelNotConfigured {
+	if _, err := VerifyLINEIDToken(context.Background(), "tok", testNonce); err != ErrLineChannelNotConfigured {
 		t.Fatalf("未設 channel id 應 fail-closed，得到 err=%v", err)
 	}
 }
@@ -63,7 +68,7 @@ func TestVerifyLINEIDToken_Success(t *testing.T) {
 	t.Setenv("LINE_LOGIN_CHANNEL_ID", testChannelID)
 	form := newStub(t, 200, okBody())
 
-	li, err := VerifyLINEIDToken(context.Background(), "tok-abc", "")
+	li, err := VerifyLINEIDToken(context.Background(), "tok-abc", testNonce)
 	if err != nil {
 		t.Fatalf("合法 token 應通過，err=%v", err)
 	}
@@ -84,8 +89,26 @@ func TestVerifyLINEIDToken_Success(t *testing.T) {
 	if (*form)["client_id"] == nil || (*form)["client_id"][0] != testChannelID {
 		t.Errorf("未送出 client_id：%v", *form)
 	}
-	if _, ok := (*form)["nonce"]; ok {
-		t.Errorf("nonce 為空時不該送出該欄位：%v", *form)
+	if (*form)["nonce"] == nil || (*form)["nonce"][0] != testNonce {
+		t.Errorf("未送出 nonce：%v", *form)
+	}
+}
+
+// nonce 必填：空字串／純空白都要在打 LINE 之前就被擋下。
+// 這條擋的是「一個靠不帶參數就能繞過的旋鈕」——先前寫成「非空才比對」正是那樣。
+func TestVerifyLINEIDToken_NonceRequired(t *testing.T) {
+	for _, n := range []string{"", "   ", "\t"} {
+		t.Run("nonce="+n, func(t *testing.T) {
+			t.Setenv("LINE_LOGIN_CHANNEL_ID", testChannelID)
+			form := newStub(t, 200, okBody())
+			if _, err := VerifyLINEIDToken(context.Background(), "tok", n); err != ErrLineNonceRequired {
+				t.Fatalf("沒帶 nonce 應回 ErrLineNonceRequired，得到 %v", err)
+			}
+			// 而且要在打 LINE 之前就擋掉（沒有任何請求送出去）。
+			if *form != nil {
+				t.Errorf("沒帶 nonce 卻仍呼叫了 LINE：%v", *form)
+			}
+		})
 	}
 }
 
@@ -145,7 +168,7 @@ func TestVerifyLINEIDToken_RejectsEachInvalidField(t *testing.T) {
 			b := okBody()
 			c.mutate(b)
 			newStub(t, c.status, b)
-			if li, err := VerifyLINEIDToken(context.Background(), "tok", ""); err == nil {
+			if li, err := VerifyLINEIDToken(context.Background(), "tok", testNonce); err == nil {
 				t.Fatalf("應擋下卻放行，回了 %+v", li)
 			}
 		})
@@ -159,7 +182,7 @@ func TestVerifyLINEIDToken_RejectsEachInvalidField(t *testing.T) {
 func TestVerifyLINEIDToken_RejectsNon200WithValidBody(t *testing.T) {
 	t.Setenv("LINE_LOGIN_CHANNEL_ID", testChannelID)
 	newStub(t, 500, okBody())
-	if li, err := VerifyLINEIDToken(context.Background(), "tok", ""); err == nil {
+	if li, err := VerifyLINEIDToken(context.Background(), "tok", testNonce); err == nil {
 		t.Fatalf("HTTP 500 卻放行，回了 %+v", li)
 	}
 }
@@ -169,7 +192,7 @@ func TestVerifyLINEIDToken_NonJSONResponseIsRejected(t *testing.T) {
 	// 5xx HTML 錯誤頁：解不出 JSON 時所有欄位都是零值，若不明確擋下就會變成
 	// 「iss=="" 卻通過」之類的空殼身分。
 	newStub(t, 502, "<html>bad gateway</html>")
-	if _, err := VerifyLINEIDToken(context.Background(), "tok", ""); err == nil {
+	if _, err := VerifyLINEIDToken(context.Background(), "tok", testNonce); err == nil {
 		t.Fatal("非 JSON 回應卻放行")
 	}
 }
@@ -177,7 +200,7 @@ func TestVerifyLINEIDToken_NonJSONResponseIsRejected(t *testing.T) {
 func TestVerifyLINEIDToken_EmptyToken(t *testing.T) {
 	t.Setenv("LINE_LOGIN_CHANNEL_ID", testChannelID)
 	newStub(t, 200, okBody())
-	if _, err := VerifyLINEIDToken(context.Background(), "  ", ""); err == nil {
+	if _, err := VerifyLINEIDToken(context.Background(), "  ", testNonce); err == nil {
 		t.Fatal("空 id_token 卻放行")
 	}
 }

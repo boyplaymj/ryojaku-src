@@ -20,15 +20,21 @@ import (
 )
 
 // token 用途常數。
+// ⚠️ purpose 是 ConsumeToken 條件式的一部分 → 不同用途的 token 天然不可互換
+//    （拿認證信的 token 當 LINE nonce 用會 ConditionalCheckFailed）。
 const (
 	PurposeVerifyEmail   = "verify_email"
 	PurposeResetPassword = "reset_password"
+	PurposeLineNonce     = "line_nonce" // LINE Login 防重放 nonce，見 shared/line.go
 )
 
 // 建議 TTL。
 const (
 	TTLVerifyEmail   = 24 * time.Hour
 	TTLResetPassword = 30 * time.Minute
+	// nonce 只要撐過「拿 nonce → 跳 LINE 授權 → 帶 id_token 回來」這段，
+	// 5 分鐘足夠；短 TTL 讓未用完的 nonce 儘快被 TTL 清掉，也縮小可重放窗口。
+	TTLLineNonce = 5 * time.Minute
 )
 
 func authTokensTable() string { return tablePrefix() + "AuthTokens" }

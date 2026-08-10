@@ -56,12 +56,11 @@ type lineVerifyResponse struct {
 }
 
 // VerifyLINEIDToken：驗 LINE id_token，回驗證後的身分。任何驗證失敗回 err。
-// nonce 非空時一併送出給 LINE 比對；空字串代表前端沒帶 nonce。
+// nonce 一併送出給 LINE 比對，並在這裡再驗一次回應相符。
 //
-// 🔴 目前**沒有防重放**。nonce 是呼叫端自己傳進來的，後端沒有保存「本次登入預先發出的
-// nonce」，所以拿到別人 id_token 的人可以把裡面的 nonce 一起送上來、照樣通過。
-// 要真的擋重放，得走 LINE 建議的流程：伺服器產 nonce → 存起來（短 TTL）→ 前端帶去
-// 授權請求 → 這裡驗完單次消耗。見 AUTH_SYSTEM_DESIGN §5.G「已知限制」。
+// ⚠️ 光是這個比對**擋不住重放** —— nonce 由呼叫端傳進來，拿到別人 id_token 的人可以
+// 把裡面的 nonce 一起送上來。真正的防重放靠的是呼叫端先跑 ConsumeLineNonce()
+// （伺服器發、單次消耗），兩者要一起用才成立。端點層的順序見 auth_line/main.go。
 func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIdentity, error) {
 	channelID := os.Getenv("LINE_LOGIN_CHANNEL_ID")
 	if channelID == "" {
@@ -70,13 +69,17 @@ func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIden
 	if strings.TrimSpace(rawIDToken) == "" {
 		return nil, errors.New("empty id_token")
 	}
+	// nonce 必填。原本寫成「非空才比對」，那是一個任何人都能靠「不帶 nonce」繞過的旋鈕；
+	// 端點層已經強制要有 nonce（ConsumeLineNonce），這裡再擋一次，讓這支函式本身
+	// 不存在「沒 nonce 的合法用法」。
+	if strings.TrimSpace(nonce) == "" {
+		return nil, ErrLineNonceRequired
+	}
 
 	form := url.Values{}
 	form.Set("id_token", rawIDToken)
 	form.Set("client_id", channelID)
-	if nonce != "" {
-		form.Set("nonce", nonce)
-	}
+	form.Set("nonce", nonce)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, lineVerifyEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -127,12 +130,10 @@ func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIden
 	if time.Now().Unix() >= vr.Exp {
 		return nil, errors.New("id_token expired")
 	}
-	// 有帶 nonce 就必須原樣回來。
-	// ⚠️ 這**不是防重放**。nonce 由呼叫端自己給，攻擊者拿到 id_token 後可以直接讀出裡面的
-	// nonce 一起送上來，這道檢查照樣會過。真正的防重放要「伺服器先發 nonce、存起來、
-	// 事後單次消耗」，目前沒有那個狀態。這裡的作用只有：把 nonce 轉給 LINE 一併比對，
-	// 以及在前端有正確實作時擋掉「token 與本次授權請求不相符」的低階錯誤。
-	if nonce != "" && vr.Nonce != nonce {
+	// nonce 必須原樣回來 —— 這一道確認的是「這張 id_token 綁的正是本次授權請求」。
+	// 它單獨不構成防重放（nonce 由呼叫端傳入），要跟呼叫端的 ConsumeLineNonce
+	// （伺服器發、單次消耗）合起來看：那邊保證這個 nonce 沒被用過，這邊保證 token 綁的是它。
+	if vr.Nonce != nonce {
 		return nil, errors.New("nonce mismatch")
 	}
 
@@ -142,6 +143,31 @@ func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIden
 		Picture: vr.Picture,
 		Email:   strings.ToLower(strings.TrimSpace(vr.Email)),
 	}, nil
+}
+
+// ErrLineNonceRequired：呼叫端沒帶 nonce。fail-closed —— 不接受「沒帶就跳過」，
+// 否則整套防重放等於一個任何人都能繞過的旋鈕。
+var ErrLineNonceRequired = errors.New("nonce is required")
+
+// IssueLineNonce：發一個伺服器端 nonce（256-bit），存進 AuthTokens 並設短 TTL，回明碼。
+// 前端把它帶進 LINE 授權請求，LINE 會把它烘進 id_token 的 nonce claim。
+// DB 只存 SHA-256（沿用 AuthTokens 的既有作法），明碼只存在於回應與前端手上。
+func IssueLineNonce(ctx context.Context) (string, error) {
+	// userId 留空：這是 pre-auth 的 nonce，發的時候還不知道是誰。
+	// 身分完全由後續 id_token 的 sub 決定，nonce 只負責「這張票只能用一次」。
+	return IssueToken(ctx, "", PurposeLineNonce, TTLLineNonce)
+}
+
+// ConsumeLineNonce：原子消耗一個 nonce。成功回 nil；不存在／用途不符／過期／已用過都回 err。
+// 靠 ConsumeToken 的單一 conditional UpdateItem 完成 → 同一個 nonce 被併發送兩次，
+// 只有一次會成功（這正是擋重放的那一下）。
+func ConsumeLineNonce(ctx context.Context, nonce string) error {
+	if strings.TrimSpace(nonce) == "" {
+		return ErrLineNonceRequired
+	}
+	// 回傳的 userId 對 nonce 沒有意義（發的時候是空的），刻意丟棄。
+	_, err := ConsumeToken(ctx, nonce, PurposeLineNonce)
+	return err
 }
 
 // LineIdentityKey：line#<sub>。

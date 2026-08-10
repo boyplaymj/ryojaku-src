@@ -156,6 +156,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return jsonResp(headers, http.StatusTooManyRequests, map[string]interface{}{"success": false, "error": "嘗試次數過多，請稍後再試"}), nil
 	}
 
+	// 🔴 防重放：先原子消耗 nonce，再去驗 id_token。順序是刻意的：
+	//   ① 消耗失敗（不存在／過期／已用過）代表這不是一次合法的新登入 → 連 LINE 都不用打，
+	//      也就不能拿我們的端點當 LINE verify 的預言機。
+	//   ② 同一張 id_token 重送第二次，nonce 已被標記 usedAt → ConditionalCheckFailed。
+	// 代價：LINE 那邊若臨時失敗，nonce 已燒掉、使用者要重跑一次授權。這是標準取捨，
+	// 換來的是「消耗」永遠不會晚於「驗證」，中間沒有可競態的窗口。
+	if err := shared.ConsumeLineNonce(ctx, req.Nonce); err != nil {
+		if errors.Is(err, shared.ErrLineNonceRequired) {
+			return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "missing nonce"}), nil
+		}
+		log.Printf("ConsumeLineNonce failed: %v", err)
+		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid or expired nonce"}), nil
+	}
+
 	// 後端驗 LINE id_token（簽章/aud/exp，另自驗 iss/aud/sub/exp/nonce）。
 	li, err := shared.VerifyLINEIDToken(ctx, req.IDToken, req.Nonce)
 	if err != nil {

@@ -810,6 +810,18 @@
       ]
     },
     {
+      "name": "auth-line-nonce",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_auth_line_nonce",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/auth/line/nonce?",
+      "auth": "public",
+      "tables": [
+        "AuthTokens",
+        "AuthRateLimit"
+      ]
+    },
+    {
       "name": "auth-line",
       "projectPath": "cmd/lambdas/apis/mahjongclub_auth_line",
       "apiType": "REST_V1",

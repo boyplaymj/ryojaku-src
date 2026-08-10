@@ -52,6 +52,16 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "missing idToken"}), nil
 	}
 
+	// 防重放：先原子消耗 nonce 再驗 token（順序與理由同 auth_line/main.go）。
+	// 綁定路徑一樣需要 —— 重放一張竊得的 id_token 就能把別人的 LINE 綁到自己帳號上。
+	if err := shared.ConsumeLineNonce(ctx, req.Nonce); err != nil {
+		if errors.Is(err, shared.ErrLineNonceRequired) {
+			return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "missing nonce"}), nil
+		}
+		log.Printf("ConsumeLineNonce failed: %v", err)
+		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid or expired nonce"}), nil
+	}
+
 	li, err := shared.VerifyLINEIDToken(ctx, req.IDToken, req.Nonce)
 	if err != nil {
 		log.Printf("VerifyLINEIDToken failed: %v", err)

@@ -483,7 +483,7 @@ Resources:
   AuthTokensTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${TablePrefix}AuthTokens'        # PK=tokenHash(SHA256,不存明碼);purpose=verify_email|reset_password
+      TableName: !Sub '${TablePrefix}AuthTokens'        # PK=tokenHash(SHA256,不存明碼);purpose=verify_email|reset_password|line_nonce
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [ { AttributeName: tokenHash, AttributeType: S } ]
       KeySchema: [ { AttributeName: tokenHash, KeyType: HASH } ]

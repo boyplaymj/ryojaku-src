@@ -61,6 +61,7 @@ R_NONCE=TestVerifyLINEIDToken_NonceForwardedAndChecked
 R_CFG=TestVerifyLINEIDToken_NoChannelIDConfigured
 R_JSON=TestVerifyLINEIDToken_NonJSONResponseIsRejected
 R_S500=TestVerifyLINEIDToken_RejectsNon200WithValidBody
+R_REQ=TestVerifyLINEIDToken_NonceRequired
 R_GATE=TestShouldBlockTrustAction_Matrix
 
 echo "── shared/line.go：id_token 驗證守衛 ──"
@@ -81,8 +82,22 @@ mut "exp 短路回歸（缺失/0/負數）" "$LINE_GO" '	if vr.Exp <= 0 {
 # 同理：400 帶 error 會被 vr.Error 那道攔下、502 回 HTML 會被 JSON 解析失敗攔下，
 # 所以狀態碼檢查要靠「狀態碼壞、內容全好」那一格才驗得到。
 mut "非 200 檢查"           "$LINE_GO" 'if resp.StatusCode != http.StatusOK {'    'if false {' "$R_S500"
-mut "nonce 相符檢查"        "$LINE_GO" 'if nonce != "" && vr.Nonce != nonce {'    'if false {' "$R_NONCE"
+mut "nonce 相符檢查"        "$LINE_GO" 'if vr.Nonce != nonce {'                   'if false {' "$R_NONCE"
 mut "channelID fail-closed" "$LINE_GO" 'if channelID == "" {'                     'if false {' "$R_CFG"
+mut "nonce 必填"            "$LINE_GO" '	if strings.TrimSpace(nonce) == "" {
+		return nil, ErrLineNonceRequired
+	}
+' '' "$R_REQ"
+# 這一發不是拿掉守衛，而是**退回改動前的寫法**（「非空才比對」）。
+# 那個寫法本身就是可繞過的旋鈕：不帶 nonce 就整道跳過，而且測試不會紅
+# ——因為當時所有案例都乖乖帶了 nonce。要釘住的是「可跳過」這件事。
+mut "nonce 可選旗標回歸" "$LINE_GO" '	if strings.TrimSpace(nonce) == "" {
+		return nil, ErrLineNonceRequired
+	}
+' '	if nonce == "" {
+		return &LineIdentity{Sub: "skipped"}, nil
+	}
+' "$R_REQ"
 
 echo "── shared/authgate.go：信箱軟門檻 ──"
 # ① 把 LINE 帳號的放行拿掉（＝退回加 hasEmail 維度之前的行為）
@@ -97,6 +112,25 @@ mut "門檻恆不擋（驗正控存在）" "$GATE_GO" '	return !verified
 }' "$R_GATE"
 
 restore
+echo "── 端點層：consume 必須早於 verify（原始碼順序檢查）──"
+# ⚠️ 誠實說明強度：這是**原始碼順序**檢查，不是行為測試。
+#   「同一個 nonce 只能消耗一次」是 DDB conditional update 的性質，要 E2E 才驗得到
+#   （見 AUTH_SYSTEM_DESIGN §5.G）。這裡只保證沒有人把兩行對調或刪掉其中一行 ——
+#   對調的話 verify 會先打 LINE，我們的端點就變成 LINE verify 的預言機。
+for f in cmd/lambdas/apis/mahjongclub_auth_line/main.go \
+         cmd/lambdas/apis/mahjongclub_auth_bind_line/main.go; do
+  # 只看實際呼叫（行尾有 "(ctx," ），避開註解裡提到函式名的情況。
+  c_line=$(grep -n 'shared\.ConsumeLineNonce(ctx,' "$f" | head -1 | cut -d: -f1)
+  v_line=$(grep -n 'shared\.VerifyLINEIDToken(ctx,' "$f" | head -1 | cut -d: -f1)
+  if [ -z "$c_line" ] || [ -z "$v_line" ]; then
+    echo "❌ ${f##*/}：找不到 ConsumeLineNonce 或 VerifyLINEIDToken 的呼叫"; FAIL=1
+  elif [ "$c_line" -ge "$v_line" ]; then
+    echo "❌ ${f##*/}：ConsumeLineNonce(第 $c_line 行) 沒有早於 VerifyLINEIDToken(第 $v_line 行)"; FAIL=1
+  else
+    echo "✅ ${f##*/}：consume(L$c_line) → verify(L$v_line)"
+  fi
+done
+
 echo "── 還原後回歸 ──"
 if ! go test ./cmd/lambdas/shared/ 2>&1 | tail -3; then FAIL=1; fi
 for f in "$LINE_GO:line.go" "$GATE_GO:authgate.go"; do
