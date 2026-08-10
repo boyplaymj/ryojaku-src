@@ -124,6 +124,12 @@ func TestVerifyLINEIDToken_RejectsEachInvalidField(t *testing.T) {
 		{"sub 空", 200, func(m map[string]interface{}) { m["sub"] = "" }},
 		{"sub 缺欄位", 200, func(m map[string]interface{}) { delete(m, "sub") }},
 		{"已過期", 200, func(m map[string]interface{}) { m["exp"] = time.Now().Add(-time.Minute).Unix() }},
+		// exp 的三種「不算數」寫法都要擋。缺欄位/0 曾經被放行過（`vr.Exp > 0 &&` 短路），
+		// 那等於一張永不過期的票；Codex 2026-08-10 覆核指出，已修。
+		{"exp 缺欄位", 200, func(m map[string]interface{}) { delete(m, "exp") }},
+		{"exp = 0", 200, func(m map[string]interface{}) { m["exp"] = 0 }},
+		{"exp 為負", 200, func(m map[string]interface{}) { m["exp"] = -1 }},
+		{"exp 剛好等於現在", 200, func(m map[string]interface{}) { m["exp"] = time.Now().Unix() }},
 		{"200 但帶 error 欄位", 200, func(m map[string]interface{}) { m["error"] = "invalid_request" }},
 		{"400 拒絕", 400, func(m map[string]interface{}) {
 			for k := range m {
@@ -143,6 +149,18 @@ func TestVerifyLINEIDToken_RejectsEachInvalidField(t *testing.T) {
 				t.Fatalf("應擋下卻放行，回了 %+v", li)
 			}
 		})
+	}
+}
+
+// 非 200 但**內容完全合法**的回應必須擋。
+// 這個案例存在的理由：其他負向案例（400 帶 error、502 回 HTML）分別會被
+// 「vr.Error != ""」和「JSON 解析失敗」攔下，於是狀態碼檢查本身其實沒被驗到 ——
+// 拿掉它測試照樣全綠。只有「狀態碼壞、內容全好」這一格能單獨釘住它。
+func TestVerifyLINEIDToken_RejectsNon200WithValidBody(t *testing.T) {
+	t.Setenv("LINE_LOGIN_CHANNEL_ID", testChannelID)
+	newStub(t, 500, okBody())
+	if li, err := VerifyLINEIDToken(context.Background(), "tok", ""); err == nil {
+		t.Fatalf("HTTP 500 卻放行，回了 %+v", li)
 	}
 }
 

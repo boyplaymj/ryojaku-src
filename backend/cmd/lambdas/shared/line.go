@@ -56,7 +56,12 @@ type lineVerifyResponse struct {
 }
 
 // VerifyLINEIDToken：驗 LINE id_token，回驗證後的身分。任何驗證失敗回 err。
-// nonce 非空時一併送出（LINE 端會比對），用於防重放；空字串代表前端沒帶 nonce。
+// nonce 非空時一併送出給 LINE 比對；空字串代表前端沒帶 nonce。
+//
+// 🔴 目前**沒有防重放**。nonce 是呼叫端自己傳進來的，後端沒有保存「本次登入預先發出的
+// nonce」，所以拿到別人 id_token 的人可以把裡面的 nonce 一起送上來、照樣通過。
+// 要真的擋重放，得走 LINE 建議的流程：伺服器產 nonce → 存起來（短 TTL）→ 前端帶去
+// 授權請求 → 這裡驗完單次消耗。見 AUTH_SYSTEM_DESIGN §5.G「已知限制」。
 func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIdentity, error) {
 	channelID := os.Getenv("LINE_LOGIN_CHANNEL_ID")
 	if channelID == "" {
@@ -113,10 +118,20 @@ func VerifyLINEIDToken(ctx context.Context, rawIDToken, nonce string) (*LineIden
 	if vr.Sub == "" {
 		return nil, errors.New("missing sub")
 	}
-	if vr.Exp > 0 && time.Now().Unix() >= vr.Exp {
+	// exp 缺失或 <=0 一律拒絕，不可「沒有 exp 就當沒過期」——那等於在回應被置換或
+	// 端點行為改變時自動放行一張永不過期的票。官方文件把 exp 列為必回欄位
+	// （不像 name/picture/email 標明有條件），所以要求它存在不會誤傷正常流量。
+	if vr.Exp <= 0 {
+		return nil, errors.New("missing exp")
+	}
+	if time.Now().Unix() >= vr.Exp {
 		return nil, errors.New("id_token expired")
 	}
-	// 有要求 nonce 就必須原樣回來（端點不比對時的最後一道）。
+	// 有帶 nonce 就必須原樣回來。
+	// ⚠️ 這**不是防重放**。nonce 由呼叫端自己給，攻擊者拿到 id_token 後可以直接讀出裡面的
+	// nonce 一起送上來，這道檢查照樣會過。真正的防重放要「伺服器先發 nonce、存起來、
+	// 事後單次消耗」，目前沒有那個狀態。這裡的作用只有：把 nonce 轉給 LINE 一併比對，
+	// 以及在前端有正確實作時擋掉「token 與本次授權請求不相符」的低階錯誤。
 	if nonce != "" && vr.Nonce != nonce {
 		return nil, errors.New("nonce mismatch")
 	}
