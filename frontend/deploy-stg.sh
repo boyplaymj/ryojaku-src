@@ -70,6 +70,16 @@ fi
 # （按鈕不見了），但前者你會以為自己已經設好了，根本不會回頭看這裡。
 [ -z "$GCID" ] || grep -qF "$GCID" $BUNDLE || { echo "❌ 有設 GOOGLE_CLIENT_ID 但沒烘進 bundle，中止" >&2; exit 1; }
 [ -z "$LCID" ] || grep -qF "$LCID" $BUNDLE || { echo "❌ 有設 LINE_LOGIN_CHANNEL_ID 但沒烘進 bundle，中止" >&2; exit 1; }
+# 只比對 ID 字串還不夠：ID 是純數字，可能在別的地方偶然出現（版本號、座標、hash 片段），
+# 那樣即使 LINE 那段整個被搖掉，上面那行照樣過。所以再比對**只有走 LINE 授權才會存在**的位址。
+# 這條是量出來的，不是推測（2026-08-10 差分實測，未設 ID vs 設假 ID `9999999999` 各建一包）：
+#   未設 ID → esbuild 把 LINE_CHANNEL_ID 常數折疊成 ''，isLineConfigured() 恆假，
+#             `access.line.me/oauth2/v2.1/authorize` 與 client_id 一起被當死碼砍掉（bundle 內 0 次），
+#             只剩 `尚未設定 LINE 登入` 那句 throw；
+#   設了 ID → 授權 URL 與 ID 都在（各 1 次），而那句 throw 反過來變死碼被砍（0 次）。
+# 兩個方向互為反控，所以這條護欄有鑑別力 —— 不是「有就好」的單向檢查。
+[ -z "$LCID" ] || grep -qF "access.line.me/oauth2/v2.1/authorize" $BUNDLE || {
+  echo "❌ 有設 LINE_LOGIN_CHANNEL_ID 但 bundle 裡沒有 LINE 授權位址（LINE 登入被搖樹砍掉了），中止" >&2; exit 1; }
 
 # 🔴 反向護欄：channel **secret** 絕對不可以進 bundle。
 #    它只該待在 Lambda env（code 交換用）。這裡不比對「有沒有設成 VITE_*」而是直接
