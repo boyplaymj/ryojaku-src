@@ -810,11 +810,36 @@
       ]
     },
     {
+      "name": "auth-line",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_auth_line",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/auth/line?",
+      "auth": "public",
+      "tables": [
+        "Users",
+        "AuthIdentities",
+        "AuthRateLimit"
+      ]
+    },
+    {
       "name": "auth-bind-google",
       "projectPath": "cmd/lambdas/apis/mahjongclub_auth_bind_google",
       "apiType": "REST_V1",
       "method": "POST",
       "path": "/auth/bind-google?",
+      "auth": "user",
+      "tables": [
+        "Users",
+        "AuthIdentities"
+      ]
+    },
+    {
+      "name": "auth-bind-line",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_auth_bind_line",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/auth/bind-line?",
       "auth": "user",
       "tables": [
         "Users",

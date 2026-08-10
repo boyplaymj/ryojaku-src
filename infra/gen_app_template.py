@@ -88,6 +88,14 @@ AUTHORIZER_PILOT = {
     # 掃蕩的涵蓋範圍等於這份名單，名單漏了，稽核也會跟著漏。新增 user 端點必須同步加入，
     # 直到 S2 改成依 manifest 的 auth 欄位自動套用為止。
     "event-get-upload-url",   # /event-get-upload-url  ← 未認證可寫入 S3
+
+    # LINE Login（新增 user 端點 → 依上面那條教訓同步列舉）。
+    # 這支自己也會 fail-closed（shared.GetUserIdentifierWithContext 必須 fromJWT），
+    # 掛 authorizer 是第二層：未帶 token 在 gateway 就被擋掉，不進 lambda。
+    "auth-bind-line",         # REST_V1 POST /auth/bind-line
+    # ⚠️ 尚未列舉的同族 user 端點：auth-bind-google / auth-unbind / auth-change-password /
+    #    auth-logout-all。四支都在程式內自驗 JWT（fromJWT 必須為 true）故非漏洞，
+    #    但缺第二層；要不要一起補屬另案，別在這裡順手改而沒實測。
 }
 
 def authorizer_for(f):
@@ -164,6 +172,10 @@ Parameters:
   VapidSubscriber: { Type: String, NoEcho: true }
   # 帳號系統 P6：非機密設定（明碼參數）。GOOGLE_CLIENT_ID 是公開值(前端亦內嵌)；SES 寄件設定。
   GoogleClientId: { Type: String, Default: '' }
+  # LINE Login channel ID（公開值，前端亦內嵌；**不是** LINE bot 的 channel）。
+  # 空字串 → shared.VerifyLINEIDToken 直接回 ErrLineChannelNotConfigured，
+  # LINE 登入端點一律 401（fail-closed，不會因為沒設就放行）。
+  LineLoginChannelId: { Type: String, Default: '' }
   MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
   AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
   SesRegion: { Type: String, Default: 'ap-southeast-1' }
@@ -191,6 +203,7 @@ Globals:
         VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
         VAPID_SUBSCRIBER: !Ref VapidSubscriber
         GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        LINE_LOGIN_CHANNEL_ID: !Ref LineLoginChannelId
         MAIL_FROM: !Ref MailFrom
         APP_BASE_URL: !Ref AppBaseUrl
         SES_REGION: !Ref SesRegion

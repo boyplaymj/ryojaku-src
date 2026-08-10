@@ -23,6 +23,10 @@ Parameters:
   VapidSubscriber: { Type: String, NoEcho: true }
   # 帳號系統 P6：非機密設定（明碼參數）。GOOGLE_CLIENT_ID 是公開值(前端亦內嵌)；SES 寄件設定。
   GoogleClientId: { Type: String, Default: '' }
+  # LINE Login channel ID（公開值，前端亦內嵌；**不是** LINE bot 的 channel）。
+  # 空字串 → shared.VerifyLINEIDToken 直接回 ErrLineChannelNotConfigured，
+  # LINE 登入端點一律 401（fail-closed，不會因為沒設就放行）。
+  LineLoginChannelId: { Type: String, Default: '' }
   MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
   AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
   SesRegion: { Type: String, Default: 'ap-southeast-1' }
@@ -50,6 +54,7 @@ Globals:
         VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
         VAPID_SUBSCRIBER: !Ref VapidSubscriber
         GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        LINE_LOGIN_CHANNEL_ID: !Ref LineLoginChannelId
         MAIL_FROM: !Ref MailFrom
         APP_BASE_URL: !Ref AppBaseUrl
         SES_REGION: !Ref SesRegion
@@ -2234,6 +2239,34 @@ Resources:
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
 
+  FnAuthLine:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_line
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-line'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/line', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
   FnAuthBindGoogle:
     Type: AWS::Serverless::Function
     Properties:
@@ -2243,6 +2276,39 @@ Resources:
         Rest0:
           Type: Api
           Properties: { RestApiId: !Ref RestApi, Path: '/auth/bind-google', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAuthBindLine:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_bind_line
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-bind-line'
+      Events:
+        Rest0:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/auth/bind-line'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
       Policies:
         - Version: '2012-10-17'
           Statement:
