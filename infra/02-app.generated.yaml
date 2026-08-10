@@ -34,7 +34,14 @@ Parameters:
   # ⚠️ 只進 Lambda env，**永遠不進前端**（前端只拿 VITE_LINE_LOGIN_CHANNEL_ID）。
   LineLoginChannelSecret: { Type: String, Default: '', NoEcho: true }
   MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
-  AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
+  # 前端站台網址，用來組認證信／重設密碼信的連結。
+  # 🔴 Default 刻意留空（2026-08-10 改）。原本是 'https://jiomj.boyplaymj.com'，
+  #    但那實測是**後台**的 CloudFront（E2D4YJ8I6MAD0B，origin path /ryojaku-admin，
+  #    根路徑 302 導向 /admin/、任意路徑回 S3 AccessDenied）。沒設 SSM 參數時信會照常
+  #    寄出但連結指向後台 → 使用者永遠驗證不了，且沒有任何錯誤日誌。
+  #    空值 → shared.SendVerifyEmail/SendResetEmail 直接回 ErrAppBaseURLNotConfigured
+  #    並拒寄（fail-closed）。設定值見 DEPLOY_PREREQS.md ⑤。
+  AppBaseUrl: { Type: String, Default: '' }
   SesRegion: { Type: String, Default: 'ap-southeast-1' }
   EmailVerifyGate: { Type: String, Default: 'on' }
 

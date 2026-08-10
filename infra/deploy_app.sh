@@ -35,7 +35,9 @@ EXTRA=()
 # 否則症狀會是「Google 能登入、LINE 按下去就 401」,查起來會先懷疑 LINE 那邊。
 [ -n "$LCSEC" ]  && EXTRA+=("LineLoginChannelSecret=$LCSEC") || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET → LINE **web** 登入(code 交換)將 fail-closed(見 DEPLOY_PREREQS ④)"
 [ -n "$MFROM" ]  && EXTRA+=("MailFrom=$MFROM")      || echo "⚠️  未設 /ryojaku/stg/MAIL_FROM → 沿用 no-reply@jiomj.com,SES 未驗證會退信(見 DEPLOY_PREREQS ①)"
-[ -n "$APPURL" ] && EXTRA+=("AppBaseUrl=$APPURL")
+# 未設 → 認證信/重設信一律拒寄(fail-closed)。舊版的 Default 指向後台網域,會靜默寄出
+# 點不到驗證頁的壞連結;改成留空後這個警告就是唯一的提示,故不可省。
+[ -n "$APPURL" ] && EXTRA+=("AppBaseUrl=$APPURL") || echo "⚠️  未設 /ryojaku/stg/APP_BASE_URL → 認證信/重設密碼信將**拒寄**(見 DEPLOY_PREREQS ⑤)"
 
 python3 gen_app_template.py
 
