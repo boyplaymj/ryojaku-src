@@ -20,9 +20,12 @@ import (
 	"mahjongclub-backend/cmd/lambdas/shared"
 )
 
+// bindRequest：形狀與 /auth/line 相同（code 或 idToken 剛好給一個）。
 type bindRequest struct {
-	IDToken string `json:"idToken"`
-	Nonce   string `json:"nonce"`
+	IDToken     string `json:"idToken"`
+	Code        string `json:"code"`
+	RedirectURI string `json:"redirectUri"`
+	Nonce       string `json:"nonce"`
 }
 
 func jsonResp(headers map[string]string, code int, payload map[string]interface{}) events.APIGatewayProxyResponse {
@@ -48,8 +51,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	var req bindRequest
-	if err := json.Unmarshal([]byte(request.Body), &req); err != nil || req.IDToken == "" {
-		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "missing idToken"}), nil
+	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
+		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "invalid request body"}), nil
+	}
+	// 形狀檢查放在消耗 nonce 之前，理由同 auth_line/main.go。
+	if err := shared.ValidateLineCredential(req.Code, req.IDToken); err != nil {
+		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": err.Error()}), nil
 	}
 
 	// 防重放：先原子消耗 nonce 再驗 token（順序與理由同 auth_line/main.go）。
@@ -62,9 +69,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid or expired nonce"}), nil
 	}
 
-	li, err := shared.VerifyLINEIDToken(ctx, req.IDToken, req.Nonce)
+	li, err := shared.ResolveLINELogin(ctx, req.Code, req.RedirectURI, req.IDToken, req.Nonce)
 	if err != nil {
-		log.Printf("VerifyLINEIDToken failed: %v", err)
+		log.Printf("ResolveLINELogin failed: %v", err)
 		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid line token"}), nil
 	}
 

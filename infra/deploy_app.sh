@@ -18,13 +18,22 @@ VSUB=$(get /ryojaku/stg/VAPID_SUBSCRIBER)
 # ⚠️ GOOGLE_CLIENT_ID / MAIL_FROM 的 Default 指向工程師的 jiomj.com,不是我方 SES 身分,
 #    沒設就會 Google 登入 fail-closed、寄信被 SES 退 MessageRejected。故此處明確警告。
 opt(){ aws ssm get-parameter --region "$REGION" --name "$1" --query 'Parameter.Value' --output text 2>/dev/null || true; }
+# 🔴 SecureString 專用的「可缺席」取值：一定要 --with-decryption。
+#    少了它 aws cli **不會報錯**，而是回傳密文 —— 部署會成功、LINE 登入卻永遠換不到
+#    token，症狀指向 LINE 而不是這裡。用 get() 不行（那支 set -e 下缺參數會中止整個部署，
+#    但 channel secret 在申請下來之前本來就該允許缺席並 fail-closed）。
+optsec(){ aws ssm get-parameter --region "$REGION" --name "$1" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true; }
 GCID=$(opt /ryojaku/stg/GOOGLE_CLIENT_ID)
 LCID=$(opt /ryojaku/stg/LINE_LOGIN_CHANNEL_ID)
+LCSEC=$(optsec /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET)
 MFROM=$(opt /ryojaku/stg/MAIL_FROM)
 APPURL=$(opt /ryojaku/stg/APP_BASE_URL)
 EXTRA=()
 [ -n "$GCID" ]   && EXTRA+=("GoogleClientId=$GCID") || echo "⚠️  未設 /ryojaku/stg/GOOGLE_CLIENT_ID → Google 登入將 fail-closed(見 DEPLOY_PREREQS ②)"
 [ -n "$LCID" ]   && EXTRA+=("LineLoginChannelId=$LCID") || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_ID → LINE 登入將 fail-closed(見 DEPLOY_PREREQS ④)"
+# ID 有設、secret 沒設 → web 的 code 交換一定失敗。這種半套狀態要明講,
+# 否則症狀會是「Google 能登入、LINE 按下去就 401」,查起來會先懷疑 LINE 那邊。
+[ -n "$LCSEC" ]  && EXTRA+=("LineLoginChannelSecret=$LCSEC") || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET → LINE **web** 登入(code 交換)將 fail-closed(見 DEPLOY_PREREQS ④)"
 [ -n "$MFROM" ]  && EXTRA+=("MailFrom=$MFROM")      || echo "⚠️  未設 /ryojaku/stg/MAIL_FROM → 沿用 no-reply@jiomj.com,SES 未驗證會退信(見 DEPLOY_PREREQS ①)"
 [ -n "$APPURL" ] && EXTRA+=("AppBaseUrl=$APPURL")
 

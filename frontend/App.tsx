@@ -15,6 +15,8 @@ import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import VerifyEmail from './pages/VerifyEmail';
+import LineCallback from './pages/LineCallback';
+import { isLineCallback } from './services/lineLogin';
 import Notifications from './pages/Notifications';
 import RateGame from './pages/RateGame';
 
@@ -242,6 +244,18 @@ function App() {
 
   const renderContent = () => {
     if (isAuthChecking) return null;
+
+    // LINE 授權回跳。⚠️ 跟下面那些 hash 路由不同，這是**真實路徑** /auth/line/callback
+    // ——OAuth 規格不允許 redirect_uri 帶 fragment，所以不能沿用 HashRouter 的形式。
+    // 能這樣做的前提是託管端對未知路徑回退到 index.html（已實測 CloudFront 有）。
+    // 放在 user 判斷之前：登入態要能綁定，未登入態要能登入，兩種都得走到這裡。
+    if (isLineCallback()) {
+      return (
+        <div className="mx-auto w-full bg-transparent min-h-screen shadow-2xl relative overflow-hidden">
+          <LineCallback onLoggedIn={handleLoginSuccess} />
+        </div>
+      );
+    }
 
     // 認證流程頁（從信裡連結進站）：登入與否都要能開，故放在 user 判斷之前。
     // 後端寄的是 HashRouter 形式 <base>/#/verify?token= / /#/reset?token=（見 shared/email.go）。

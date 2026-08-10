@@ -5,6 +5,7 @@ import { Loader2, ArrowRight, Sparkles, Mail, Lock, UserPlus, User as UserIcon, 
 import { AppInput, AppButton } from '../components/ui/CommonUI';
 import { useToast } from '../contexts/ToastContext';
 import { isGoogleConfigured, renderGoogleButton } from '../services/googleSignIn';
+import { isLineConfigured, startLineLogin } from '../services/lineLogin';
 
 interface LoginProps {
   onLoginSuccess: (user: User) => void;
@@ -61,6 +62,22 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, inviteePoints = '50' }) =
       (e) => showToast(e.message, 'error'),
     );
   }, [googleReady]);
+
+  // LINE 登入（未設 VITE_LINE_LOGIN_CHANNEL_ID 則不顯示）。
+  // ⚠️ 跟 Google 不同：這裡不會有 callback，成功時瀏覽器整頁離開本站去 LINE 授權，
+  //    結果由 /auth/line/callback 那頁接手（見 pages/LineCallback.tsx）。
+  //    所以 lineBusy 只在「還沒跳走」的那一小段有意義，也因此失敗才需要復原。
+  const [lineReady] = useState(isLineConfigured());
+  const [lineBusy, setLineBusy] = useState(false);
+  const handleLineLogin = async () => {
+    try {
+      setLineBusy(true);
+      await startLineLogin('login');
+    } catch (err) {
+      setLineBusy(false);
+      showToast(err instanceof Error ? err.message : 'LINE 登入失敗', 'error');
+    }
+  };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,14 +224,32 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, inviteePoints = '50' }) =
                   </div>
                 </form>
 
-                {googleReady && (
+                {(googleReady || lineReady) && (
                   <div className="mt-6">
                     <div className="flex items-center gap-3 mb-4">
                       <div className="flex-1 h-px bg-neutral-200" />
                       <span className="text-[0.5625rem] font-black text-neutral-400 uppercase tracking-widest">或</span>
                       <div className="flex-1 h-px bg-neutral-200" />
                     </div>
-                    <div ref={googleBtnRef} className="flex justify-center" />
+                    {googleReady && <div ref={googleBtnRef} className="flex justify-center" />}
+                    {lineReady && (
+                      <button
+                        type="button"
+                        onClick={handleLineLogin}
+                        disabled={lineBusy}
+                        className={`w-full h-12 mt-3 rounded-full flex items-center justify-center gap-2 text-[0.8125rem] font-black tracking-tight text-white transition-colors ${
+                          lineBusy ? 'bg-[#06C755]/60 cursor-wait' : 'bg-[#06C755] hover:bg-[#05b34c]'
+                        }`}
+                      >
+                        {lineBusy ? (
+                          <Loader2 size="1rem" strokeWidth={3} className="animate-spin" />
+                        ) : (
+                          /* LINE 官方綠底 + 白色 LINE 字樣的簡化標記 */
+                          <span className="text-[0.9375rem] font-black tracking-tighter">LINE</span>
+                        )}
+                        {lineBusy ? '前往 LINE…' : '使用 LINE 繼續'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

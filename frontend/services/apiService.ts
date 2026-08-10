@@ -201,6 +201,24 @@ export async function bindGoogle(idToken: string) {
   return apiRequest('/auth/bind-google', { method: 'POST', body: JSON.stringify({ idToken }) });
 }
 
+// ---- LINE Login（authorization code 流程；見 services/lineLogin.ts 檔頭）----
+
+// 取一次性 nonce（public，不需登入）。回 { success, nonce }。
+export async function lineNonce() {
+  return apiRequest('/auth/line/nonce', { method: 'POST', body: '{}' });
+}
+
+// LINE 登入/註冊：送 authorization code，由後端拿 channel secret 換 id_token。
+// redirectUri 必須與授權當下、以及 LINE console 註冊的值逐字相同。
+export async function lineAuth(code: string, redirectUri: string, nonce: string) {
+  return apiRequest('/auth/line', { method: 'POST', body: JSON.stringify({ code, redirectUri, nonce }) });
+}
+
+// 綁定 LINE 到目前帳號（需登入）。形狀與 lineAuth 相同。
+export async function bindLine(code: string, redirectUri: string, nonce: string) {
+  return apiRequest('/auth/bind-line', { method: 'POST', body: JSON.stringify({ code, redirectUri, nonce }) });
+}
+
 // 解綁登入方式（需登入）：provider = 'google' | 'line'
 export async function unbindProvider(provider: string) {
   return apiRequest('/auth/unbind', { method: 'POST', body: JSON.stringify({ provider }) });

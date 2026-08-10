@@ -56,9 +56,15 @@ func getEnv(k, d string) string {
 	return d
 }
 
+// lineRequest：兩種憑證形狀，**剛好給一個**（shared.ValidateLineCredential 強制）。
+//   web    → {"code","redirectUri","nonce"}   後端拿 channel secret 換 id_token
+//   原生App → {"idToken","nonce"}             LINE SDK 直接給 id_token
+// redirectUri 必須跟授權當下逐字相同，否則 LINE 回 invalid_grant。
 type lineRequest struct {
-	IDToken string `json:"idToken"`
-	Nonce   string `json:"nonce"`
+	IDToken     string `json:"idToken"`
+	Code        string `json:"code"`
+	RedirectURI string `json:"redirectUri"`
+	Nonce       string `json:"nonce"`
 }
 
 func genUserID() (string, error) {
@@ -146,20 +152,26 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	var req lineRequest
-	if err := json.Unmarshal([]byte(request.Body), &req); err != nil || req.IDToken == "" {
-		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "missing idToken"}), nil
+	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
+		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "invalid request body"}), nil
+	}
+	// 憑證形狀先擋在消耗 nonce **之前**：這是純形狀檢查、完全不接觸 LINE，
+	// 不構成預言機，卻能避免一個打錯的請求白燒掉使用者一顆 nonce。
+	if err := shared.ValidateLineCredential(req.Code, req.IDToken); err != nil {
+		return jsonResp(headers, http.StatusBadRequest, map[string]interface{}{"success": false, "error": err.Error()}), nil
 	}
 
-	// 限流：每次呼叫都會打 LINE 的 verify 端點（外部 API），比 Google 的本地 JWKS 驗證貴。
+	// 限流：每次呼叫都會打 LINE 的外部 API（code 流程是 token + verify 兩次），
+	// 比 Google 的本地 JWKS 驗證貴。
 	// 同 IP 15 分鐘 30 次。fail-open（見 shared.CheckRateLimit）。
 	if allowed, _ := shared.CheckRateLimit(ctx, "authline#ip#"+request.RequestContext.Identity.SourceIP, 30, 900); !allowed {
 		return jsonResp(headers, http.StatusTooManyRequests, map[string]interface{}{"success": false, "error": "嘗試次數過多，請稍後再試"}), nil
 	}
 
-	// 🔴 防重放：先原子消耗 nonce，再去驗 id_token。順序是刻意的：
+	// 🔴 防重放：先原子消耗 nonce，再去換／驗 id_token。順序是刻意的：
 	//   ① 消耗失敗（不存在／過期／已用過）代表這不是一次合法的新登入 → 連 LINE 都不用打，
 	//      也就不能拿我們的端點當 LINE verify 的預言機。
-	//   ② 同一張 id_token 重送第二次，nonce 已被標記 usedAt → ConditionalCheckFailed。
+	//   ② 同一組憑證重送第二次，nonce 已被標記 usedAt → ConditionalCheckFailed。
 	// 代價：LINE 那邊若臨時失敗，nonce 已燒掉、使用者要重跑一次授權。這是標準取捨，
 	// 換來的是「消耗」永遠不會晚於「驗證」，中間沒有可競態的窗口。
 	if err := shared.ConsumeLineNonce(ctx, req.Nonce); err != nil {
@@ -170,10 +182,11 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid or expired nonce"}), nil
 	}
 
-	// 後端驗 LINE id_token（簽章/aud/exp，另自驗 iss/aud/sub/exp/nonce）。
-	li, err := shared.VerifyLINEIDToken(ctx, req.IDToken, req.Nonce)
+	// code → 後端換 id_token（帶 channel secret）；idToken → 直接驗。兩條路最後都過
+	// VerifyLINEIDToken（簽章/aud/exp，另自驗 iss/aud/sub/exp/nonce）。
+	li, err := shared.ResolveLINELogin(ctx, req.Code, req.RedirectURI, req.IDToken, req.Nonce)
 	if err != nil {
-		log.Printf("VerifyLINEIDToken failed: %v", err)
+		log.Printf("ResolveLINELogin failed: %v", err)
 		return jsonResp(headers, http.StatusUnauthorized, map[string]interface{}{"success": false, "error": "invalid line token"}), nil
 	}
 	identity := shared.LineIdentityKey(li.Sub)

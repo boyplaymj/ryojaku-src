@@ -2,8 +2,28 @@ import { User } from '../types';
 import { verifyUser, loginUser, registerUser, LoginRequest, RegisterRequest,
   forgotPassword as apiForgotPassword, resetPassword as apiResetPassword, verifyEmail as apiVerifyEmail,
   changePassword as apiChangePassword, logoutAllDevices as apiLogoutAll, googleAuth as apiGoogleAuth,
-  bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, resendVerify as apiResendVerify, getUserProfile } from './apiService';
+  bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, resendVerify as apiResendVerify, getUserProfile,
+  lineAuth as apiLineAuth, bindLine as apiBindLine } from './apiService';
 import { STORAGE_KEYS } from '../constants';
+
+// 社群登入（Google / LINE）成功後的共同收尾：後端只回 token+userId，
+// 這裡再撈完整 profile 存進 localStorage。撈失敗要把剛寫入的半套 session 清掉，
+// 否則會留下「有 JWT 但沒有 user」的壞狀態，畫面看起來像登入了其實沒有。
+async function adoptSession(token: string, userId: string, label: string): Promise<User> {
+  localStorage.setItem(STORAGE_KEYS.JWT, token);
+  localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'app');
+  try {
+    const profileResp = await getUserProfile(userId);
+    const user: User = profileResp.data || profileResp.user;
+    if (!user) throw new Error('無法取得使用者資料');
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+    return user;
+  } catch (e) {
+    localStorage.removeItem(STORAGE_KEYS.JWT);
+    localStorage.removeItem(STORAGE_KEYS.AUTH_TYPE);
+    throw e instanceof Error ? e : new Error(`${label}登入後無法取得使用者資料`);
+  }
+}
 
 export const authService = {
   // Register new APP user
@@ -119,20 +139,19 @@ export const authService = {
     if (!resp.success || !resp.token || !resp.userId) {
       throw new Error(resp.error || 'Google 登入失敗');
     }
-    localStorage.setItem(STORAGE_KEYS.JWT, resp.token);
-    localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'app');
-    try {
-      const profileResp = await getUserProfile(resp.userId);
-      const user: User = profileResp.data || profileResp.user;
-      if (!user) throw new Error('無法取得使用者資料');
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-      return user;
-    } catch (e) {
-      // 撈 profile 失敗 → 清掉剛寫入的半套 session，避免壞狀態
-      localStorage.removeItem(STORAGE_KEYS.JWT);
-      localStorage.removeItem(STORAGE_KEYS.AUTH_TYPE);
-      throw e instanceof Error ? e : new Error('Google 登入後無法取得使用者資料');
+    return adoptSession(resp.token, resp.userId, 'Google ');
+  },
+
+  // LINE 登入/註冊：送的是 authorization code 不是 id_token（見 services/lineLogin.ts 檔頭）。
+  // ⚠️ 後端刻意**不做 email 合併**（LINE 的 email 沒有驗證背書），所以這裡永遠是
+  //    「登入既有 line 身分」或「開新帳號」二選一，不會併進既有 Google/密碼帳號。
+  //    要併到既有帳號請走 bindLine（登入態綁定）。
+  loginWithLine: async (code: string, redirectUri: string, nonce: string): Promise<User> => {
+    const resp = await apiLineAuth(code, redirectUri, nonce);
+    if (!resp.success || !resp.token || !resp.userId) {
+      throw new Error(resp.error || 'LINE 登入失敗');
     }
+    return adoptSession(resp.token, resp.userId, 'LINE ');
   },
 
   // 忘記密碼（後端一律回防枚舉成功句，不 throw）
@@ -172,6 +191,12 @@ export const authService = {
   // 綁定 Google 到目前帳號（需登入）
   bindGoogle: async (idToken: string): Promise<void> => {
     const resp = await apiBindGoogle(idToken);
+    if (!resp.success) throw new Error(resp.error || '綁定失敗');
+  },
+
+  // 綁定 LINE 到目前帳號（需登入）
+  bindLine: async (code: string, redirectUri: string, nonce: string): Promise<void> => {
+    const resp = await apiBindLine(code, redirectUri, nonce);
     if (!resp.success) throw new Error(resp.error || '綁定失敗');
   },
 

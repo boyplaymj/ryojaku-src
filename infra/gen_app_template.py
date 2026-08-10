@@ -176,6 +176,12 @@ Parameters:
   # 空字串 → shared.VerifyLINEIDToken 直接回 ErrLineChannelNotConfigured，
   # LINE 登入端點一律 401（fail-closed，不會因為沒設就放行）。
   LineLoginChannelId: { Type: String, Default: '' }
+  # LINE Login channel secret —— **機密**，故 NoEcho。
+  # web 端拿不到 client-side id_token（LINE 只支援 response_type=code，換 token 連 PKCE
+  # 都仍要求 client_secret），所以 code→id_token 的交換只能在後端做，這把 secret 是必要的。
+  # 空字串 → shared.ExchangeLINECode 回 ErrLineChannelSecretNotConfigured（fail-closed）。
+  # ⚠️ 只進 Lambda env，**永遠不進前端**（前端只拿 VITE_LINE_LOGIN_CHANNEL_ID）。
+  LineLoginChannelSecret: { Type: String, Default: '', NoEcho: true }
   MailFrom: { Type: String, Default: '両雀 Ryojaku <no-reply@jiomj.com>' }
   AppBaseUrl: { Type: String, Default: 'https://jiomj.boyplaymj.com' }
   SesRegion: { Type: String, Default: 'ap-southeast-1' }
@@ -204,6 +210,7 @@ Globals:
         VAPID_SUBSCRIBER: !Ref VapidSubscriber
         GOOGLE_CLIENT_ID: !Ref GoogleClientId
         LINE_LOGIN_CHANNEL_ID: !Ref LineLoginChannelId
+        LINE_LOGIN_CHANNEL_SECRET: !Ref LineLoginChannelSecret
         MAIL_FROM: !Ref MailFrom
         APP_BASE_URL: !Ref AppBaseUrl
         SES_REGION: !Ref SesRegion
