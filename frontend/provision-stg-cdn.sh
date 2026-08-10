@@ -86,7 +86,34 @@ echo "  CloudFront 網域：$CF_DOMAIN"
 #    新開的 distribution 不在陣列裡 → OAC 帶著簽章來、S3 照樣拒絕。
 #    一定要 append：陣列裡另外三個（image ×2、jiomj、console）動到任何一個都會弄掛別的站。
 NEW_ARN="arn:aws:cloudfront::$ACCOUNT:distribution/$DIST_ID"
+# 這份就是回滾點。任何一步失敗都用它還原：
+#   aws s3api put-bucket-policy --bucket boyplaymj-image --policy file:///tmp/ryojaku-bucket-policy.json
 aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text > /tmp/ryojaku-bucket-policy.json
+
+# 既有四站的正控探針。URL 是實際挑過、**現況都回 200** 的（2026-08-10 實測）：
+#   image ×2 沒有 OriginPath，所以指到桶根的真實物件；jiomj 的 app 在 /admin/；console 有 DefaultRootObject。
+PROBES=(
+  "https://image.boyplaymj.com/autoreply/000b4f5bfd8f.png"
+  "https://image.boyplaymj.link/autoreply/000b4f5bfd8f.png"
+  "https://jiomj.boyplaymj.com/admin/"
+  "https://ryojaku-console.boyplaymj.com/"
+)
+probe_all() {   # 回傳非 0 = 有站不是 200
+  local bad=0 u code
+  for u in "${PROBES[@]}"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$u" || echo 000)
+    if [ "$code" = "200" ]; then printf "    ✔ %s  %s\n" "$code" "$u"
+    else printf "    ✘ %s  %s\n" "$code" "$u"; bad=1; fi
+  done
+  return $bad
+}
+
+echo "  ▸ 寫回前正控（四站必須都是 200）"
+probe_all || {
+  echo "❌ 動手前就有站不是 200 —— 先查清楚原因。" >&2
+  echo "   這時候不能繼續：探針起點若不是綠的，事後就分不出「我弄壞的」與「本來就壞的」。" >&2
+  exit 1
+}
 
 # 🔴 `|| rc=$?` 不可省。這支 python 拿 exit code 當控制流（10=要寫回），而本檔開頭有
 #    `set -e` —— 裸呼叫一個回傳非 0 的指令會**當場中止整支腳本**，下一行的 `rc=$?` 根本
@@ -116,9 +143,59 @@ for st in p['Statement']:
 print('❌ 找不到帶 AWS:SourceArn 的 statement，中止', file=sys.stderr)
 sys.exit(1)
 PY
+ROLLBACK="aws s3api put-bucket-policy --bucket $BUCKET --policy file:///tmp/ryojaku-bucket-policy.json"
+
 if [ $rc -eq 10 ]; then
   aws s3api put-bucket-policy --bucket "$BUCKET" --policy file:///tmp/ryojaku-bucket-policy-new.json
-  echo "✔ 桶 policy 已更新"
+  echo "✔ 桶 policy 已送出"
+
+  # ── 讀回驗證（這才是真正的證據）─────────────────────────────────────────
+  # 從 AWS 讀回實際生效的 policy，斷言它與寫回前**只差一個新增的 ARN**，其餘完全相同。
+  # 為什麼用結構差分而不是只檢查「4 個 ARN 還在」：後者放得過「順手改了 Action/Resource/Effect」
+  # 這類改動。也不能只靠下面的 HTTP 探針 —— CloudFront 有快取，權限被拔掉後
+  # **邊緣節點仍可能回 200**，那會是一個看起來很安心的假綠燈。
+  aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text > /tmp/ryojaku-bucket-policy-readback.json
+  python3 - "$NEW_ARN" <<'PY' || { echo "❌ 讀回驗證失敗 → 立刻回滾：$ROLLBACK" >&2; exit 1; }
+import json, sys
+arn = sys.argv[1]
+
+def split(path):
+    p = json.load(open(path))
+    arns = None
+    for st in p['Statement']:
+        c = st.get('Condition', {}).get('StringEquals', {})
+        if 'AWS:SourceArn' in c:
+            a = c['AWS:SourceArn']
+            arns = set([a] if isinstance(a, str) else a)
+            c['AWS:SourceArn'] = '<REDACTED-FOR-DIFF>'   # 挖掉才能比「其餘部分」
+    return p, arns
+
+before, ba = split('/tmp/ryojaku-bucket-policy.json')
+after,  aa = split('/tmp/ryojaku-bucket-policy-readback.json')
+
+ok = True
+if before != after:
+    print('❌ 除了 SourceArn 之外還有東西被改到（Action / Resource / Effect / Principal…）', file=sys.stderr)
+    ok = False
+expected = ba | {arn}
+if aa != expected:
+    if ba - aa:
+        print(f'❌ 原有 ARN 消失了：{sorted(ba - aa)}', file=sys.stderr)
+    if aa - expected:
+        print(f'❌ 多出非預期的 ARN：{sorted(aa - expected)}', file=sys.stderr)
+    if arn not in aa:
+        print(f'❌ 新 ARN 沒寫進去：{arn}', file=sys.stderr)
+    ok = False
+if ok:
+    print(f'✔ 讀回驗證通過：原有 {len(ba)} 個 ARN 全在，新增 1 個，其餘結構未變')
+sys.exit(0 if ok else 1)
+PY
+
+  echo "  ▸ 寫回後正控（既有四站不可以掛）"
+  # ⚠️ 誠實說明強度：這是 smoke test 不是證明 —— CloudFront 快取可能讓已壞掉的站仍回 200。
+  #    真正的證據是上面那道結構差分；這裡是第二層保險，抓「差分沒看出來但實際壞了」。
+  probe_all || { echo "❌ 有既有站掛了 → 立刻回滾：$ROLLBACK" >&2; exit 1; }
+
 elif [ $rc -ne 0 ]; then
   exit $rc
 fi

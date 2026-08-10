@@ -74,11 +74,25 @@ fi
 # 🔴 反向護欄：channel **secret** 絕對不可以進 bundle。
 #    它只該待在 Lambda env（code 交換用）。這裡不比對「有沒有設成 VITE_*」而是直接
 #    在產物裡搜它的值 —— 任何管道（打錯變數名、被別的檔引用、複製貼上）漏出去都會被抓到。
-LSEC=$(aws ssm get-parameter --region ap-southeast-1 --name /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET \
-        --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)
-if [ -n "$LSEC" ] && grep -qF "$LSEC" $BUNDLE; then
+#
+# 🔴 secret **絕不可以進 argv**（Codex 2026-08-10 覆核指出，我第一版就是這樣寫的）。
+#    `grep -qF "$LSEC" …` 會讓明文 secret 出現在 grep 子行程的 /proc/<pid>/cmdline，
+#    而本機 proc **沒有掛 hidepid**（實測：同機用 canary 值成功從 cmdline 讀回）。
+#    這正是本專案先前為此輪換過一輪 stg 機密的同一種曝光型態
+#    （`deploy_app.sh` 舊版用 --parameter-overrides 送機密）。
+#    ⚠️ 一道「防止 secret 外洩」的護欄自己把 secret 攤在 argv 上 —— 是本次最該記住的一點。
+#    改法：umask 077 的暫存 pattern 檔 + `grep -F -f`，secret 全程不進命令列。
+SECPAT=$(umask 077; mktemp "${TMPDIR:-/tmp}/.ryojaku-secpat.XXXXXX")
+trap 'rm -f "$SECPAT"' EXIT INT TERM
+aws ssm get-parameter --region ap-southeast-1 --name /ryojaku/stg/LINE_LOGIN_CHANNEL_SECRET \
+    --with-decryption --query 'Parameter.Value' --output text > "$SECPAT" 2>/dev/null || : > "$SECPAT"
+# 用位元組數判斷有沒有真的取到值：取不到是 0 byte，值為空字串是 1 byte（只有換行）。
+# 這裡不可以只寫 `[ -s ]` —— 只有換行的檔會讓 `grep -f` 拿到一個**空 pattern**，
+# 那會匹配任何檔案，於是每次部署都誤報「secret 外洩」。
+if [ "$(wc -c < "$SECPAT")" -gt 1 ] && grep -qFf "$SECPAT" $BUNDLE; then
   echo "❌ LINE channel secret 出現在前端 bundle 裡！中止部署" >&2; exit 1
 fi
+rm -f "$SECPAT"
 echo "✔ bundle 位址檢查通過"
 
 # 快取分三層。這裡跟 Console 版不同 —— 玩家端是 PWA，多了 sw.js / manifest 兩個「不可長快取」的檔：
