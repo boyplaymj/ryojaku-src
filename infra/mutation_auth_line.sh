@@ -30,7 +30,16 @@ cp "$LINE_GO" "$BAK/line.go"
 cp "$GATE_GO" "$BAK/authgate.go"
 
 restore() { cp "$BAK/line.go" "$LINE_GO"; cp "$BAK/authgate.go" "$GATE_GO"; }
-trap 'restore; rm -rf "$BAK"' EXIT INT TERM
+# 🔴 訊號 handler **必須自己 exit**，清理只掛 EXIT。
+#    舊版寫成 `trap 'restore; rm -rf "$BAK"' EXIT INT TERM` —— 那是
+#    「比完全沒有 trap 更糟」的那一種：收到 INT 時 handler 跑完會**繼續執行**，
+#    而 $BAK 已經被自己刪掉 ⇒ 之後每一次 restore 都靜靜失敗。
+#    2026-08-26 用最小重現實測同一個寫法：中斷後迴圈**照跑完 10 圈**，
+#    檔案最後停在 `MUTATED-10` —— 既沒有停下來，也留下了活突變。
+#    （對照組：handler 只 exit ⇒ 檔案回到 ORIGINAL。）
+#    順便補上 HUP：舊版只掛 INT TERM，斷線時完全沒有防線。
+trap 'restore; rm -rf "$BAK"' EXIT
+trap 'echo "[中斷] 交給 EXIT trap 還原"; exit 130' INT TERM HUP
 
 FAIL=0
 
