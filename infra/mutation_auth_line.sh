@@ -10,6 +10,14 @@
 #
 # ⚠️ 本腳本會就地改寫原始碼再還原。任何結束路徑（含 Ctrl-C）都會 trap 還原，
 #    結尾另有逐位元組比對，確認沒有把突變留在工作樹裡。
+
+# ── 🔴 看板閘門：只要跑突變就一定要掛進度 embed（2026-08-25 使用者拍板）──
+#    判準只有一份（repo/tools/bgtask/require-board.sh），這裡只是呼叫它 ——
+#    每支 harness 各寫一段檢查必然漂開成「一支擋得住、一支擋不住」，
+#    而那與「守衛壞了」同形。參數原封不動轉過去（--anchors 之類由閘門集中放行）。
+#    擺在最前面：閘門要在腳本做任何事之前就攔下來。
+/opt/sml/repo/tools/bgtask/require-board.sh "$@" || exit $?
+
 set -uo pipefail
 cd "$(dirname "$0")/../backend"
 export TMPDIR=${TMPDIR:-/opt/sml/.buildtmp}
