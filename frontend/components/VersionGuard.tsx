@@ -1,30 +1,50 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { APP_VERSION } from '../constants';
+import { evaluateVersionGate } from '../utils/versionGate';
 
 interface VersionGuardProps {
     minVersion: string;
+    /** 後台設定的更新出口（商店連結）。原生 App 沒有它就沒有出路，理由見 utils/versionGate.ts。 */
+    updateUrl?: string | null;
 }
 
-const VersionGuard: React.FC<VersionGuardProps> = ({ minVersion }) => {
-    const isOutdated = (current: string, required: string) => {
-        const currParts = current.split('.').map(Number);
-        const reqParts = required.split('.').map(Number);
+const VersionGuard: React.FC<VersionGuardProps> = ({ minVersion, updateUrl }) => {
+    const isNative = Capacitor.isNativePlatform();
+    const gate = evaluateVersionGate({
+        currentVersion: APP_VERSION,
+        minVersion,
+        isNative,
+        updateUrl,
+    });
 
-        for (let i = 0; i < Math.max(currParts.length, reqParts.length); i++) {
-            const curr = currParts[i] || 0;
-            const req = reqParts[i] || 0;
-            if (curr < req) return true;
-            if (curr > req) return false;
+    useEffect(() => {
+        if (gate.suppressedReason === 'no-exit') {
+            // 版本確實過舊，但這台裝置拿不到可用的更新出口。硬擋下去就是一塊按不掉的磚，
+            // 所以刻意放行 —— 要修的是後台的 updateUrl 設定，不是這個元件。
+            console.error(
+                `[VersionGuard] ${APP_VERSION} < ${minVersion}，但 updateUrl 不可用（${String(updateUrl)}），`
+                + '為避免使用者被鎖死而放行。請到後台「版本與系統管理」設定商店連結。'
+            );
         }
-        return false;
-    };
+    }, [gate.suppressedReason, minVersion, updateUrl]);
 
-    if (!isOutdated(APP_VERSION, minVersion)) {
+    if (!gate.blocked) {
         return null;
     }
 
     const handleUpdate = () => {
-        // Refresh the page and force clear cache
+        if (gate.action.kind === 'store') {
+            // 原生 App：站外連結由 Capacitor 交給系統瀏覽器／商店 App。
+            // 這裡**不可以**退回 reload —— APK/IPA 內的 bundle 重載幾次 APP_VERSION 都不會變。
+            const opened = window.open(gate.action.url, '_blank');
+            if (!opened) {
+                window.location.href = gate.action.url;
+            }
+            return;
+        }
+
+        // 網頁／PWA：重新載入才會真的換到新 bundle，順便催 service worker 更新。
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
                 for (let registration of registrations) {
@@ -88,7 +108,7 @@ const VersionGuard: React.FC<VersionGuardProps> = ({ minVersion }) => {
                     onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
                     onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
                 >
-                    立即更新
+                    {gate.action.kind === 'store' ? '前往商店更新' : '立即更新'}
                 </button>
             </div>
         </div>

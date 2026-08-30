@@ -83,6 +83,8 @@ function App() {
   const [events, setEvents] = useState<GroupEvent[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [minRequiredVersion, setMinRequiredVersion] = useState('1.0.0');
+  // 更新出口。原生 App 沒有它就沒有出路，VersionGuard 會改成不擋（utils/versionGate.ts）。
+  const [updateUrl, setUpdateUrl] = useState<string | null>(null);
   const [invitePoints, setInvitePoints] = useState({ inviter: '100', invitee: '50' });
 
   // Daily Bonus Hook
@@ -93,6 +95,7 @@ function App() {
       const response = await api.getVersionConfig();
       if (response.success && response.minRequiredVersion) {
         setMinRequiredVersion(response.minRequiredVersion);
+        setUpdateUrl(response.updateUrl ?? null);
         if (response.inviterPoints && response.inviteePoints) {
           setInvitePoints({
             inviter: response.inviterPoints,
@@ -326,7 +329,7 @@ function App() {
 
   return (
     <PWAInstallPrompt>
-      <VersionGuard minVersion={minRequiredVersion} />
+      <VersionGuard minVersion={minRequiredVersion} updateUrl={updateUrl} />
       <ToastProvider>
         {renderContent()}
       </ToastProvider>
