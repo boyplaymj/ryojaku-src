@@ -26,6 +26,10 @@ import (
 	"mahjongclub-backend/cmd/lambdas/shared"
 )
 
+// maintenanceCheck 以 package 級變數注入，讓測試能在不打 DDB 的情況下覆寫。
+// 生產上永遠是 shared.IsMaintenanceMode（讀取失敗 fail-open，見 shared/maintenance.go）。
+var maintenanceCheck = shared.IsMaintenanceMode
+
 // errUnauthorized：訊息必須正好是 "Unauthorized"。
 // API Gateway 的約定：authorizer 回這個 error → 對外 401；回 Deny policy → 403；
 // 回其他 error → 500。我們要的是 401，故一律用它，不要換字。
@@ -66,6 +70,15 @@ func allow(userID, email, methodArn string) events.APIGatewayCustomAuthorizerRes
 }
 
 func Handler(ctx context.Context, ev events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
+	// kill switch 擺在最前面（取 token 之前）：封鎖語意是無條件的 —— 不看你是誰、
+	// token 對不對，開了就是擋；而且擺這裡的話，就算 Users 表正在抖（token 驗證
+	// 那條 fail-closed 的路正在故障），封鎖也照樣鎖得住。
+	// 管理員豁免不在這裡做：admin API 走另一顆 authorizer，天然不經過本函式。
+	if maintenanceCheck(ctx) {
+		log.Printf("[AUTHZ] 拒絕：維護模式（kill switch）開啟, arn=%s", ev.MethodArn)
+		return events.APIGatewayCustomAuthorizerResponse{}, errUnauthorized
+	}
+
 	token := extractBearer(ev.Headers)
 
 	// WebSocket 專用退路：瀏覽器的 WebSocket API 無法自訂 header，token 只能走 query string。
