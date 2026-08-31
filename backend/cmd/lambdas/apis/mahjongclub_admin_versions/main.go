@@ -134,11 +134,20 @@ func handleUpdateConfig(ctx context.Context, request events.APIGatewayProxyReque
 		return errorResponse(400, "Invalid JSON"), nil
 	}
 
+	// fmt.Sprintf("%v") 把 bool 印成 "true"/"false"、數字印成字面值，一律轉成字串存。
+	normalized := make(map[string]string, len(updates))
 	for k, v := range updates {
-		strValue := fmt.Sprintf("%v", v)
-		// For consistency, we might want to ensure booleans are "true"/"false" not "1"/"0" if that matters?
-		// But fmt.Sprintf("%v") handles bools as "true"/"false".
+		normalized[k] = fmt.Sprintf("%v", v)
+	}
 
+	// 🔴 先驗完整批再開始寫。邊驗邊寫的話，第 2 筆不合格時第 1 筆已經進 DDB，
+	// 使用者會拿到 400 卻留下半套設定 —— 那比整批失敗更難查。
+	// 驗證規則與白名單見 config_validate.go。
+	if err := validateConfigUpdates(normalized); err != nil {
+		return errorResponse(400, err.Error()), nil
+	}
+
+	for k, strValue := range normalized {
 		// Upsert each config key
 		_, err := svc.PutItem(ctx, &dynamodb.PutItemInput{
 			TableName: aws.String(table),

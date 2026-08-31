@@ -20,17 +20,46 @@ interface VersionConfig {
 /** 與 App 端 utils/versionGate.ts 的白名單一致；不合格的連結會讓閘門直接放行（不擋）。 */
 const ALLOWED_UPDATE_SCHEMES = ['https:', 'market:', 'itms-apps:', 'itms:'];
 
-function updateUrlProblem(raw: string): string | null {
+/** 與 App 端 versionGate.ts 的 VERSION_PATTERN、後端 config_validate.go 的 versionPattern 一致。 */
+const VERSION_PATTERN = /^\d+(?:\.\d+)*$/;
+
+/**
+ * 無效的版本字串在 App 端會讓 isOutdated() 解析失敗而放行 —— 也就是**閘門靜靜地消失**，
+ * 畫面上跟「設定成功且沒人需要更新」長得一模一樣。所以必須在送出前就擋下來。
+ * 後端 config_validate.go 有同一道檢查，擋的是繞過這個畫面直接打 API 的情形。
+ */
+function minVersionProblem(raw: string): string | null {
     const trimmed = raw.trim();
-    if (trimmed === '') return '沒有填連結時，原生 App 遇到版本過舊會直接放行（不擋）。';
+    if (trimmed === '') return '最低版本不可為空。';
+    if (!VERSION_PATTERN.test(trimmed)) {
+        return `只接受 1 / 1.2 / 1.2.3 這種純數字版本。「${raw}」在 App 端會解析失敗，結果是閘門完全不生效。`;
+    }
+    return null;
+}
+
+/**
+ * warn 與 error 要分開：清空連結是**合法操作**（退回程式預設值），只是後果要講清楚；
+ * 填了一個 App 端會忽略的連結才是錯誤。兩者混成同一種的話，不是擋掉合法操作，
+ * 就是放過真正的錯誤。
+ */
+type Problem = { level: 'warn' | 'error'; message: string };
+
+function updateUrlProblem(raw: string): Problem | null {
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+        return { level: 'warn', message: '沒有填連結時，原生 App 遇到版本過舊會直接放行（不擋）。' };
+    }
     let parsed: URL;
     try {
         parsed = new URL(trimmed);
     } catch {
-        return '這不是一個完整的網址（要包含 https:// 之類的開頭）。';
+        return { level: 'error', message: '這不是一個完整的網址（要包含 https:// 之類的開頭）。' };
     }
     if (!ALLOWED_UPDATE_SCHEMES.includes(parsed.protocol)) {
-        return `App 端只接受 ${ALLOWED_UPDATE_SCHEMES.join(' / ')} 開頭的連結，這個會被忽略。`;
+        return {
+            level: 'error',
+            message: `App 端只接受 ${ALLOWED_UPDATE_SCHEMES.join(' / ')} 開頭的連結，這個會被忽略。`,
+        };
     }
     return null;
 }
@@ -69,7 +98,21 @@ const VersionControl: React.FC = () => {
         setConfig(prev => ({ ...prev, [name]: value }));
     };
 
+    const versionProblem = minVersionProblem(config.minVersion);
+    const urlProblem = updateUrlProblem(config.updateUrl);
+    const blockingErrors = [
+        versionProblem,
+        urlProblem?.level === 'error' ? urlProblem.message : null,
+    ].filter((m): m is string => m !== null);
+
     const handleSave = async () => {
+        // 按鈕在有 error 時已被 disable，這裡再擋一次是因為 disable 擋得住點擊、
+        // 擋不住鍵盤送出或狀態競態。後端 config_validate.go 還有第三道。
+        if (blockingErrors.length > 0) {
+            alert('設定有問題，尚未儲存：\n\n' + blockingErrors.join('\n'));
+            return;
+        }
+
         try {
             setSaving(true);
             await api.config.updateVersion({
@@ -91,8 +134,6 @@ const VersionControl: React.FC = () => {
             </div>
         );
     }
-
-    const urlProblem = updateUrlProblem(config.updateUrl);
 
     return (
         <div className="p-4 md:p-8 space-y-6 md:space-y-8">
@@ -127,9 +168,16 @@ const VersionControl: React.FC = () => {
                                 value={config.minVersion}
                                 onChange={handleChange}
                                 placeholder="2.0.4"
-                                className="w-full bg-slate-950/50 border border-white/10 rounded-xl px-4 py-2 text-white focus:border-cyan-500/50 focus:outline-none"
+                                className={`w-full bg-slate-950/50 border rounded-xl px-4 py-2 text-white focus:outline-none ${versionProblem ? 'border-red-500/50 focus:border-red-500' : 'border-white/10 focus:border-cyan-500/50'}`}
                             />
-                            <p className="text-xs text-slate-500 mt-1">只接受 1 / 1.2 / 1.2.3 這種純數字版本；帶 -beta 之類的字樣 App 端會解析不出來而放行。</p>
+                            {versionProblem ? (
+                                <div className="mt-2 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex gap-2 items-start">
+                                    <AlertTriangle className="text-red-400 shrink-0 mt-0.5" size={16} />
+                                    <span className="text-red-200/90 text-xs leading-relaxed">{versionProblem}</span>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-slate-500 mt-1">只接受 1 / 1.2 / 1.2.3 這種純數字版本。</p>
+                            )}
                         </div>
 
                         <div>
@@ -140,12 +188,12 @@ const VersionControl: React.FC = () => {
                                 value={config.updateUrl}
                                 onChange={handleChange}
                                 placeholder="https://apps.apple.com/app/idXXXXXXXX 或 market://details?id=com.boyplaymj.ryojaku"
-                                className="w-full bg-slate-950/50 border border-white/10 rounded-xl px-4 py-2 text-white focus:border-cyan-500/50 focus:outline-none"
+                                className={`w-full bg-slate-950/50 border rounded-xl px-4 py-2 text-white focus:outline-none ${urlProblem?.level === 'error' ? 'border-red-500/50 focus:border-red-500' : 'border-white/10 focus:border-cyan-500/50'}`}
                             />
                             {urlProblem && (
-                                <div className="mt-2 bg-orange-500/10 border border-orange-500/20 rounded-lg p-3 flex gap-2 items-start">
-                                    <AlertTriangle className="text-orange-400 shrink-0 mt-0.5" size={16} />
-                                    <span className="text-orange-200/90 text-xs leading-relaxed">{urlProblem}</span>
+                                <div className={`mt-2 rounded-lg p-3 flex gap-2 items-start ${urlProblem.level === 'error' ? 'bg-red-500/10 border border-red-500/20' : 'bg-orange-500/10 border border-orange-500/20'}`}>
+                                    <AlertTriangle className={`shrink-0 mt-0.5 ${urlProblem.level === 'error' ? 'text-red-400' : 'text-orange-400'}`} size={16} />
+                                    <span className={`text-xs leading-relaxed ${urlProblem.level === 'error' ? 'text-red-200/90' : 'text-orange-200/90'}`}>{urlProblem.message}</span>
                                 </div>
                             )}
                         </div>
@@ -158,11 +206,12 @@ const VersionControl: React.FC = () => {
 
                     <button
                         onClick={handleSave}
-                        disabled={saving}
-                        className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 text-slate-950 font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                        disabled={saving || blockingErrors.length > 0}
+                        title={blockingErrors.length > 0 ? blockingErrors.join('\n') : undefined}
+                        className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:cursor-not-allowed text-slate-950 font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
                     >
                         {saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
-                        {saving ? '儲存中...' : '儲存版本設定'}
+                        {saving ? '儲存中...' : blockingErrors.length > 0 ? '設定有問題，無法儲存' : '儲存版本設定'}
                     </button>
                 </div>
             </div>
