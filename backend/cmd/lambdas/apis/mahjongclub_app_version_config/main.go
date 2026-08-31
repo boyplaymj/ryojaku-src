@@ -17,12 +17,13 @@ import (
 	"mahjongclub-backend/cmd/lambdas/shared"
 )
 
+// 強制更新只有一個機制：minRequiredVersion。
+// 這裡刻意沒有 forceUpdate 與 latestVersion —— 前者原本永遠回 false（等於一個轉了沒作用的開關），
+// 後者前端從來沒有任何消費者。要做「有新版的軟提示」是另一個功能，屆時再加回來。
 type VersionConfigResponse struct {
 	Success            bool   `json:"success"`
 	MinRequiredVersion string `json:"minRequiredVersion"`
-	LatestVersion      string `json:"latestVersion"`
 	UpdateUrl          string `json:"updateUrl"`
-	ForceUpdate        bool   `json:"forceUpdate"`
 	InviterPoints      string `json:"inviterPoints"`
 	InviteePoints      string `json:"inviteePoints"`
 }
@@ -79,7 +80,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Default fallback to environment variable (or hardcoded default)
 	minVersion := getEnv("MIN_REQUIRED_VERSION", "1.0.0")
-	latestVersion := minVersion
+	// ⚠️ 這是官網不是商店連結。App 上架拿到商店 ID 後要改掉，
+	// 否則被閘門擋下的使用者會被送到官網而不是更新頁。
 	updateUrl := "https://jiomj.com"
 	inviterPoints := "100" // Default
 	inviteePoints := "50"  // Default
@@ -100,9 +102,6 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 					if (item.Key == "minVersion" || item.Key == "min_version") && item.Value != "" {
 						minVersion = item.Value
 					}
-					if (item.Key == "latestVersion" || item.Key == "latest_version") && item.Value != "" {
-						latestVersion = item.Value
-					}
 					if (item.Key == "updateUrl" || item.Key == "update_url") && item.Value != "" {
 						updateUrl = item.Value
 					}
@@ -121,15 +120,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 	
-	// Ensure latestVersion is at least equal to minVersion if logic dictates
-	// (Optional: depends on business logic, here we keep them independent or default)
-	
 	response := VersionConfigResponse{
 		Success:            true,
 		MinRequiredVersion: minVersion,
-		LatestVersion:      latestVersion,
 		UpdateUrl:          updateUrl,
-		ForceUpdate:        false, // Client logic in VersionGuard handles the forcing based on version mismatch
 		InviterPoints:      inviterPoints,
 		InviteePoints:      inviteePoints,
 	}

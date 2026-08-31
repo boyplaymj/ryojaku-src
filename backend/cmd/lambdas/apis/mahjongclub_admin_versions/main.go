@@ -104,8 +104,10 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	configMap := make(map[string]string)
 	// Defaults
 	configMap["minVersion"] = "1.0.0"
-	configMap["latestVersion"] = "1.0.0"
 
+	// 注意：這裡回的是整張 AdminConfigs，會包含已經沒人讀的舊 key
+	// （latestVersion／forceUpdate／maintenanceMode 是先前後台寫進去的殘留）。
+	// 後台頁面只挑自己認得的欄位用，其餘忽略。
 	for _, item := range items {
 		configMap[item.Key] = item.Value
 	}

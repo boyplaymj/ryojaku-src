@@ -109,11 +109,11 @@ function getAuthParam(userIdentifier: string): string {
 
 // ============ System Configuration APIs ============
 
+// 強制更新只有 minRequiredVersion 一個機制；updateUrl 是被擋下時的出口（utils/versionGate.ts）。
+// 先前還有 latestVersion 與 forceUpdate，兩者端到端都沒有任何消費者，已一併移除。
 export interface VersionConfig {
   minRequiredVersion: string;
-  latestVersion: string;
   updateUrl: string;
-  forceUpdate: boolean;
   inviterPoints?: string;
   inviteePoints?: string;
 }
