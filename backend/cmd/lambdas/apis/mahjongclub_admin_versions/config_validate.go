@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -16,6 +17,23 @@ import (
 var configValidators = map[string]func(string) error{
 	"minVersion": validateMinVersion,
 	"updateUrl":  validateUpdateUrl,
+	// maintenanceMode 回來了，但這次是真的：f1d667e 把它接到 user authorizer、
+	// 9870d34 補上 WebSocket 既有連線那條。它上一輩子（0ee9a56 拆掉的那次）是假旋鈕：
+	// 後端零實作、存得進 DDB、按儲存跳成功。差別不在這張表，在於**現在真的有人讀它**。
+	"maintenanceMode": validateMaintenanceMode,
+}
+
+// knownConfigKeys 從 configValidators 現算，供錯誤訊息使用。
+// 🔴 刻意不寫成手打的字串：原本的訊息寫死「本端點只接受 minVersion / updateUrl」，
+// 而這次加 maintenanceMode 時，沒有任何機制會逼人回來改那句話 —— 它會靜靜地
+// 開始說謊，且說的謊剛好是「你合法的那個 key 不被接受」。
+func knownConfigKeys() string {
+	keys := make([]string, 0, len(configValidators))
+	for k := range configValidators {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, " / ")
 }
 
 // 與 App 端 frontend/utils/versionGate.ts 的 VERSION_PATTERN 一致。
@@ -55,13 +73,27 @@ func validateUpdateUrl(value string) error {
 	return fmt.Errorf("updateUrl 的開頭只接受 %s，收到 %q", strings.Join(allowedUpdateSchemes, " / "), value)
 }
 
+// validateMaintenanceMode 只接受 true / false。
+//
+// 🔴 這個嚴格度不是龜毛，是因為讀取端的判讀是「等於 true 才封鎖，其餘一律 false」
+// （shared.maintenanceModeFromItem）。所以放行一個 "yes" / "1" / "on" 不會出錯，
+// 而是**靜靜地等於關閉** —— 後台顯示已儲存、值也存得進去，開關卻沒開。
+// 那正是這張白名單當初要消滅的假旋鈕形狀，而 maintenanceMode 上一輩子就是死在這上面。
+func validateMaintenanceMode(value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "false":
+		return nil
+	}
+	return fmt.Errorf("maintenanceMode 只接受 true / false，收到 %q —— 其他值會被讀取端當成 false，等於靜靜地沒開", value)
+}
+
 // validateConfigUpdates 在**任何一次寫入之前**把整批檢查完。
 // 逐筆邊驗邊寫的話，第 2 筆不合格時第 1 筆已經進 DDB，會留下半套設定。
 func validateConfigUpdates(updates map[string]string) error {
 	for k, v := range updates {
 		validate, known := configValidators[k]
 		if !known {
-			return fmt.Errorf("不認得的設定項 %q（本端點只接受 minVersion / updateUrl）", k)
+			return fmt.Errorf("不認得的設定項 %q（本端點只接受 %s）", k, knownConfigKeys())
 		}
 		if err := validate(v); err != nil {
 			return err

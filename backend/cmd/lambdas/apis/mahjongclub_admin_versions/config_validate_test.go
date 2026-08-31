@@ -5,7 +5,10 @@
 // 不帶的話會看到 panic 而不是測試結果 —— 那不是測試壞了。
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateMinVersion(t *testing.T) {
 	valid := []string{"1", "1.0", "2.0.4", "10.20.30", "  2.0.4  "}
@@ -55,10 +58,55 @@ func TestValidateUpdateUrl(t *testing.T) {
 }
 
 func TestValidateConfigUpdatesRejectsUnknownKeys(t *testing.T) {
-	// 這三個正是被拆掉的假旋鈕。若有人繞過後台直接打 API，要在這裡就失敗。
-	for _, k := range []string{"forceUpdate", "maintenanceMode", "latestVersion", "隨便什麼"} {
+	// forceUpdate / latestVersion 是被拆掉的假旋鈕，至今無人讀，要繼續擋。
+	// ⚠️ maintenanceMode 已從本清單移出 —— 它在 f1d667e / 9870d34 接上真正的
+	// 讀取端，不再是假旋鈕。移出的是「未知 key」這一條，它的合法值範圍改由
+	// TestValidateMaintenanceMode 守（見下）。
+	for _, k := range []string{"forceUpdate", "latestVersion", "隨便什麼"} {
 		if err := validateConfigUpdates(map[string]string{k: "true"}); err == nil {
 			t.Errorf("未知設定項 %q 應該被擋，卻通過了", k)
+		}
+	}
+}
+
+// 🔴 這條守的是「寫得進去 ≠ 開得起來」。
+// 讀取端 shared.maintenanceModeFromItem 的判讀是「等於 true 才封鎖，其餘一律 false」，
+// 所以放行 "yes" / "1" / "on" 不會出錯，而是靜靜地等於關閉 —— 後台跳「已儲存」、
+// 值也真的存進 DDB，但開關沒開。那正是 maintenanceMode 上一輩子的死法。
+func TestValidateMaintenanceMode(t *testing.T) {
+	for _, v := range []string{"true", "false", "TRUE", "False", " true ", "  false"} {
+		if err := validateMaintenanceMode(v); err != nil {
+			t.Errorf("validateMaintenanceMode(%q) 應該通過，卻回 %v", v, err)
+		}
+	}
+	// 這些「看起來像 true」的值必須被擋：它們會被讀取端當成 false。
+	for _, v := range []string{"yes", "1", "on", "y", "開", "enabled", "", "truthy", "ture"} {
+		if err := validateMaintenanceMode(v); err == nil {
+			t.Errorf("validateMaintenanceMode(%q) 應該被擋（讀取端會當成 false，等於靜靜地沒開），卻通過了", v)
+		}
+	}
+}
+
+// maintenanceMode 現在必須走得通 —— 否則後台那顆開關按下去會拿到 400，
+// 而「開關壞了」與「維護模式沒開」在畫面上是同一件事。
+func TestValidateConfigUpdatesAcceptsMaintenanceMode(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		if err := validateConfigUpdates(map[string]string{"maintenanceMode": v}); err != nil {
+			t.Errorf("maintenanceMode=%q 應該被接受，卻回 %v", v, err)
+		}
+	}
+}
+
+// 錯誤訊息裡的可用 key 清單必須是現算的，不是手打的。
+// 手打的那份在本次加 maintenanceMode 時不會有人被逼著回來改，它會靜靜地開始說謊。
+func TestUnknownKeyErrorListsAllKnownKeys(t *testing.T) {
+	err := validateConfigUpdates(map[string]string{"隨便什麼": "x"})
+	if err == nil {
+		t.Fatal("未知 key 應該被擋")
+	}
+	for k := range configValidators {
+		if !strings.Contains(err.Error(), k) {
+			t.Errorf("錯誤訊息應列出可用 key %q，實際訊息：%s", k, err.Error())
 		}
 	}
 }

@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Smartphone, AlertTriangle, Loader2, Info } from 'lucide-react';
+import { Save, Smartphone, AlertTriangle, Loader2, Info, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 
-// 這一頁刻意只留「真的會生效」的兩個欄位。
-// 先前還有 latestVersion／forceUpdate／maintenanceMode 三個控制項，它們存得進 DDB、
+// 這一頁只留「真的會生效」的控制項。
+// 先前還有 latestVersion／forceUpdate／maintenanceMode 三個，它們存得進 DDB、
 // 重新整理值也還在（所以「設定有沒有生效」這個檢查會給假的 ✅），但實際上：
 //   - forceUpdate     後端永遠回 false，App 端根本沒讀 → 轉了沒有任何效果
 //   - latestVersion   後端有讀有回，但 App 端零消費者 → 同上
-//   - maintenanceMode 後端零實作。UI 曾寫「除管理員外所有 API 回 503」，
-//                     而要讓那句話成立得改 ~64 顆 lambda 的入口（無單一節流點）。
-// 一個會給正面回饋卻什麼都不做的開關，比沒有這個開關更危險，所以先拆掉。
-// DDB 裡先前寫入的那幾筆 key 留著不動（沒人讀，無害）。
+//   - maintenanceMode 後端零實作（當時）
+// 一個會給正面回饋卻什麼都不做的開關，比沒有這個開關更危險，所以當時先拆掉。
+//
+// 🔴 maintenanceMode 已回歸，而且這次是真的：f1d667e 把它接到 user authorizer、
+// 9870d34 補上 WebSocket 既有連線那條、後端 config_validate.go 有白名單驗證。
+// forceUpdate / latestVersion 仍然沒有讀取端，維持不放回來。
 
 interface VersionConfig {
     minVersion: string;
@@ -72,6 +74,13 @@ const VersionControl: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
+    // 🔴 維護模式的狀態刻意與 config 分開，送出也走自己的按鈕。
+    // 理由是結構性的：下方「儲存版本設定」在 minVersion 格式有錯時會 disable。
+    // 若把 kill switch 併進那顆批次按鈕，緊急時就會因為一個**無關的**版本格式錯誤
+    // 而關不掉維護模式 —— 緊急控制項不可以繼承一般表單的故障模式。
+    const [maintenance, setMaintenance] = useState(false);
+    const [togglingMaintenance, setTogglingMaintenance] = useState(false);
+
     useEffect(() => {
         const fetchConfig = async () => {
             try {
@@ -83,6 +92,10 @@ const VersionControl: React.FC = () => {
                         minVersion: data.minVersion ?? prev.minVersion,
                         updateUrl: data.updateUrl ?? prev.updateUrl,
                     }));
+                    // 與後端 shared.maintenanceModeFromItem 同一套判讀：等於 true 才算開，
+                    // 其餘（含缺這一筆）一律當關。不要在這裡自己發明比較規則，
+                    // 兩邊判讀不一致的話，畫面會顯示成跟實際狀態相反。
+                    setMaintenance(String(data.maintenanceMode ?? '').trim().toLowerCase() === 'true');
                 }
             } catch (err) {
                 console.error('Failed to fetch config', err);
@@ -92,6 +105,37 @@ const VersionControl: React.FC = () => {
         };
         fetchConfig();
     }, []);
+
+    const toggleMaintenance = async (next: boolean) => {
+        // 開啟要確認、關閉不要 —— 這個不對稱是刻意的。
+        // 開啟會把所有一般使用者擋在門外，是高代價且容易誤觸的動作；
+        // 關閉是「把服務救回來」，任何多一步的阻力都是在延長故障時間。
+        if (next) {
+            const ok = window.confirm(
+                '確定要開啟維護模式嗎？\n\n' +
+                '開啟後會立刻發生（下一個請求就生效，沒有快取）：\n' +
+                '・所有一般使用者的 App 請求被擋，畫面顯示「服務維護中」\n' +
+                '・聊天室無法連線，已連線者也無法發言\n' +
+                '・後台（本頁）不受影響，你仍然可以回來關掉\n\n' +
+                '擋不到的部分：\n' +
+                '・登入／註冊等公開端點仍然可用\n' +
+                '・不會主動中斷已建立的連線，只是擋住動作'
+            );
+            if (!ok) return;
+        }
+
+        try {
+            setTogglingMaintenance(true);
+            await api.config.updateVersion({ maintenanceMode: next });
+            // 🔴 只在 API 成功後才改本地狀態。先改 UI 再送出的話，送失敗時畫面會
+            // 顯示「已開啟」而實際沒開 —— 那就是這一頁當初拆掉假旋鈕的理由。
+            setMaintenance(next);
+        } catch (err) {
+            alert('維護模式切換失敗，狀態未改變：' + (err as Error).message);
+        } finally {
+            setTogglingMaintenance(false);
+        }
+    };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
@@ -212,6 +256,52 @@ const VersionControl: React.FC = () => {
                     >
                         {saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
                         {saving ? '儲存中...' : blockingErrors.length > 0 ? '設定有問題，無法儲存' : '儲存版本設定'}
+                    </button>
+                </div>
+
+                {/* 維護模式（kill switch）。刻意獨立成卡片、獨立送出：
+                    它不參與上面那顆批次儲存，才不會因為版本欄位有錯而關不掉。 */}
+                <div className={`mt-6 backdrop-blur-md border p-6 rounded-2xl space-y-4 ${maintenance ? 'bg-red-950/40 border-red-500/40' : 'bg-slate-900/40 border-white/5'}`}>
+                    <div className="flex items-center gap-3 border-b border-white/5 pb-4">
+                        <ShieldAlert className={maintenance ? 'text-red-400' : 'text-slate-400'} />
+                        <h2 className="text-xl font-bold text-white">緊急維護模式</h2>
+                        <span className={`ml-auto text-xs font-bold px-3 py-1 rounded-full ${maintenance ? 'bg-red-500 text-slate-950' : 'bg-slate-700 text-slate-300'}`}>
+                            {maintenance ? '● 進行中' : '○ 未啟用'}
+                        </span>
+                    </div>
+
+                    <div className="text-sm text-slate-300 leading-relaxed space-y-2">
+                        <p>
+                            擋住所有一般使用者的 App 請求（顯示「服務維護中」）與聊天室發言。
+                            <span className="text-slate-200"> 下一個請求就生效，沒有快取</span>；關掉也一樣即時。
+                        </p>
+                        <p className="text-xs text-slate-400">
+                            <span className="text-slate-300">擋不到：</span>
+                            登入／註冊等公開端點仍可用；不會主動中斷已建立的連線，只擋住動作。
+                            後台不受影響 —— 你永遠可以回到這一頁把它關掉。
+                        </p>
+                    </div>
+
+                    {maintenance && (
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex gap-2 items-start">
+                            <AlertTriangle className="text-red-400 shrink-0 mt-0.5" size={16} />
+                            <span className="text-red-200/90 text-xs leading-relaxed">
+                                目前所有一般使用者都被擋在門外。修復完成後請記得關閉。
+                            </span>
+                        </div>
+                    )}
+
+                    <button
+                        onClick={() => toggleMaintenance(!maintenance)}
+                        disabled={togglingMaintenance}
+                        className={`w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:bg-slate-700 disabled:cursor-not-allowed ${maintenance
+                            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                            : 'bg-red-500 hover:bg-red-400 text-slate-950'}`}
+                    >
+                        {togglingMaintenance ? <Loader2 className="animate-spin" size={20} /> : <ShieldAlert size={20} />}
+                        {togglingMaintenance
+                            ? '切換中...'
+                            : maintenance ? '關閉維護模式，恢復服務' : '開啟維護模式'}
                     </button>
                 </div>
             </div>
