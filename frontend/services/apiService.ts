@@ -88,6 +88,19 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
         return { success: false, error: data.error || '帳號或密碼錯誤' };
       }
 
+      // 維護模式（kill switch）：user authorizer 回 Deny policy → API Gateway 吐 403。
+      // 🔴 刻意**不**清 localStorage —— 這正是維護模式不用 401 的整個理由
+      //    （見 backend/cmd/lambdas/apis/mahjongclub_authorizer/main.go 的 deny()）。
+      //    若哪天有人「順手統一」成走上面那條 401 分支，維護一開就是全體永久登出。
+      // ⚠️ 誠實的限制：API Gateway 的 Deny 回的是它自己的制式 body，這裡沒有可辨識的
+      //    維護標記。本分支成立的依據是「本專案現況下，REST 路徑的 403 只可能來自
+      //    維護模式」（實查：user handler 只有 chat_ws_send_message 回 403，而它走
+      //    WebSocket 不經過 apiRequest）—— 這是推論，不是協定保證。
+      //    日後若有 REST handler 開始回 403，要回來改這段，否則會把它說成維護中。
+      if (response.status === 403) {
+        return { success: false, error: '服務維護中，請稍後再試' };
+      }
+
       return { success: false, error: data.error || `HTTP error! status: ${response.status}` };
     }
 

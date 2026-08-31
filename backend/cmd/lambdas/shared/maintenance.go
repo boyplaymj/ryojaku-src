@@ -8,12 +8,23 @@ package shared
 // ADMIN_JWT_SECRET，與 user token 完全分離），本檔對它零影響，封鎖期間管理員
 // 仍進得去後台把開關關掉。
 //
-// 🔴 它涵蓋不到什麼（讀這檔前先讀這段）：
+// 🔴 拉下去會發生什麼（讀這檔前先讀這段）：
+//   - REST / HTTP：user authorizer 回 **Deny policy → 403**，App 端顯示「服務維護中」。
+//     🔴 刻意不是 401。走 401 的話 frontend/services/apiService.ts 會把它當成 session
+//     過期，清掉 JWT / USER / AUTH_TYPE / LINE_ID 並強制 reload ⇒ 拉一次開關就是把所有
+//     線上使用者**永久登出**，維護結束也不會回來。理由詳見 authorizer 的 deny()。
+//   - WebSocket 新連線：$connect 掛同一顆 authorizer，Deny ⇒ 連不上。
+//   - WebSocket 既有連線：**authorizer 擋不到**（WS 只有 $connect 掛得了 authorizer），
+//     故另外在 mahjongclub_chat_ws_send_message 的 handler 補了一道，回 503。
+//     沒有那道的話，開關拉下去的當下已連上的人可以一直發言到自己斷線為止。
+//
+// 🔴 它涵蓋不到什麼：
 //   - 只蓋「掛了 user authorizer」的約 47 條 route。22 條公開 route
 //     （login / register / app-version-config 等 auth:public）沒有 authorizer，
 //     本開關對它們完全無效 —— 開了 kill switch，登入與註冊照常可用。
-//   - authorizer 對外只能回 401（回 Unauthorized error）或 403（Deny policy），
-//     給不出 UI 當初承諾的 503。客戶端看到的是「未授權」，不是「維護中」。
+//   - authorizer 這側只能回 401 或 403，給不出 UI 當初承諾的 503；503 只有走一般
+//     handler 的 WS sendMessage 那道做得到。兩側狀態碼不一致是 transport 限制，不是疏忽。
+//   - 不會主動中斷既有 WS 連線，只是擋住發言；本開關不做強制踢線。
 //
 // fail-open 的取捨（與 token 驗證的 fail-closed 是兩件事，別搞混）：
 //   - 本旗標讀取失敗 → 回 false（不封鎖）。DDB 抖一下不可以把全站鎖死；

@@ -69,6 +69,32 @@ func allow(userID, email, methodArn string) events.APIGatewayCustomAuthorizerRes
 	}
 }
 
+// deny 回 Deny policy → API Gateway 對外 403（不是 401）。目前只有維護模式走這條。
+//
+// 🔴 403 是刻意挑的，不是隨手選的狀態碼。維護模式若沿用 errUnauthorized（401），
+// App 端 frontend/services/apiService.ts 會把「非 auth 端點的 401」一律當成 session
+// 過期，清掉 JWT / USER / AUTH_TYPE / LINE_ID 四個 localStorage key 並強制 reload
+// ⇒ 拉一次 kill switch 等於把所有線上使用者永久登出，而且維護結束也不會回來。
+// 那會讓一個本該可逆的緊急煞車，變成不可逆的破壞 —— 代價比它要解決的問題還大。
+// 403 落在該檔「不清 session」的一般錯誤分支，維護結束後使用者重整即可繼續用。
+//
+// ⚠️ 真正的驗證失敗（缺 token / 無效 / 已撤銷）仍走 errUnauthorized 回 401：
+// 那些情境「清掉本機憑證」正是對的行為，不要看到 401 就一起改掉。
+func deny(methodArn string) events.APIGatewayCustomAuthorizerResponse {
+	return events.APIGatewayCustomAuthorizerResponse{
+		// PrincipalID 不可為空：API Gateway 對空 principal 會回 500，policy 根本不會被套用。
+		PrincipalID: "maintenance",
+		PolicyDocument: events.APIGatewayCustomAuthorizerPolicy{
+			Version: "2012-10-17",
+			Statement: []events.IAMPolicyStatement{{
+				Action:   []string{"execute-api:Invoke"},
+				Effect:   "Deny",
+				Resource: []string{methodArn},
+			}},
+		},
+	}
+}
+
 func Handler(ctx context.Context, ev events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
 	// kill switch 擺在最前面（取 token 之前）：封鎖語意是無條件的 —— 不看你是誰、
 	// token 對不對，開了就是擋；而且擺這裡的話，就算 Users 表正在抖（token 驗證
@@ -76,7 +102,9 @@ func Handler(ctx context.Context, ev events.APIGatewayCustomAuthorizerRequestTyp
 	// 管理員豁免不在這裡做：admin API 走另一顆 authorizer，天然不經過本函式。
 	if maintenanceCheck(ctx) {
 		log.Printf("[AUTHZ] 拒絕：維護模式（kill switch）開啟, arn=%s", ev.MethodArn)
-		return events.APIGatewayCustomAuthorizerResponse{}, errUnauthorized
+		// 回 Deny（403）而不是 errUnauthorized（401）—— 理由見 deny() 的註解，
+		// 一句話版：401 會讓 App 端把所有人的登入態刪掉。
+		return deny(ev.MethodArn), nil
 	}
 
 	token := extractBearer(ev.Headers)

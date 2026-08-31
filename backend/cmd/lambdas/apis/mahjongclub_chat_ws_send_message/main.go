@@ -56,8 +56,30 @@ func init() {
 	pushService, _ = shared.NewPushNotificationService()
 }
 
+// maintenanceCheck 以 package 級變數注入，讓測試能在不打 DDB 的情況下覆寫。
+// 生產上永遠是 shared.IsMaintenanceMode（讀取失敗 fail-open，見 shared/maintenance.go）。
+var maintenanceCheck = shared.IsMaintenanceMode
+
 func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("SendMessage: ConnectionID=%s, Body=%s", request.RequestContext.ConnectionID, request.Body)
+
+	// 維護模式（kill switch）必須在這裡再擋一次 —— authorizer 擋不到這條路。
+	//
+	// 🔴 WebSocket 只有 $connect 能掛 authorizer（$disconnect / sendMessage 掛了會被
+	//    CFN 拒絕，見 infra/gen_app_template.py 的 ws_block 註解）。所以 authorizer 那道
+	//    kill switch 只擋得住**新連線**；開關拉下去的當下已經連著的人，不補這段的話
+	//    可以一直傳訊息到自己斷線為止 —— 而「已經連著的人」正是維護時最該停下來的那批。
+	//
+	// 這裡回 503 而不是 authorizer 那側的 403：本函式是一般 Lambda handler，不受
+	// 「authorizer 只能回 401/403」的限制，503 才是「服務暫時不可用」的正確語意，
+	// 也正好是後台 UI 當初對 maintenanceMode 的承諾。
+	// ⚠️ 已知落差：WS route 的整合回應不會送回瀏覽器（chatService.ts 只掛 onmessage /
+	//    onerror），所以使用者實際看到的是「訊息送不出去」，不是一則維護提示。
+	//    這與既有的非成員 403 是同一個既有限制，本次不處理。
+	if maintenanceCheck(ctx) {
+		log.Printf("[chat-ws-send-message] 維護模式（kill switch）開啟，拒絕發言 conn=%s", request.RequestContext.ConnectionID)
+		return events.APIGatewayProxyResponse{StatusCode: 503}, nil
+	}
 
 	// 記錄流量統計
 	shared.RecordTraffic(ctx, dbClient, tablePrefix, "chat", "send_message")
