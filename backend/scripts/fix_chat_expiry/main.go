@@ -1,3 +1,22 @@
+// 一次性修補腳本（2026-07-17 工程師交付時帶入，之後無人動過）：
+// 掃 ExpiryTime 缺漏或為 0 的列，補成 StartTime + 24 小時。
+// 姊妹檔 scripts/fix_chat_room_expiry 是同一套邏輯套在 ChatRooms 上（key 換成 RoomID）。
+//
+// 🔴 2026-09-01 實查：它寫死的表 MahjongClub_ChatUserMemberships 在本帳號
+// （380931373365）ap-southeast-1 **不存在**（ResourceNotFoundException rc=254；
+// 正控 MahjongClubStg_ChatRooms 回 ACTIVE rc=0）。無前綴表名是
+// MahjongClub_ / MahjongClubStg_ 前綴制度**之前**的產物 ⇒ 現在跑第一步就會死。
+// 保留是因為它記錄了「ExpiryTime = StartTime + 24h」這條業務規則，不是因為它還能跑。
+// ⚠️ 界線：帳號隨執行者憑證走，只查過本帳號本區域。
+//
+// ⚠️ 2026-09-01 從 scripts/fix_chat_expiry.go 搬進本子目錄。原本兩支腳本同在
+// scripts/ 下、各自宣告 func main() ⇒ 同一個 package ⇒ go build ./... 恆 rc=1
+// （main redeclared）。單檔 go run 不受影響，所以這個狀態一直沒人發現，
+// 而它正是後端接不上 CI 的原因。呼叫方式隨之改變：
+//   舊：go run scripts/fix_chat_expiry.go
+//   新：go run ./scripts/fix_chat_expiry
+//
+// ⚠️ 它沒有 dry-run、沒有確認步驟，直接 Scan 全表並逐列 UpdateItem。要復用先加 dry-run。
 package main
 
 import (
