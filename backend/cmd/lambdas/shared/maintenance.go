@@ -67,15 +67,36 @@ package shared
 // 若這裡沒帶，前端 apiService 根本讀不到 403 這個狀態碼，403 分支形同不存在，
 // 而 curl 完全量不出這個差別。實測有帶。
 //
+// 第二輪：獨立複製 ＋ admin 豁免（同日稍晚，由另一個人重跑，非轉述上一輪）
+//
+// 上面那批數字第一輪只有一個目擊者。核心宣稱靠 n=1 太薄，而複製成本是
+// 「翻一次旗標 ＋ 兩發 curl」，故重跑。同一次翻轉裡多打一發 admin route ——
+// 這樣 admin 豁免就有了**差分**，不必靠 admin 帳號：
+//
+//   旗標 OFF → user /chat/rooms = 401 ・ admin /admin/stats = 401
+//   旗標 ON  → user /chat/rooms = 403 ・ admin /admin/stats = 401 ・ public = 200
+//   還原後   → 三者回到 401 / 401 / 200（get-item consistent read 回 None）
+//
+// 🔴 admin 那格在同一次翻轉裡**紋風不動（401，x-amzn-errortype: UnauthorizedException）**，
+// 而 user 那格 401→403。同一個旗標、同一把 garbage token、同一秒 ——
+// ⇒ admin authorizer 確實不看維護旗標，檔頭「管理員豁免是結構性的」那句宣稱**成立**。
+// 這是差分不是單點：若 admin 也被擋，它會跟 user 一起轉 403。
+// ⚠️ 但這只驗到**結構的那一半**（admin authorizer 不因維護而拒絕）。
+// 「合法 admin token 真的走完後台、按得到那顆開關」仍未驗 —— 需要真實 admin 帳號。
+//
+// Codex 獨立佐證（同日，未重跑旗標，它自己明說了）：CFN 狀態與時間戳、旗標已還原、
+// OFF 基線 401、branch ahead 1。並多給一個我沒量的：user/admin 兩顆 authorizer
+// 都在 19:19:26–27Z 更新 ⇒ 換到新碼的是 authorizer 函式本身，不只是 stack 層級。
+//
 // 仍是推論（未實打，不要當成已驗）：
 //   - 真瀏覽器端到端：curl 不執行 CORS、也不跑 apiService.ts。「瀏覽器收到 403
 //     且不清 session」是「量到的 403 ＋ 量到的 CORS header ＋ 讀碼」三者的組合推論。
 //     apiService.ts 的 403 分支已讀碼確認獨立於 401 分支、不碰 localStorage、不 reload。
 //   - WS 既有連線的 sendMessage 503（本檔上面提到的那道 handler 補丁）：需先建立
 //     合法連線，無便宜測法，**未測**。
-//   - admin authorizer 豁免（維護中管理員仍進得去後台關開關）：**未測**。
-//     這條是 kill switch 可逆性的最後一道，值得補。
-//   - 合法 token 在 ON 時的行為：無真實帳號，未測。
+//   - admin 豁免的**端到端那一半**：合法 admin token 在 ON 時能否走完後台關掉開關。
+//     結構半已驗（見上），這半未驗。可逆性要兩半都成立才算數。
+//   - 合法 user token 在 ON 時的行為：無真實帳號，未測。
 //   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
 // ─────────────────────────────────────────────────────────────────────────────
 
