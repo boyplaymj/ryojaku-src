@@ -26,5 +26,18 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  // 沒有 include ⇒ 範圍是整個 frontend/，而 allowJs 是開的。
+  // 少了這段的話，只要 dist/ 或 android/.../assets/public/ 裡有東西（build 或
+  // cap sync 之後就會有），tsc 會把**壓縮過的 bundle** 當專案檔 parse。
+  // 🔴 指定 exclude 會覆蓋掉 tsc 內建的預設值，所以 node_modules 必須自己列回來。
+  // ⚠️ 這裡只列產物目錄。根目錄的 sw.js 是**原始碼**不是產物
+  //    （vite.config.ts 的 injectManifest srcDir:'.' filename:'sw.js'），不可排除。
+  "exclude": [
+    "node_modules",
+    "dist",
+    "dev-dist",
+    "android",
+    "ios"
+  ]
 }
