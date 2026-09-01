@@ -171,14 +171,58 @@ package shared
 //
 // ⇒ 200 → 403 → 200。使用者側的可逆性閉環，不只是管理員側。
 //
+// 第六輪：真瀏覽器端到端（同日）—— 上一輪標為「最大的一塊未驗」的那塊
+//
+// 探針：infra/maintenance_browser_e2e.mjs（Playwright + chromium-1228，rc 0/1/2）。
+// 對著**已部署的 stg 前端** https://ryojaku-stg.boyplaymj.com 跑，不是本機 dev server：
+// origin 換掉的話 CORS 就不是同一件事，而「前端讀不讀得到 403」整個掛在 CORS 上。
+// 全程真・UI 登入（填表單按「通行證核准」），不塞 localStorage —— 塞的話就繞過了
+// 「session 長什麼樣」這件事本身。連續兩輪（n=2）逐項相同。
+//
+//   量到 | P2 正控 ・旗標 OFF ・GET /ledger  → 200
+//   量到 | P3 主判 ・旗標 ON  ・GET /ledger  → **403**，且 403 帶
+//          access-control-allow-origin: * ⇒ 前端確實讀得到這個狀態碼
+//   量到 | P3 🔴 三把鑰匙（mahjongclub_jwt_token / _user_session / _auth_type）
+//          **逐字未變**；load 事件數未增（沒有被強制 reload）；沒被導去 ?expired=true
+//   量到 | P4 維護中按重新整理 → 三把鑰匙仍在，人還登入著
+//   量到 | P5 還原旗標 → GET /ledger 回 200，且 JWT 與 P1 逐字相同（沒有重新登入過）
+//   量到 | P6 反控   → 見下
+//
+// ⇒ 檔頭「刻意不是 401、拉開關不會把使用者永久登出」那句宣稱，**不再是推論**。
+//   200→403→200 這次是在瀏覽器裡走完的，判準落在 localStorage 上，不在狀態碼上。
+//
+// 🔴 P6 反控是這支腳本的鑑別力本身，不是裝飾。少了它，「403 沒清 session」與
+//    「這支腳本根本偵測不到清 session」在輸出上逐字相同 —— 兩者都是「鑰匙還在」。
+//    故對**同一份線上產物**、同一條 /ledger 注入 401（page.route fulfill）：
+//      量到 | 三把鑰匙被清光 ＋ 頁面被強制 reload ＋ console 印出
+//             「[AUTH] 401 Unauthorized - 清除登入狀態並重新載入頁面」
+//    ⇒ 尺會動。P3 的綠燈是量出來的，不是尺壞掉的假象。
+//    順帶：401 reload 而 403 不 reload ⇒ 兩條分支的差分乾淨，不是「反正都沒事」。
+//
+// 🔴 順手訂正檔頭的涵蓋範圍數字（對線上 REST API 9mu0vajn38 逐 method 查 authorizerId，
+//    不是讀模板）：**user authorizer（eyi8av）24 條 ・ 公開 24 條 ・ admin（pkgo0a）17 條**。
+//    上面「約 47 條 / 22 條公開」對不上 —— 可能是 ANY 展開成多個動詞後的計數，
+//    也可能是模板與線上漂了。⚠️ 我沒查出差額的來源，只確定線上的數字是上面這組。
+//
+// 🔴 而這件事有實際後果，不只是數字：`/user-info`（App 首頁 fetchData 打的那條）
+//    的 authorizationType 是 **NONE** ⇒ kill switch 擋不到它。挑觸發器時若拿首頁當
+//    受測動作，整支腳本會「全綠而什麼都沒驗到」。本輪因此改打 GET /ledger。
+//
+// ⚠️ 使用者實際看到什麼（量到，且比「沒有提示」更糟）：維護中的計帳頁**渲染成一個
+//    完全正常的空帳本** ——「+0 PT ・場數 0 ・勝率 0% ・請從上方日曆中點選一個有紀錄
+//    的日期」，畫面上沒有出現 apiService 翻好的「服務維護中」。apiService 那層翻譯是
+//    對的，但呼叫端（Ledger.tsx）沒把 error 畫出來，於是使用者讀到的是「我這個月沒有
+//    紀錄」而不是「服務在維護」。這與 WS 那條「使用者看到的是訊息送不出去」同一個形狀：
+//    **修法保住了 session，但沒有保住「使用者知道發生什麼事」**。已知、未修。
+//    （本項不影響本輪的主張 —— 主張是 session 不被清，那格是綠的。）
+//
 // 仍是推論（未實打，不要當成已驗）：
-//   - 真瀏覽器端到端：curl 不執行 CORS、也不跑 apiService.ts。「瀏覽器收到 403
-//     且不清 session」是「量到的 403 ＋ 量到的 CORS header ＋ 讀碼」三者的組合推論。
-//     apiService.ts 的 403 分支已讀碼確認獨立於 401 分支、不碰 localStorage、不 reload。
-//     ⚠️ 這是目前**最大的一塊未驗**：整條修法的目的就是「不要清掉使用者的 session」，
-//     而「session 沒被清掉」這件事本身，從頭到尾沒有任何一次量測直接碰到過。
 //   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
-//   - 後台 UI 的按鈕本身沒點過：本輪打的是它背後的 API。
+//     ⚠️ 附帶一提，authService.adoptSession 登入後會打 /user-profile（**受保護**）⇒
+//     維護中「登入」這條路會走進它的 catch 把剛寫入的半套 session 清掉。那是新登入，
+//     不是既有 session，與本輪主張不衝突；但沒實打過，別當已驗。
+//   - 後台 UI 的按鈕本身沒點過：前面幾輪打的是它背後的 API。
+//   - 只驗了 REST。WS 既有連線那條見第四輪，client 端仍收不到任何提示。
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (

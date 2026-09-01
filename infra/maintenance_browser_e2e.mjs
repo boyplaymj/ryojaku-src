@@ -1,0 +1,278 @@
+#!/usr/bin/env node
+// kill switch（維護模式）的**真瀏覽器**端到端探針。
+//
+// 用法：node infra/maintenance_browser_e2e.mjs
+// 退出碼：0 = 宣稱成立；1 = 斷言失敗（宣稱不成立）；2 = 前置/設備失敗（＝沒量到，別讀成通過）
+//
+// ── 這支在補的是哪一塊 ──────────────────────────────────────────────────
+//
+// maintenance.go 檔頭自陳：「真瀏覽器端到端是目前最大的一塊未驗 —— 整條修法的目的
+// 就是『不要清掉使用者的 session』，而『session 沒被清掉』這件事本身，從頭到尾沒有
+// 任何一次量測直接碰到過。」前五輪全是 curl：curl 不執行 CORS、不跑 apiService.ts，
+// 所以「瀏覽器收到 403 且不清 session」是推論，不是量測。
+//
+// 🔴 判準落在 localStorage，不落在狀態碼。狀態碼前五輪已經量爛了；這支要量的是
+//    **狀態碼被前端翻譯之後**發生什麼事。載體是 constants.ts 的 STORAGE_KEYS：
+//    mahjongclub_jwt_token / mahjongclub_user_session / mahjongclub_auth_type。
+//
+// 🔴 反控（P6）不是裝飾，是這支腳本的鑑別力本身。少了它，「403 沒清 session」與
+//    「這支腳本根本偵測不到清 session」逐字相同 —— 兩者都是「三把鑰匙還在」。
+//    P6 對**同一份線上產物**注入 401，必須看到鑰匙被清光；清不掉就代表尺是壞的，
+//    上面每一格的綠燈都不算數（故 P6 失敗回 1，不是 warning）。
+//
+// 🔴 為什麼打 /ledger 而不是首頁：實查線上 API Gateway，`/user-info`（首頁 fetchData
+//    打的那條）的 authorizationType 是 **NONE** —— 沒掛 authorizer，kill switch 擋不到它。
+//    只有 41 條 CUSTOM route 會吐 403，`GET /ledger` 是其中之一。拿首頁當觸發器的話
+//    整支腳本會「全綠而什麼都沒驗到」。
+//
+// 🔴 導航一律用 hash（location.hash = ...），不用 page.goto。因為「有沒有被強制 reload」
+//    是本測的斷言之一（401 分支會 window.location.reload()），而 goto 自己會產生 load
+//    事件 ⇒ 用 goto 的話那個斷言的目擊者會被我自己污染。
+//
+// ⚠️ PWA 閘：站台要求 display-mode standalone／navigator.standalone（PWAInstallPrompt.tsx）。
+//    這裡用 iPhone 13 裝置模擬 ＋ navigator.standalone = true，等同「已加入主畫面的 iOS
+//    使用者」。不是走 DEV BYPASS 鈕 —— 那顆鈕真實使用者不會按。
+//
+// ⚠️ 會對 stg 寫入：翻 MahjongClubStg_AdminConfigs 的 maintenanceMode 旗標。
+//    收尾一律 delete-item 還原成「item 不存在」（＝原始狀態，不是寫 false）。
+//    需要一組 stg 測試帳號，由環境變數帶入（不註冊新帳號，app-register 限流 10/hr/IP）：
+//      E2E_EMAIL=... E2E_PASSWORD=... node infra/maintenance_browser_e2e.mjs
+
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const SITE = process.env.E2E_SITE || 'https://ryojaku-stg.boyplaymj.com';
+const API = process.env.E2E_API || 'https://ryojaku-api.boyplaymj.com';
+const REGION = process.env.AWS_REGION || 'ap-southeast-1';
+const TABLE = process.env.E2E_TABLE || 'MahjongClubStg_AdminConfigs';
+const EMAIL = process.env.E2E_EMAIL;
+const PASSWORD = process.env.E2E_PASSWORD;
+const SHOT_DIR = process.env.E2E_SHOT_DIR || '/tmp/ryojaku-e2e';
+
+// STORAGE_KEYS 的值抄自 frontend/constants.ts。刻意寫死而不 import：這支跑在 repo 根，
+// 而前端是另一個 build 體系（node>=22 + vite）。⚠️ 代價是它會跟 constants.ts 漂掉 ——
+// P1 會斷言「登入後這三把鑰匙真的存在」，鑰匙改名時那格會紅，不會靜靜漏掉。
+const KEYS = {
+  JWT: 'mahjongclub_jwt_token',
+  USER: 'mahjongclub_user_session',
+  AUTH_TYPE: 'mahjongclub_auth_type',
+};
+
+let rc = 0;
+const fail = (m) => { console.log(`  ❌ ${m}`); rc = 1; };
+const ok = (m) => console.log(`  ✅ ${m}`);
+const die = (m) => { console.log(`\n❌ 前置失敗（沒量到，不是通過）：${m}`); process.exit(2); };
+
+if (!EMAIL || !PASSWORD) die('缺 E2E_EMAIL / E2E_PASSWORD');
+
+// ── 旗標控制 ────────────────────────────────────────────────────────────
+const aws = (args) => execFileSync('aws', [...args, '--region', REGION], { encoding: 'utf8' });
+
+function flagSet(v) {
+  aws(['dynamodb', 'put-item', '--table-name', TABLE, '--item',
+    JSON.stringify({ info_key: { S: 'maintenanceMode' }, info_value: { S: String(v) } })]);
+}
+function flagDelete() {
+  aws(['dynamodb', 'delete-item', '--table-name', TABLE, '--key',
+    JSON.stringify({ info_key: { S: 'maintenanceMode' } })]);
+}
+function flagRead() {
+  const out = aws(['dynamodb', 'get-item', '--table-name', TABLE, '--key',
+    JSON.stringify({ info_key: { S: 'maintenanceMode' } }), '--consistent-read']);
+  if (!out.trim()) return null;
+  return JSON.parse(out).Item?.info_value?.S ?? null;
+}
+
+const require = createRequire(import.meta.url);
+let chromium, devices;
+try {
+  ({ chromium, devices } = require(process.env.E2E_PW ||
+    '/home/smlbot/.npm/_npx/361ceb562f3b3235/node_modules/playwright-core'));
+} catch (e) {
+  die(`載不到 playwright-core（試 E2E_PW=<路徑>）：${e.message}`);
+}
+
+// ── 前置 ────────────────────────────────────────────────────────────────
+console.log('══ P0 前置 ══');
+let before;
+try { before = flagRead(); } catch (e) { die(`讀不到旗標（AWS 憑證？）：${e.message}`); }
+if (before !== null && before.toLowerCase() === 'true') {
+  die(`開跑前旗標就是 true（前一輪沒還原？）—— 拒跑，否則量到的「被擋」不是我造成的`);
+}
+console.log(`  旗標起始值 = ${before === null ? '(item 不存在)' : before} → 視為 OFF`);
+
+const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+const ctx = await browser.newContext({ ...devices['iPhone 13'] });
+await ctx.addInitScript(() => {
+  Object.defineProperty(window.navigator, 'standalone', { value: true, configurable: true });
+});
+const page = await ctx.newPage();
+
+let loadCount = 0;
+page.on('load', () => { loadCount++; });
+const authWarns = [];
+page.on('console', (m) => {
+  const t = m.text();
+  if (t.includes('[AUTH]')) authWarns.push(t.slice(0, 120));
+});
+
+const snapshot = () => page.evaluate((k) => ({
+  jwt: localStorage.getItem(k.JWT),
+  user: localStorage.getItem(k.USER),
+  authType: localStorage.getItem(k.AUTH_TYPE),
+}), KEYS);
+
+// 觸發一次受保護 route 的呼叫：離開再回到 #/ledger 讓元件重新掛載。
+// 回傳實際觀察到的 response（不是我以為它會打的那條）。
+async function triggerLedger(label) {
+  await page.evaluate(() => { window.location.hash = '#/'; });
+  await page.waitForTimeout(700);
+  const waiter = page.waitForResponse(
+    (r) => r.url().startsWith(`${API}/ledger?`), { timeout: 25000 });
+  await page.evaluate(() => { window.location.hash = '#/ledger'; });
+  const resp = await waiter.catch(() => null);
+  await page.waitForTimeout(1200);
+  if (!resp) die(`${label}：25 秒內沒觀察到 GET /ledger —— 觸發器失效，本輪什麼都沒量到`);
+  return resp;
+}
+
+async function cleanup() {
+  try { flagDelete(); } catch { /* 收尾盡力而為 */ }
+  try { await browser.close(); } catch { /* 同上 */ }
+}
+process.on('uncaughtException', async (e) => {
+  console.log('\n❌ 未預期例外：', e && e.stack ? e.stack.slice(0, 600) : String(e));
+  await cleanup(); process.exit(2);
+});
+
+try {
+  // ── P1 真・UI 登入 ────────────────────────────────────────────────────
+  console.log('\n══ P1 真・UI 登入（不塞 localStorage）══');
+  await page.goto(SITE, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForTimeout(2000);
+
+  const emailBox = page.locator('input[type=email][placeholder="your@email.com"]');
+  if (await emailBox.count() === 0) die('找不到登入表單（PWA 閘沒過？站台改版？）');
+  await emailBox.first().fill(EMAIL);
+  await page.locator('input[type=password]').first().fill(PASSWORD);
+  await page.getByText('通行證核准', { exact: false }).first().click();
+  await page.waitForTimeout(6000);
+
+  const s0 = await snapshot();
+  if (!s0.jwt || !s0.user) die(`登入沒成功（jwt=${!!s0.jwt} user=${!!s0.user}）—— 帳密錯或站台壞了`);
+  ok(`登入成功，三把鑰匙就位（authType=${s0.authType}）`);
+  console.log(`     jwt 長度=${s0.jwt.length}  user 長度=${s0.user.length}`);
+
+  // ── P2 正控 ───────────────────────────────────────────────────────────
+  console.log('\n══ P2 正控：旗標 OFF，受保護 route 應為 200 ══');
+  const r2 = await triggerLedger('P2');
+  console.log(`  GET /ledger → ${r2.status()}`);
+  if (r2.status() !== 200) {
+    die(`正控壞了：旗標 OFF 時 /ledger 回 ${r2.status()}（期望 200）。` +
+        `少了這格，後面的 403 與「沒被擋」分不出來`);
+  }
+  ok('旗標 OFF 時使用者本來就用得了（正控成立）');
+  const loadsAfterP2 = loadCount;
+
+  // ── P3 主判 ───────────────────────────────────────────────────────────
+  console.log('\n══ P3 主判：旗標 ON —— 403 且 session 不可被清 ══');
+  flagSet(true);
+  const nowFlag = flagRead();
+  if (String(nowFlag).toLowerCase() !== 'true') die(`旗標沒寫進去（讀回 ${nowFlag}）`);
+  console.log('  旗標已翻成 true（連線與分頁全程沒動過）');
+
+  const r3 = await triggerLedger('P3');
+  console.log(`  GET /ledger → ${r3.status()}`);
+  if (r3.status() === 403) ok('瀏覽器**真的**收到 403（不只是 curl 收到）');
+  else fail(`期望 403，實得 ${r3.status()} —— kill switch 沒擋到這條路`);
+
+  // 403 讀得到，前提是它帶 CORS header；沒帶的話瀏覽器只會看到 CORS 失敗。
+  const acao = (await r3.allHeaders())['access-control-allow-origin'];
+  if (acao) ok(`403 帶 CORS header（access-control-allow-origin: ${acao}）⇒ 前端讀得到狀態碼`);
+  else fail('403 沒帶 CORS header —— 前端根本看不到 403，403 分支形同不存在');
+
+  const s3 = await snapshot();
+  if (s3.jwt === s0.jwt && s3.user === s0.user && s3.authType === s0.authType) {
+    ok('🔴 三把鑰匙逐字未變 —— session 沒被清掉（這就是整條修法的目的）');
+  } else {
+    fail(`session 被動到了：jwt ${s0.jwt === s3.jwt ? '同' : '變/沒了'}、` +
+         `user ${s0.user === s3.user ? '同' : '變/沒了'}、authType ${s0.authType === s3.authType ? '同' : '變/沒了'}`);
+  }
+
+  if (loadCount === loadsAfterP2) ok('沒有發生強制 reload（load 事件數未增）');
+  else fail(`頁面被 reload 了 ${loadCount - loadsAfterP2} 次 —— 401 分支的行為`);
+
+  if (page.url().includes('expired=true')) fail('被導去 ?expired=true（401 分支的行為）');
+  else ok('沒有被導去「連線已過期」');
+
+  // 🔴 這一格量的是**使用者真的讀到的字串**，不是 apiService 回傳物件裡的字串。
+  // 兩者差一層：apiService 把 403 翻成「服務維護中」，但呼叫端要把它畫出來才算數。
+  await page.screenshot({ path: SHOT_DIR + '/p3-maintenance-on.png', fullPage: true });
+  const body3 = await page.evaluate(() => document.body.innerText);
+  if (body3.includes('服務維護中')) ok('使用者讀到的字串是「服務維護中」');
+  else {
+    console.log(`  ⚠️ 畫面沒出現「服務維護中」—— apiService 翻譯出來了，但呼叫端沒畫出來。`);
+    console.log(`     使用者實際讀到：${JSON.stringify(body3.replace(/\s+/g, ' ').trim().slice(0, 160))}`);
+    console.log(`     本項不影響 session 判準（那是本測的主張），但它代表使用者被擋住卻看不到原因。`);
+  }
+
+  // ── P4 維護中重新整理 ─────────────────────────────────────────────────
+  console.log('\n══ P4 維護中按重新整理 —— 還登入著嗎 ══');
+  await page.reload({ waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForTimeout(4000);
+  const s4 = await snapshot();
+  if (s4.jwt === s0.jwt && s4.user) ok('重新整理後三把鑰匙仍在 —— 使用者沒有被登出');
+  else fail(`重新整理後 session 掉了（jwt=${!!s4.jwt}）—— 維護一結束他得重新登入`);
+
+  // ── P5 可逆 ───────────────────────────────────────────────────────────
+  console.log('\n══ P5 還原旗標 —— 不必重新登入就能繼續用 ══');
+  flagDelete();
+  await page.waitForTimeout(1500);
+  const r5 = await triggerLedger('P5');
+  console.log(`  GET /ledger → ${r5.status()}`);
+  if (r5.status() === 200) ok('回到 200 —— 200→403→200 的閉環，這次是在瀏覽器裡');
+  else fail(`還原後仍是 ${r5.status()}`);
+  const s5 = await snapshot();
+  if (s5.jwt === s0.jwt) ok('全程用的是同一把 JWT，沒有重新登入過');
+  else fail('JWT 變了 —— 中間發生過重新登入/換發');
+
+  // ── P6 反控 ───────────────────────────────────────────────────────────
+  console.log('\n══ P6 反控：同一份線上產物注入 401，鑰匙必須被清光 ══');
+  console.log('  （少了這格，「403 沒清 session」與「這支腳本偵測不到清 session」長得一樣）');
+  const loadsBefore6 = loadCount;
+  await page.route(`${API}/ledger?**`, (route) =>
+    route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"injected"}' }));
+
+  await page.evaluate(() => { window.location.hash = '#/'; });
+  await page.waitForTimeout(700);
+  await page.evaluate(() => { window.location.hash = '#/ledger'; });
+  await page.waitForTimeout(6000);
+
+  const s6 = await snapshot();
+  if (!s6.jwt && !s6.user) {
+    ok('🔴 注入 401 後三把鑰匙被清光 ⇒ 本腳本偵測得到「session 被清」，P3 的綠燈有鑑別力');
+  } else {
+    fail(`注入 401 後鑰匙還在（jwt=${!!s6.jwt} user=${!!s6.user}）—— ` +
+         `尺是壞的：它偵測不到 session 被清，上面每一格的綠燈都不算數`);
+  }
+  if (loadCount > loadsBefore6) ok(`401 分支有強制 reload（+${loadCount - loadsBefore6}）⇒ 與 403 分支行為確實不同`);
+  else fail('401 分支沒有 reload —— 兩條分支在這個維度上沒有差異，差分不乾淨');
+  if (authWarns.length) console.log(`  旁證 console：${authWarns[authWarns.length - 1]}`);
+
+} finally {
+  console.log('\n══ 收尾 ══');
+  try {
+    flagDelete();
+    const after = flagRead();
+    console.log(`  旗標還原後讀回 = ${after === null ? '(item 不存在) ✅ 回到原始狀態' : after}`);
+    if (after !== null) { console.log('  ❌ 旗標沒還原乾淨'); rc = 1; }
+  } catch (e) {
+    console.log(`  ❌ 還原失敗，請手動檢查 ${TABLE} 的 maintenanceMode：${e.message}`);
+    rc = 2;
+  }
+  await browser.close().catch(() => {});
+}
+
+console.log(`\n${rc === 0 ? '✅ 全部斷言通過' : '❌ 有斷言失敗'}  rc=${rc}`);
+console.log('=== END-OF-RUN ===');
+process.exit(rc);
