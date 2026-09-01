@@ -34,6 +34,50 @@ package shared
 //
 // 成本：三處 authorizer 都設 Identity.ReauthorizeEvery: 0（不快取），
 // 代價是每個帶 token 的請求 +1 次 DDB 讀 —— 這是刻意的：開關要能秒開也要能秒關。
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// 實打驗證紀錄（2026-09-01，stg，CFN ryojaku-app-stg UPDATE_COMPLETE 19:19:15Z）
+//
+// 上面「回 403 不是 401」那段原本是**推論**：從 API Gateway 的 Deny 語義推出來的，
+// 而單元測試斷言的是 authorizer 回傳的 policy 物件，對「瀏覽器實際收到什麼」零鑑別力。
+// 推論若不成立，f1d667e 那個「拉一次開關把所有人永久登出」的缺陷會原封不動回來，
+// 且所有測試照樣全綠。故實際拉了一次開關量狀態碼。以下標「量到」與「仍是推論」。
+//
+// 探針不需要真實帳號：Handler 把 maintenanceCheck 擺在 extractBearer 之前，
+// 故 garbage token 即可分辨兩條路 —— OFF→401（token 無效）、ON→403（Deny）。
+// OFF 那格同時是正控：它證明請求真的到得了 authorizer，少了它「403 沒出現」
+// 與「請求根本沒到」長得一模一樣。
+//
+//   量到 | 旗標 OFF ・ REST auth:user（GET /chat/rooms）      → 401（正控）
+//   量到 | 旗標 ON  ・ 同上                                    → 403 ×4/4
+//   量到 | 旗標 ON  ・ 公開 route（GET /app-version-config）   → 200 ＋正常 payload
+//                     ⇒ 上面「擋不到公開 route」那條宣稱**成立**，不是紙上談兵
+//   量到 | 旗標 ON  ・ WS $connect（?token=garbage）           → 403 explicit-deny
+//   量到 | 還原後   ・ REST 與 WS 同探針                       → 雙雙回到 401
+//
+// 403 的來源有指紋，不只是「狀態碼剛好相同」（403 也可能來自 CDN／WAF）：
+// body 為 API Gateway 制式的 "...explicit deny in an identity-based policy"，
+// header 帶 x-amzn-errortype: AccessDeniedException，WS 那發還帶 connectionId。
+// 且同一把 garbage token 在 OFF→401 / ON→403 ⇒ 該 403 確實來自維護分支，
+// 不是「爛 token 反正都會被拒」。
+//
+// 🔴 順帶量到一件沒人問但會致命的事：ON 的 403 **帶完整 CORS header**
+// （access-control-allow-origin 等）。02-app.generated.yaml:92-94 警告過
+// 「gateway 自產的錯誤回應沒有 CORS header ⇒ 瀏覽器只看到 CORS 失敗」——
+// 若這裡沒帶，前端 apiService 根本讀不到 403 這個狀態碼，403 分支形同不存在，
+// 而 curl 完全量不出這個差別。實測有帶。
+//
+// 仍是推論（未實打，不要當成已驗）：
+//   - 真瀏覽器端到端：curl 不執行 CORS、也不跑 apiService.ts。「瀏覽器收到 403
+//     且不清 session」是「量到的 403 ＋ 量到的 CORS header ＋ 讀碼」三者的組合推論。
+//     apiService.ts 的 403 分支已讀碼確認獨立於 401 分支、不碰 localStorage、不 reload。
+//   - WS 既有連線的 sendMessage 503（本檔上面提到的那道 handler 補丁）：需先建立
+//     合法連線，無便宜測法，**未測**。
+//   - admin authorizer 豁免（維護中管理員仍進得去後台關開關）：**未測**。
+//     這條是 kill switch 可逆性的最後一道，值得補。
+//   - 合法 token 在 ON 時的行為：無真實帳號，未測。
+//   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
+// ─────────────────────────────────────────────────────────────────────────────
 
 import (
 	"context"
