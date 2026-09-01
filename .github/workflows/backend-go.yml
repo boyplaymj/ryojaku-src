@@ -1,0 +1,76 @@
+# 両雀 後端 Go 檢查
+#
+# 為什麼補這支（2026-09-01）：在此之前 repo 只有 android-debug.yml 一支 workflow，
+# 它的 paths 只收 frontend/**，且沒有任何 go build / go vet / go test 步驟
+# ⇒ **後端從來沒有被 CI 驗過**，包含 authz authorizer 這類安全碼。
+# 先前說過的「CI 已綠」綠的是 Android/frontend 那條，對 backend 零涵蓋。
+#
+# 🔴 這盞綠燈涵蓋什麼，請先讀清楚，不要重蹈同一個錯：
+#   涵蓋 = 全 module 編得起來（含 arm64 交叉編譯）+ vet 乾淨 + 6 個 package 的測試通過。
+#   不涵蓋 = 其餘 81 個 package 根本沒有測試檔；不涵蓋任何部署後的實機行為
+#            （kill switch 的 403、CORS header、admin 豁免那些都是人工實打量出來的，
+#             見 backend/cmd/lambdas/shared/maintenance.go 檔頭的驗證紀錄）。
+#   ⇒ 本 workflow 綠 ≠ 行為正確。它擋的是「編不起來 / vet 抓得到 / 那 6 個 package 退步」。
+#
+# ⚠️ 本檔能存在，是因為同一天先把 backend/scripts 下兩支各自宣告 func main() 的
+#    腳本搬進各自子目錄。在那之前 go build ./... 恆 rc=1（main redeclared），
+#    後端結構上接不上 CI。細節見那兩支的檔頭。
+
+name: Backend Go
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-go.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # go-version-file 指向 go.mod，不寫死版號 —— 版本只有一個來源，
+      # 免得日後 go.mod 升版而 CI 還在用舊的，兩邊靜靜地驗不同的東西。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: go build（原生）
+        run: go build ./...
+
+      # 🔴 生產出的是 linux/arm64（見 infra/build_all.sh：GOOS=linux GOARCH=arm64
+      #    provided.al2023）。runner 是 x86_64，只跑原生編譯就沒驗到真正要出貨的那個目標。
+      #    純 Go 專案很少出事，但「很少」不是「不會」，而這一步幾乎免費。
+      - name: go build（linux/arm64，與生產同目標）
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc ./cmd/lambdas/...
+
+      - name: go vet
+        run: go vet ./...
+
+      # 🔴 下限檢查存在的理由：go test ./... 在「所有測試檔都消失」時**照樣 rc=0**
+      #    （每個 package 印 "no test files"）。也就是說「測試全過」與「一條測試都沒跑」
+      #    在 exit code 上逐字相同。測試檔被改名、搬走、或漏進 build tag 時，
+      #    這支 workflow 會安靜地繼續綠 —— 那比沒有 CI 更糟。
+      #    故 fail-closed：實際跑起來的 package 數不得少於已知的 6 個。
+      #    ⚠️ 新增有測試的 package 時把 MIN 一起調高，否則這道守衛會隨時間鬆掉。
+      - name: go test（含「真的有跑到測試」的下限檢查）
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee /tmp/gotest.log
+          MIN=6
+          ok=$(grep -c '^ok' /tmp/gotest.log || true)
+          echo "--- 實際跑起來的 package：$ok（下限 $MIN）---"
+          grep '^ok' /tmp/gotest.log || true
+          if [ "$ok" -lt "$MIN" ]; then
+            echo "::error::只有 $ok 個 package 跑了測試，少於下限 $MIN。"
+            echo "::error::測試檔可能被改名／搬走／漏進 build tag —— 這種情況 go test 仍會 rc=0，故單看 exit code 抓不到。"
+            exit 1
+          fi
