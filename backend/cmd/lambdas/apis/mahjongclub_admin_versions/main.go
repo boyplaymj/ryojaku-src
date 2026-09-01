@@ -106,8 +106,15 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	configMap["minVersion"] = "1.0.0"
 
 	// 注意：這裡回的是整張 AdminConfigs，會包含已經沒人讀的舊 key
-	// （latestVersion／forceUpdate／maintenanceMode 是先前後台寫進去的殘留）。
+	// （latestVersion／forceUpdate 是先前後台寫進去的殘留）。
 	// 後台頁面只挑自己認得的欄位用，其餘忽略。
+	//
+	// 🔴 2026-09-01 訂正：本句原本把 maintenanceMode 也列為「沒人讀的殘留」——
+	// 那在 f1d667e 之後就不成立了。它現在是 kill switch 的載體，由 user authorizer
+	// 每個請求 ConsistentRead 讀一次（shared/maintenance.go）。照舊句字面讀的人
+	// 可能會把它當垃圾清掉，而清掉＝緊急煞車消失。
+	// ⚠️ 這正是隔壁 config_validate.go:28 預言過的事：「沒有任何機制會逼人回來改那句話
+	// —— 它會靜靜地過期」。預言命中了，訂正的代價是一行，沒被發現的代價不是。
 	for _, item := range items {
 		configMap[item.Key] = item.Value
 	}

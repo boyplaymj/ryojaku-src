@@ -88,16 +88,50 @@ package shared
 // OFF 基線 401、branch ahead 1。並多給一個我沒量的：user/admin 兩顆 authorizer
 // 都在 19:19:26–27Z 更新 ⇒ 換到新碼的是 authorizer 函式本身，不只是 stack 層級。
 //
+// 第三輪：可逆性走完整條迴路（admin 豁免的端到端半，同日）
+//
+// 前兩輪只驗到「admin authorizer 不因維護而拒絕」。那是結構半 —— 它答的是
+// 「有沒有被擋」，而這顆開關真正的問題是**「拉下去之後關不關得掉」**。
+// 故本輪把開關的**開與關都走 admin API**（POST /admin/config/version），
+// 不再直接戳 DDB：戳 DDB 會繞過正要驗的那條通道，量到的東西就不是可逆性。
+// admin token 以 SSM 的 ADMIN_JWT_SECRET 現簽（HS256，role=super_admin，10 分鐘）。
+// ⚠️ handler 比 authorizer 嚴：authorizer 收 admin/super_admin，
+//    admin_versions 的 handler 只收 super_admin，否則 403（main.go 內 adminrole.Allows）。
+//
+//   相 0 基線（旗標不存在）
+//     量到 | admin GET /admin/config/version        → 200（正控：token 真的有效）
+//     量到 | 同上但不帶 token                        → 401（反控：沒 token 擋得住）
+//     量到 | user GET /chat/rooms                    → 401
+//   相 1 用 admin API 開啟 kill switch
+//     量到 | POST {"maintenanceMode":"true"}         → 200，DDB 旗標 → "true"
+//   相 2 維護中
+//     量到 | user  GET /chat/rooms                   → 403（使用者被擋）
+//     量到 | admin GET /admin/config/version         → 200（豁免・端到端成立）
+//   相 3 🔴 維護中用 admin API 關掉開關（＝可逆性本身）
+//     量到 | POST {"maintenanceMode":"false"}        → 200，DDB 旗標 → "false"
+//     量到 | user  GET /chat/rooms                   → 401（使用者恢復）
+//   還原 | delete-item → get-item 回 None、user 回 401（回到原始「item 不存在」）
+//
+// ⇒ 檔頭「管理員豁免是結構性的、封鎖期間人仍進得去後台把開關關掉」那句宣稱，
+//   兩半都已實打。這顆 kill switch 的可逆性成立 —— 它敢拉。
+//
+// 順帶驗到稽核路徑：兩次 POST 都寫進了 AdminAuditLogs
+// （action=UPDATE_CONFIG、target=AdminConfigs、details 帶新值，admin=claude-b3a-verify，
+// 相隔 1 秒兩筆）。⚠️ 該表的操作者欄位叫 **admin** 不是 admin_user —— 我第一次用錯欄名
+// 查到空陣列，而「查錯欄位」與「稽核根本沒寫」在輸出上逐字相同，是靠隨手撈幾筆
+// 看實際欄名才戳破的。要查稽核先看 schema，別憑欄名猜。
+//
 // 仍是推論（未實打，不要當成已驗）：
 //   - 真瀏覽器端到端：curl 不執行 CORS、也不跑 apiService.ts。「瀏覽器收到 403
 //     且不清 session」是「量到的 403 ＋ 量到的 CORS header ＋ 讀碼」三者的組合推論。
 //     apiService.ts 的 403 分支已讀碼確認獨立於 401 分支、不碰 localStorage、不 reload。
 //   - WS 既有連線的 sendMessage 503（本檔上面提到的那道 handler 補丁）：需先建立
 //     合法連線，無便宜測法，**未測**。
-//   - admin 豁免的**端到端那一半**：合法 admin token 在 ON 時能否走完後台關掉開關。
-//     結構半已驗（見上），這半未驗。可逆性要兩半都成立才算數。
 //   - 合法 user token 在 ON 時的行為：無真實帳號，未測。
+//     （已知它走的是與 garbage token 相同的那條路 —— maintenanceCheck 在取 token 之前
+//     就回 Deny —— 但那是讀碼推的，沒實打。）
 //   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
+//   - 後台 UI 的按鈕本身沒點過：本輪打的是它背後的 API。
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
