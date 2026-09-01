@@ -15,6 +15,13 @@
 # ⚠️ 本檔能存在，是因為同一天先把 backend/scripts 下兩支各自宣告 func main() 的
 #    腳本搬進各自子目錄。在那之前 go build ./... 恆 rc=1（main redeclared），
 #    後端結構上接不上 CI。細節見那兩支的檔頭。
+#
+# 🔴 首次執行（run 33551846522）就紅了，值得記住紅在哪：前四步全過，
+#    掛在 go test —— mahjongclub_admin_versions 的 init() 因 ADMIN_JWT_SECRET 為空
+#    而 panic。而我在補這支之前「量」過本機是 6 ok / 0 FAIL，那份輸出**每一行都是
+#    (cached)** ⇒ 我拿快取的回聲當量測，真正乾淨環境跑起來是 5 ok / 1 FAIL。
+#    ⇒ 兩個修法都在下面 go test 那步：ALLOW_DEV_JWT_SECRET 與 -count=1。
+#    ⇒ 教訓不是「忘了設環境變數」，是**「ok」這個字不告訴你它有沒有真的跑**。
 
 name: Backend Go
 
@@ -61,10 +68,29 @@ jobs:
       #    這支 workflow 會安靜地繼續綠 —— 那比沒有 CI 更糟。
       #    故 fail-closed：實際跑起來的 package 數不得少於已知的 6 個。
       #    ⚠️ 新增有測試的 package 時把 MIN 一起調高，否則這道守衛會隨時間鬆掉。
+      #
+      # 🔴 -count=1 不是可有可無（首次執行 run 33551846522 紅掉才學到的）：
+      #    setup-go 會快取 Go build cache，而**測試結果也在裡面**。沒有 -count=1 的話，
+      #    第二次之後的 run 可能直接印 "ok ... (cached)" 而**一條測試都沒有真的執行**。
+      #    更難看的是：上面那道下限檢查對此**零鑑別力** —— 快取命中印的也是 ^ok，
+      #    數量一模一樣。守衛數的是「有幾行 ok」，不是「有幾個 package 真的跑了」，
+      #    是 -count=1 才讓那個數字有意義。
+      #    （本地就是這樣騙到自己的：拿一份全 (cached) 的輸出當量測，寫下「6 ok / 0 FAIL、
+      #      CI 第一天就會綠」，而乾淨環境重跑其實是 5 ok / 1 FAIL。）
+      #
+      # 🔴 ALLOW_DEV_JWT_SECRET 是本專案自己設計的非生產逃生口，不是我臨時捏的假值：
+      #    mahjongclub_admin_versions/main.go 的 init() 在 ADMIN_JWT_SECRET 為空時
+      #    **直接 panic**（AUTH_SYSTEM_DESIGN §6.1 的 fail-closed），於是該 package 的測試
+      #    在乾淨環境**永遠跑不起來**。同檔已備好 ALLOW_DEV_JWT_SECRET=true 這條路
+      #    （改用寫死的 dev-only secret），CI 走它。
+      #    ⚠️ 這個變數只准出現在 CI／本機，絕不可進部署路徑 —— infra/deploy_app.sh
+      #    是從 SSM 取真 ADMIN_JWT_SECRET，本檔與它無關。
       - name: go test（含「真的有跑到測試」的下限檢查）
+        env:
+          ALLOW_DEV_JWT_SECRET: 'true'
         run: |
           set -o pipefail
-          go test ./... 2>&1 | tee /tmp/gotest.log
+          go test -count=1 ./... 2>&1 | tee /tmp/gotest.log
           MIN=6
           ok=$(grep -c '^ok' /tmp/gotest.log || true)
           echo "--- 實際跑起來的 package：$ok（下限 $MIN）---"
