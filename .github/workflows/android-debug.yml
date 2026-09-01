@@ -139,6 +139,34 @@ jobs:
             || { echo "❌ package name 不是 com.boyplaymj.ryojaku" >&2; exit 1; }
           echo "✔ package name 正確"
 
+          # 版本：拿「真的燒進 APK 的那個值」跟單一來源比對。
+          # 為什麼不能只靠 npm run build 的 prebuild 守衛：那支比對的是 repo 裡的
+          # **檔案內容**，證明不了 gradle 真的把那個值編進 APK —— 中間還隔著
+          # flavor、manifestPlaceholders、以及「gradle 用了快取沒重編」這幾種可能，
+          # 而那幾種失敗的外觀都是「build 成功」。這一段是唯一量到成品的檢查。
+          BADGING=$("$AAPT2" dump badging "$APK")
+          WANT=$(cd .. && node scripts/sync-version.mjs --json)
+          WANT_NAME=$(printf '%s' "$WANT" | jq -r .version)
+          WANT_CODE=$(printf '%s' "$WANT" | jq -r .buildNumber)
+          # 不接 head —— 這裡在 pipefail 底下，head 提早關管線會讓上游拿到 SIGPIPE，
+          # 於是「抽到了」會被回報成非零而看起來像抽不到。package: 只有一行，不需要 head。
+          # ⚠️ 同一行還有 platformBuildVersionCode='35'。這裡靠**大小寫**區分：
+          #    那個欄位是大寫 V（…VersionCode），比對字串是小寫 v ⇒ 貪婪 .* 抓不到它。
+          #    所以這兩行絕對不可以加 sed -i／改成大小寫不敏感，會抽到 35。
+          #    （就算真的抽錯，值也對不上來源 ⇒ 是 fail-closed，不會靜靜放行。）
+          GOT_NAME=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")
+          GOT_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p")
+          echo "APK versionName=[$GOT_NAME] versionCode=[$GOT_CODE]／來源 [$WANT_NAME] [$WANT_CODE]"
+          # 抽不到值要當失敗，不能當通過：badging 格式一改，兩邊都變空字串就會「相等」，
+          # 那時候這道斷言會安靜地退化成永遠通過，外觀跟真的通過一模一樣。
+          [ -n "$GOT_NAME" ] && [ -n "$GOT_CODE" ] && [ -n "$WANT_NAME" ] && [ -n "$WANT_CODE" ] \
+            || { echo "❌ 版本抽取失敗，這道斷言無效（不是通過）" >&2; exit 1; }
+          [ "$GOT_NAME" = "$WANT_NAME" ] \
+            || { echo "❌ APK versionName=$GOT_NAME ≠ package.json 的 $WANT_NAME" >&2; exit 1; }
+          [ "$GOT_CODE" = "$WANT_CODE" ] \
+            || { echo "❌ APK versionCode=$GOT_CODE ≠ 推導值 $WANT_CODE" >&2; exit 1; }
+          echo "✔ APK 版本與 package.json 一致"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ryojaku-debug-apk
