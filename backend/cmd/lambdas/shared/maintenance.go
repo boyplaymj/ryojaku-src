@@ -121,15 +121,62 @@ package shared
 // 查到空陣列，而「查錯欄位」與「稽核根本沒寫」在輸出上逐字相同，是靠隨手撈幾筆
 // 看實際欄名才戳破的。要查稽核先看 schema，別憑欄名猜。
 //
+// 第四輪：WS 既有連線的 503（同日）—— 這一項的判準不在 wire 上
+//
+// 上面自陳過「WS route 的整合回應不會送回瀏覽器」⇒ 503 在 client 端根本觀察不到。
+// 所以量測要對著真正承載它的通道：**Lambda 的 CloudWatch log**。
+// 探針同樣不需要真實房間：maintenanceCheck 是 Handler 的第一件事，排在
+// json.Unmarshal / getUserIDByConnection / IsRoomMember 之前。
+//
+// (a) 結構前提，對**線上部署**查（不是讀模板）：
+//     量到 | apigatewayv2 get-routes → $connect = CUSTOM(tgl00y)、
+//            sendMessage = **NONE**、$disconnect = NONE
+//     ⇒ 「authorizer 掛不上 sendMessage、擋不到這條路」成立，本段補丁的前提為真。
+//
+// (b) 已部署 handler 對真旗標的差分（直接 invoke Lambda，同一個 event 只改旗標）：
+//     量到 | 旗標 OFF   → statusCode 403（走到辨識連線那步才被擋）
+//     量到 | 旗標 true  → statusCode **503**（維護分支）
+//     量到 | 旗標 false → statusCode 403（回到原本那條路）
+//
+// (c) 🔴 真・既有連線端到端（websockets 連上 stg，token 以 SSM JWT_SECRET 現簽，
+//     iat 需晚於該 user 的 pwChangedAt）。連線建立後**保持開著**才翻旗標：
+//       20:19:09  ConnectionID=gZHYyo4PMkhoKEh2-A==  Body=…PHASE-OFF
+//       20:19:09  [chat-ws-send-message] 非成員遭拒 user=APP_1keifs5e846ao6pD …
+//       ── 此時才把旗標翻成 true，連線不動 ──
+//       20:19:15  ConnectionID=gZHYyo4PMkhoKEh2-A==  Body=…PHASE-ON
+//       20:19:15  [chat-ws-send-message] 維護模式（kill switch）開啟，拒絕發言 conn=同一個
+//     ⇒ **同一個 connectionId**、相隔 6 秒、只有旗標變 ⇒ 這條連線確實建立在翻旗標之前，
+//       「既有連線」是字面意義上的既有，不是重連。
+//     ⇒ 而 OFF 那次走的是**不同的分支**（非成員遭拒），證明差分乾淨 ——
+//       不是「反正都會被拒」，是維護分支真的接管了。
+//     ⇒ 順帶驗到：OFF 那次走得到成員資格檢查 ⇒ $connect authorizer 存下的身分正確，
+//       且房間層授權（水平越權補丁）在線上有效。
+//     ⇒ client 端在整個過程中**沒收到任何回應**，與上面自陳的落差一致：
+//       使用者看到的是「訊息送不出去」，不是維護提示。這是已知且未修的。
+//
+// ⚠️ 環境地雷（浪費了一次）：本機 /tmp 是所有 session 共用的，裡面有別條 session 留下的
+//    /tmp/queue.py，會遮蔽標準函式庫（Python 把腳本所在目錄排在 sys.path 最前）。
+//    在 /tmp 下跑腳本會炸在毫不相關的地方。要在專屬子目錄執行。
+//
+// 第五輪：合法 user token 打 REST —— 前四輪全是拿 garbage token 量的
+//
+// 🔴 這一格補的是一個容易被忽略的鑑別力缺口：前面所有 REST 量測的翻轉都是 401→403，
+// 而**兩者都是「被拒」**，只差在理由。那證明得了「維護分支改變了拒絕的方式」，
+// 證明不了「原本用得好好的人會被擋下來」—— 而後者才是這顆開關對外的實際語意。
+// 故以現簽的合法 user token（SSM JWT_SECRET，iat 晚於該 user 的 pwChangedAt）重量：
+//
+//   量到 | 旗標 OFF  ・合法 token → **200**（正控：真使用者原本用得了）／garbage → 401
+//   量到 | 旗標 ON   ・合法 token → **403**（被擋）           ／garbage → 403
+//   量到 | 還原後    ・合法 token → **200**（回來了）
+//
+// ⇒ 200 → 403 → 200。使用者側的可逆性閉環，不只是管理員側。
+//
 // 仍是推論（未實打，不要當成已驗）：
 //   - 真瀏覽器端到端：curl 不執行 CORS、也不跑 apiService.ts。「瀏覽器收到 403
 //     且不清 session」是「量到的 403 ＋ 量到的 CORS header ＋ 讀碼」三者的組合推論。
 //     apiService.ts 的 403 分支已讀碼確認獨立於 401 分支、不碰 localStorage、不 reload。
-//   - WS 既有連線的 sendMessage 503（本檔上面提到的那道 handler 補丁）：需先建立
-//     合法連線，無便宜測法，**未測**。
-//   - 合法 user token 在 ON 時的行為：無真實帳號，未測。
-//     （已知它走的是與 garbage token 相同的那條路 —— maintenanceCheck 在取 token 之前
-//     就回 Deny —— 但那是讀碼推的，沒實打。）
+//     ⚠️ 這是目前**最大的一塊未驗**：整條修法的目的就是「不要清掉使用者的 session」，
+//     而「session 沒被清掉」這件事本身，從頭到尾沒有任何一次量測直接碰到過。
 //   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
 //   - 後台 UI 的按鈕本身沒點過：本輪打的是它背後的 API。
 // ─────────────────────────────────────────────────────────────────────────────
