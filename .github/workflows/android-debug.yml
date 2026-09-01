@@ -70,9 +70,14 @@ jobs:
       # 當時是靠 dist/ 與 android/.../assets/public/ 被 gitignore 才碰巧沒事 ——
       # 那是「碰巧不會紅」，不是「檢查範圍是對的」。現在範圍寫進 tsconfig 的
       # exclude 了（見該檔註解），順序不再影響範圍。
-      # 實測（npx tsc --listFilesOnly，扣掉 node_modules）：
+      # 實測「範圍」（npx tsc --listFilesOnly，扣掉 node_modules）：
       #   補 exclude 前：本機含產物 88 檔／乾淨 checkout 80 檔
-      #   補 exclude 後：兩者都是 79 檔　　　　　　　　　　　四種組合皆 rc=0
+      #   補 exclude 後：兩者都是 79 檔
+      # 實測「成敗」（npx tsc -p <設定檔> --noEmit，四種組合分別跑）：全部 rc=0
+      # 🔴 上面兩行是**兩支不同的尺**，不要合併：--listFilesOnly 列完檔案就停，
+      #    根本不做型別檢查 ⇒ 它永遠 rc=0。反控：塞一個 const x: number = "s"
+      #    進來，--listFilesOnly 仍然 rc=0，真檢查才會 rc=2。
+      #    要判斷「會不會紅」一定要跑不帶 --listFilesOnly 的那支。
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
