@@ -55,6 +55,14 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # 2026-09-01 補。在此之前這個 workflow **完全沒有測試步驟** ——
+      # utils/ 下的測試檔存在、在本機也是綠的，但沒有任何自動化流程會叫它們。
+      # 而「測試全綠」與「測試從來沒被執行」在 CI log 上長得一模一樣：都沒有輸出。
+      # 擺在 build 之前是為了快速失敗；npm test 會自己印出它挑了哪一版 node。
+      - name: Run tests
+        working-directory: frontend
+        run: npm test
+
       - name: Build web bundle
         working-directory: frontend
         run: npm run build
