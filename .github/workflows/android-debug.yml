@@ -63,6 +63,18 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      # 🔴 這一步必須留在 Build web bundle 與 Capacitor sync **之前**，不是排版偏好。
+      # tsconfig.json 沒有 include／exclude ⇒ tsc 的預設範圍是整個 frontend/，
+      # 而 allowJs 是開的。dist/ 與 android/.../assets/ 都被 gitignore，
+      # 所以在乾淨的 checkout 上不存在；一旦這步被移到 build 之後，
+      # tsc 就會連剛產出的**壓縮 bundle** 一起吃進去。
+      # （checkJs 沒開 ⇒ 那些 .js 只會被 parse 不會被型別檢查，所以不太會紅，
+      #   但那是「碰巧不會紅」，不是「檢查範圍是對的」。）
+      # 實測：本機含產物是 88 個檔，模擬乾淨 checkout 是 79 個，兩種都 rc=0。
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
       - name: Build web bundle
         working-directory: frontend
         run: npm run build
