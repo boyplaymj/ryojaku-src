@@ -36,7 +36,7 @@ import type { Heard } from './voiceTaiAsr.ts';
  *    「這筆訂正是哪一版引擎判的」—— 一個不變的版本號比沒有更糟，
  *    因為它宣稱了資訊卻沒有承載資訊。
  */
-export const ENGINE_VERSION = 'sync:da1e36775633';
+export const ENGINE_VERSION = 'sync:73fbb2c3a69f';
 
 export interface CorrectionInput {
   /** 語音辨識與判台的結果（系統原判）。 */
