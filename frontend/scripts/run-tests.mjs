@@ -28,7 +28,10 @@ import { homedir } from 'node:os';
 
 /** 下限。與 package.json 的 engines 一致 —— 那裡是宣告，這裡是唯一真的擋得住的地方。 */
 const MIN = [22, 18, 0];
-const DEFAULT_TARGETS = ['utils/*.test.ts'];
+// 🔴 engine 那條只收 engine/ 這一層的 *.test.ts，**不可**寫成會掃到
+//    engine/mahjong-tai/*.js 的樣子：那三支引擎檔是 UMD/CJS，
+//    在 "type":"module" 下會當場 `require is not defined`（DESIGN_APP.md §11.3a）。
+const DEFAULT_TARGETS = ['utils/*.test.ts', 'engine/*.test.ts'];
 
 function parseVersion(text) {
     const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(text).trim());
