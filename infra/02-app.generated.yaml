@@ -60,6 +60,27 @@ Globals:
         # S2補:上傳端點讀這兩個env指向我們的桶(原fallback寫死prod桶mahjongclub-*)
         ASSETS_BUCKET: !Sub 'ryojaku-${Stage}-assets'
         COMMUNITY_BUCKET: !Sub 'ryojaku-${Stage}-community'
+        # 🔴 CDN_DOMAIN 未設時 shared.GetCDNDomain() 會退回 shared/community_utils.go 的
+        #    常數 DefaultCDNDomain —— **那個值是工程師 prod 的 CloudFront**（值本身不抄在
+        #    這裡，理由見下方 ENGINEER_PROD_HOSTS 那道護欄：抄了它自己就會被攔）。
+        #    而 getS3BucketDomain() 在 S2 已改成讀 COMMUNITY_BUCKET（同一個檔、隔壁那支），
+        #    於是 NormalizeMediaURL 的替換變成「把**我們自己**的桶網域換成**對方**的 CDN」。
+        #    2026-09-02 實測（COMMUNITY_BUCKET 有設、CDN_DOMAIN 沒設，即當時線上現況）：
+        #      in  https://ryojaku-stg-community.s3.<region>.amazonaws.com/posts/abc.jpg
+        #      out https://<DefaultCDNDomain>/posts/abc.jpg
+        #    ⇒ 每一張社群貼文圖片都指向對方的 CDN。這半邊沒跟著改，是遷移掉的第二個 env
+        #    （第一個是 WS_API_ENDPOINT，見 fn_block 附近）。
+        #
+        # ⚠️ 這裡填的是**我們的 S3 桶網域，不是 CDN** —— 實查我方 20 個 CloudFront
+        #    distribution，origin 指向 ryojaku-* 桶的有 **0 個**（正控：指向
+        #    boyplaymj-image 的有 5 個，所以尺是會動的）。填 S3 網域讓
+        #    NormalizeMediaURL 的替換變成 identity，網址維持指向我們自己的桶。
+        #    真的架了 CDN 之後，改這一行的值即可，不必動 Go。
+        CDN_DOMAIN: !Sub 'ryojaku-${Stage}-community.s3.${AWS::Region}.amazonaws.com'
+        # ⚠️ CLOUDFRONT_URL **刻意不設**，不是漏掉的。web_get_upload_url 未設時的 fallback
+        #    已經是 `https://<ASSETS_BUCKET>.s3.<region>.amazonaws.com/<key>`＝我們自己的桶，
+        #    本來就正確；而我方沒有 CDN 可指（同上量測）。設成一樣的值只會多出一份會漂的
+        #    第二來源。要補的話請先真的建 distribution。
         ENCRYPTION_KEY: !Ref EncryptionKey
         JWT_SECRET: !Ref JwtSecret
         ADMIN_JWT_SECRET: !Ref AdminJwtSecret
