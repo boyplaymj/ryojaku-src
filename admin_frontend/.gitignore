@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# verify_engine_bundle.mjs 的暫存工作區（正常路徑會自己刪，失敗路徑可能留下）
+.engine-probe/

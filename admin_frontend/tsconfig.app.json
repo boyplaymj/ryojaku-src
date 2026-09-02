@@ -20,6 +20,13 @@
       "node"
     ],
     "skipLibCheck": true,
+    // 🔴 引擎副本（src/engine/mahjong-tai/）是 .js/.mjs＋一份 .json。
+    //    allowJs 讓 .ts 那側 import 得到它們（沒有 .d.ts，也刻意不寫一份 ——
+    //    手寫的型別會與正典的實作各自漂，而漂了不會有東西轉紅）。
+    //    checkJs 刻意**不開**：那會拿 TS 的規則去挑正典的 JS，
+    //    而正典不歸這個專案改。同 repo 的 frontend/tsconfig.json 也是 allowJs 開、checkJs 關。
+    "allowJs": true,
+    "resolveJsonModule": true,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
