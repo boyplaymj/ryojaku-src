@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -108,8 +109,12 @@ func TestHandlerBadTS(t *testing.T) {
 // 同時驗 pk 用的是 authorizer 的 userId、走的是 handler→buildItem→store 真路徑。
 func TestHadDiffFalseStillWrites(t *testing.T) {
 	f := withFakeStore(t)
+	// 🔴 body 刻意夾帶 "userId":"attacker" —— 否則「pk 不取 body」這條斷言是空的：
+	// 沒有衝突值的話，pk 正確與程式其實讀了 body 兩種情形長得一模一樣。
+	// （Codex 交叉查驗 2026-09-02 指出：原版 body 沒有這個欄位，斷言從沒被考驗過。）
 	body := `{"text":"平胡","normalizedText":"平胡","parsed":["pinghu"],"corrected":["pinghu"],` +
-		`"added":[],"removed":[],"hadDiff":false,"rulesetVersion":"tw16-v3","engineVersion":"1.4.0","ts":1756800000}`
+		`"added":[],"removed":[],"hadDiff":false,"rulesetVersion":"tw16-v3","engineVersion":"1.4.0",` +
+		`"ts":1756800000,"userId":"attacker","pk":"USER#attacker"}`
 	resp, err := handler(context.Background(), postRequest("u-nodiff", body))
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -130,7 +135,7 @@ func TestHadDiffFalseStillWrites(t *testing.T) {
 	}
 	pk, ok := item["pk"].(*types.AttributeValueMemberS)
 	if !ok || pk.Value != "USER#u-nodiff" {
-		t.Fatalf("pk must come from authorizer userId, got %#v", item["pk"])
+		t.Fatalf("pk 必須來自 authorizer 而非 body（body 夾帶了 attacker）, got %#v", item["pk"])
 	}
 	sk, ok := item["sk"].(*types.AttributeValueMemberS)
 	if !ok || !strings.HasPrefix(sk.Value, "TS#1756800000#") {
@@ -234,5 +239,62 @@ func TestExpiresAtIgnoresCallerClockSkew(t *testing.T) {
 	tsAttr, ok := item["ts"].(*types.AttributeValueMemberN)
 	if !ok || tsAttr.Value != strconv.FormatInt(msTS, 10) {
 		t.Fatalf("ts 應原樣保留呼叫端的值: %#v", item["ts"])
+	}
+}
+
+// 8. 🔴 handler 層的 TTL 守衛：寫進 DDB 的 expiresAt 必須由**伺服器時刻**算出。
+//
+// 為什麼第 7 條不夠（Grok 交叉查驗 2026-09-02 抓到，我漏了）：
+// 第 7 條釘的是 buildItem 的**第三個參數**，而「handler 到底傳了什麼進去」沒有人看。
+// 實測：把 handler 改成 buildItem(userID, req, req.TS) 並拿掉因此沒用到的
+// "time" import ⇒ **7 條全綠**。也就是說剛修掉的隱私 fail-open
+// 可以原封不動被放回去，而測試一聲都不會叫。
+// （只改呼叫、留著 import 會編譯失敗 —— 但那是 Go 編譯器在擋，不是測試在擋，
+//
+//	不能算數：把 import 一併拿掉就編得過了。）
+//
+// ⇒ 這一條走**完整 handler**，看真正寫進 store 的那個值。
+func TestHandlerExpiresAtComesFromServerClock(t *testing.T) {
+	const msTS int64 = 1756800000000 // 前端誤把毫秒當秒送
+
+	f := withFakeStore(t)
+	before := time.Now().Unix()
+	body := `{"text":"平胡","hadDiff":false,"ts":1756800000000}`
+	resp, err := handler(context.Background(), postRequest("u-ttl", body))
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	after := time.Now().Unix()
+	if resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d (body: %s)", resp.StatusCode, resp.Body)
+	}
+	if len(f.items) != 1 {
+		t.Fatalf("want exactly one write, got %d", len(f.items))
+	}
+
+	exp, ok := f.items[0]["expiresAt"].(*types.AttributeValueMemberN)
+	if !ok {
+		t.Fatalf("expiresAt missing or wrong type: %#v", f.items[0]["expiresAt"])
+	}
+	got, err := strconv.ParseInt(exp.Value, 10, 64)
+	if err != nil {
+		t.Fatalf("expiresAt 不是合法整數: %q", exp.Value)
+	}
+
+	// 必須落在「本次呼叫期間的伺服器時刻 + 365 天」這個區間內。
+	lo, hi := before+expiresAtTTLSeconds, after+expiresAtTTLSeconds
+	if got < lo || got > hi {
+		t.Fatalf("expiresAt 必須由伺服器時刻算出: got %d, 期望落在 [%d, %d]", got, lo, hi)
+	}
+
+	// 並且明確地**不是**呼叫端 ts 算出來的那個值（西元五萬七千年）。
+	if bad := msTS + expiresAtTTLSeconds; got == bad {
+		t.Fatalf("expiresAt 由呼叫端 ts 算出 (%d) —— TTL 等於失效、資料永久保留", bad)
+	}
+
+	// ts 欄仍原樣保留呼叫端的宣稱。
+	tsAttr, ok := f.items[0]["ts"].(*types.AttributeValueMemberN)
+	if !ok || tsAttr.Value != strconv.FormatInt(msTS, 10) {
+		t.Fatalf("ts 應原樣保留呼叫端的值: %#v", f.items[0]["ts"])
 	}
 }
