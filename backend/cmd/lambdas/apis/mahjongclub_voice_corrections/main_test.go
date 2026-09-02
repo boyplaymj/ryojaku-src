@@ -298,3 +298,132 @@ func TestHandlerExpiresAtComesFromServerClock(t *testing.T) {
 		t.Fatalf("ts 應原樣保留呼叫端的值: %#v", f.items[0]["ts"])
 	}
 }
+
+// ── D4-g 漏斗埋點：kind 欄位 ────────────────────────────────────────────────
+
+// 9. 既有資料沒有 kind ⇒ 一律當成 correction。
+//
+// 🔴 這條守的是**向後相容的方向**。反過來預設（空 ⇒ 事件）不會有任何錯誤訊號，
+// 只會讓 D4-c 上線到現在寫下的每一筆真實訂正靜靜地從飛輪裡消失。
+func TestKindDefaultsToCorrection(t *testing.T) {
+	item, err := buildItem("u1", CorrectionRequest{TS: 1756800000}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	k, ok := item["kind"].(*types.AttributeValueMemberS)
+	if !ok || k.Value != "correction" {
+		t.Fatalf("缺 kind 必須補成 correction, got %#v", item["kind"])
+	}
+}
+
+// 10. 認不得的 kind 一律 400，不可以吞成 correction。
+//
+// 🔴 吞掉的方向剛好對我們有利（事件列混進準確率的分母 ⇒ 看起來判得更準），
+// 這種「錯了會讓數字變好看」的預設一定要 fail-closed。
+func TestUnknownKindRejected(t *testing.T) {
+	f := withFakeStore(t)
+	resp, err := handler(context.Background(), postRequest("u1", `{"ts":1756800000,"kind":"correctoin"}`))
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400 for unknown kind, got %d (body: %s)", resp.StatusCode, resp.Body)
+	}
+	if len(f.items) != 0 {
+		t.Fatalf("expected zero DDB writes on unknown kind, got %d", len(f.items))
+	}
+	// 正控：同一條路徑,把 kind 改成合法值就要 200 —— 否則上面那個 400
+	// 可能是別的原因造成的（例如 ts 沒帶），而兩者在狀態碼上逐字相同。
+	resp2, err := handler(context.Background(), postRequest("u1", `{"ts":1756800000,"kind":"open"}`))
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if resp2.StatusCode != 200 {
+		t.Fatalf("正控失敗：合法 kind 應該 200, got %d (body: %s)", resp2.StatusCode, resp2.Body)
+	}
+	if len(f.items) != 1 {
+		t.Fatalf("合法 kind 應該寫入一筆, got %d", len(f.items))
+	}
+}
+
+// 11. 🔴 事件列絕不寫入 added／removed／parsed／corrected，即使 body 送了。
+//
+// 這是第二道防線（第一道是後台的 kind 過濾）。它擋的不是「數字不好看」，
+// 是**假的訂正建議被回灌進家規台數表** —— feedback.js 的 extractSuggestions
+// 吃的就是 added／removed。
+func TestEventRowsNeverCarryDiffFields(t *testing.T) {
+	for _, kind := range []string{"open", "asr"} {
+		item, err := buildItem("u1", CorrectionRequest{
+			TS: 1756800000, Kind: kind,
+			Parsed: []string{"pinghu"}, Corrected: []string{"pinghu"},
+			Added: []string{"dasanyuan"}, Removed: []string{"pinghu"},
+			Text: "大三元",
+		}, 1756800000)
+		if err != nil {
+			t.Fatalf("buildItem(%s) failed: %v", kind, err)
+		}
+		for _, name := range []string{"parsed", "corrected", "added", "removed"} {
+			if _, present := item[name]; present {
+				t.Fatalf("kind=%s 的列不可以帶 %q, got %#v", kind, name, item[name])
+			}
+		}
+	}
+	// 反控：同一份 body 走 correction 時那四欄**必須**在 —— 否則上面那條
+	// 可能只是 setStringSet 整個壞掉了，而「刻意不寫」與「根本不會寫」同形。
+	item, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "correction",
+		Parsed: []string{"pinghu"}, Corrected: []string{"pinghu"},
+		Added: []string{"dasanyuan"}, Removed: []string{"pinghu"},
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem(correction) failed: %v", err)
+	}
+	for _, name := range []string{"parsed", "corrected", "added", "removed"} {
+		if _, present := item[name]; !present {
+			t.Fatalf("反控失敗：correction 列應該要有 %q", name)
+		}
+	}
+}
+
+// 12. asr 事件把成敗與原因存下來；成功時不留 asrError。
+func TestAsrEventFields(t *testing.T) {
+	fail, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", AsrOk: false, AsrTrack: "native", AsrError: "not-allowed",
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	ok, isBool := fail["asrOk"].(*types.AttributeValueMemberBOOL)
+	if !isBool || ok.Value != false {
+		t.Fatalf("asrOk 應該存成 false, got %#v", fail["asrOk"])
+	}
+	if e, isStr := fail["asrError"].(*types.AttributeValueMemberS); !isStr || e.Value != "not-allowed" {
+		t.Fatalf("asrError 應該是 not-allowed, got %#v", fail["asrError"])
+	}
+	if tr, isStr := fail["asrTrack"].(*types.AttributeValueMemberS); !isStr || tr.Value != "native" {
+		t.Fatalf("asrTrack 應該是 native, got %#v", fail["asrTrack"])
+	}
+
+	good, err := buildItem("u1", CorrectionRequest{TS: 1756800000, Kind: "asr", AsrOk: true, AsrTrack: "web"}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	if okv, isBool := good["asrOk"].(*types.AttributeValueMemberBOOL); !isBool || okv.Value != true {
+		t.Fatalf("asrOk 應該存成 true, got %#v", good["asrOk"])
+	}
+	if _, present := good["asrError"]; present {
+		t.Fatalf("成功的 asr 不該有 asrError, got %#v", good["asrError"])
+	}
+
+	// 🔴 asr 專屬欄位不可以外洩到別的 kind —— 否則後台以 asrOk 是否存在
+	// 判斷「這是不是一筆辨識事件」時會誤判。
+	opened, err := buildItem("u1", CorrectionRequest{TS: 1756800000, Kind: "open", AsrOk: true, AsrTrack: "web"}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	for _, name := range []string{"asrOk", "asrTrack", "asrError"} {
+		if _, present := opened[name]; present {
+			t.Fatalf("kind=open 不該有 %q, got %#v", name, opened[name])
+		}
+	}
+}

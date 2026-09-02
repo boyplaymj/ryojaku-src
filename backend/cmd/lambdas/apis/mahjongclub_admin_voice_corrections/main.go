@@ -155,6 +155,34 @@ func toRecord(item map[string]types.AttributeValue) (Record, bool) {
 	}, true
 }
 
+// kindOf 回這一列是什麼（D4-g）。
+//
+// 🔴 **缺欄一律是 correction。** D4-c 上線到 D4-g 之間寫下的每一筆真實訂正
+// 都沒有這個欄位；反過來預設會把它們整批從飛輪裡丟掉，而且沒有任何錯誤訊號。
+func kindOf(item map[string]types.AttributeValue) string {
+	if k := strAttr(item, "kind"); k != "" {
+		return k
+	}
+	return "correction"
+}
+
+// PageEvents 是**這一頁**掃到的漏斗事件計數（D4-g）。
+//
+// 🔴 名字裡的 Page 不是修飾語，是判準：Scan 一次只看 scanPageLimit 筆，
+// 這些數字**不是全表總數**。當成總數讀的話，漏斗的每一格都會被低估，
+// 而低估的方向是「看起來沒人用」—— 正好是本功能要消滅的那個誤讀。
+// 要總數就得把每一頁的數字自己加起來（後台頁的事，D6）。
+type PageEvents struct {
+	Open      int            `json:"open"`
+	AsrOk     int            `json:"asrOk"`
+	AsrFailed int            `json:"asrFailed"`
+	AsrErrors map[string]int `json:"asrErrors"`
+	// Other 是認得出是事件、但 kind 不在我們知道的清單裡的列。
+	// 🔴 不可以併進上面任何一格：寫入端加了新 kind 而這裡忘了跟上時，
+	// 「有一種新東西在寫入」與「沒有那種東西」必須分得出來。
+	Other int `json:"other"`
+}
+
 func strAttr(item map[string]types.AttributeValue, name string) string {
 	if v, ok := item[name].(*types.AttributeValueMemberS); ok {
 		return v.Value
@@ -294,11 +322,24 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	records := make([]Record, 0, len(items))
+	events := PageEvents{AsrErrors: map[string]int{}}
 	skipped := 0
 	for _, it := range items {
 		r, ok := toRecord(it)
 		if !ok {
 			skipped++
+			continue
+		}
+		// 🔴 漏斗事件不可以進 data —— 它們的 text 是空字串、hadDiff 是 false，
+		// 與「判對了的訂正」在既有欄位上**逐欄相同**。混進去的話
+		// 「未訂正率 = hadDiff=false ÷ 總筆數」會往「判得很準」的方向灌水，
+		// 而且 extractSuggestions 也會多吃一批空紀錄。
+		//
+		// ⚠️ 但也不可以併進 skipped：那一格的意思是「形狀壞掉」，
+		// 事件列沒有壞，它們正是本功能刻意要寫的東西。兩者混在一起的話，
+		// 「寫入端出事了」與「有人在用」會變成同一個數字。
+		if k := kindOf(it); k != "correction" {
+			countEvent(&events, k, it)
 			continue
 		}
 		records = append(records, r)
@@ -312,7 +353,31 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		"data":       records,
 		"nextCursor": next,
 		"skipped":    skipped,
+		"pageEvents": events,
 	}, headers)
+}
+
+// countEvent 把一列事件計進本頁的漏斗計數。
+func countEvent(acc *PageEvents, kind string, item map[string]types.AttributeValue) {
+	switch kind {
+	case "open":
+		acc.Open++
+	case "asr":
+		if boolAttr(item, "asrOk") {
+			acc.AsrOk++
+			return
+		}
+		acc.AsrFailed++
+		code := strAttr(item, "asrError")
+		if code == "" {
+			// 🔴 不可以直接不計：「失敗但沒寫原因」是一個真實而且值得看見的狀態
+			// （寫入端漏填、或舊版前端）。不記的話它會偽裝成「從來沒有失敗過」。
+			code = "unknown"
+		}
+		acc.AsrErrors[code]++
+	default:
+		acc.Other++
+	}
 }
 
 func respond(status int, body map[string]interface{}, headers map[string]string) (events.APIGatewayProxyResponse, error) {

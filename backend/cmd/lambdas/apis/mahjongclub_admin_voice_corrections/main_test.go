@@ -312,3 +312,115 @@ func TestRejectsNoneAlg(t *testing.T) {
 		t.Fatalf("alg:none 卻查了 DDB %d 次", f.calls)
 	}
 }
+
+// ── D4-g 漏斗埋點：事件列不可以混進訂正資料 ──────────────────────────────
+
+func eventItem(kind string, over map[string]types.AttributeValue) map[string]types.AttributeValue {
+	it := map[string]types.AttributeValue{
+		"pk":   &types.AttributeValueMemberS{Value: "USER#u-99"},
+		"sk":   &types.AttributeValueMemberS{Value: "TS#1756800001#evt"},
+		"kind": &types.AttributeValueMemberS{Value: kind},
+		"ts":   &types.AttributeValueMemberN{Value: "1756800001"},
+		// 🔴 text 缺席、hadDiff 缺席 —— 這正是重點：事件列與「判對了的訂正」
+		// 在既有欄位上逐欄相同，唯一分得出來的是 kind。
+	}
+	for k, v := range over {
+		it[k] = v
+	}
+	return it
+}
+
+// 9. 🔴 事件列不進 data，也不算 skipped。
+//
+// 兩個方向都要驗：
+//
+//	· 進了 data ⇒ 「未訂正率」被灌水，方向是「判得很準」
+//	· 算成 skipped ⇒ 「寫入端出事了」與「有人在用」變成同一個數字
+func TestEventRowsExcludedFromCorrections(t *testing.T) {
+	t.Setenv("ADMIN_JWT_SECRET", testSecret)
+	withFakeScanner(t, []map[string]types.AttributeValue{
+		sampleItem(),
+		eventItem("open", nil),
+		eventItem("open", nil),
+		eventItem("asr", map[string]types.AttributeValue{"asrOk": &types.AttributeValueMemberBOOL{Value: true}}),
+		eventItem("asr", map[string]types.AttributeValue{
+			"asrOk":    &types.AttributeValueMemberBOOL{Value: false},
+			"asrError": &types.AttributeValueMemberS{Value: "not-allowed"},
+		}),
+		eventItem("asr", map[string]types.AttributeValue{"asrOk": &types.AttributeValueMemberBOOL{Value: false}}),
+		eventItem("something-new", nil),
+	})
+
+	resp, err := handler(context.Background(), getRequest("Bearer "+tokenFor(t, adminrole.SuperAdmin)))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	var body struct {
+		Data       []Record   `json:"data"`
+		Skipped    int        `json:"skipped"`
+		PageEvents PageEvents `json:"pageEvents"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatalf("回應不是合法 JSON: %v", err)
+	}
+	if len(body.Data) != 1 {
+		t.Fatalf("data 只該有那 1 筆訂正，got %d 筆: %#v", len(body.Data), body.Data)
+	}
+	if body.Data[0].UserID != "u-42" {
+		t.Fatalf("留下來的應該是訂正那筆, got %#v", body.Data[0])
+	}
+	if body.Skipped != 0 {
+		t.Fatalf("事件列不是壞掉的列，不可以算進 skipped, got %d", body.Skipped)
+	}
+	if body.PageEvents.Open != 2 {
+		t.Fatalf("open 應該是 2, got %d", body.PageEvents.Open)
+	}
+	if body.PageEvents.AsrOk != 1 || body.PageEvents.AsrFailed != 2 {
+		t.Fatalf("asr 成敗算錯: ok=%d failed=%d", body.PageEvents.AsrOk, body.PageEvents.AsrFailed)
+	}
+	if body.PageEvents.AsrErrors["not-allowed"] != 1 {
+		t.Fatalf("失敗原因沒有分類: %#v", body.PageEvents.AsrErrors)
+	}
+	// 🔴 沒寫原因的失敗要落在 unknown，不可以憑空消失 ——
+	// 不記的話它會偽裝成「從來沒有失敗過」。
+	if body.PageEvents.AsrErrors["unknown"] != 1 {
+		t.Fatalf("沒寫原因的失敗要記成 unknown: %#v", body.PageEvents.AsrErrors)
+	}
+	// 🔴 認不得的 kind 要單獨一格：寫入端加了新種類而這裡忘了跟上時，
+	// 「有一種新東西在寫入」與「沒有那種東西」必須分得出來。
+	if body.PageEvents.Other != 1 {
+		t.Fatalf("認不得的 kind 應該落在 other, got %d", body.PageEvents.Other)
+	}
+}
+
+// 10. 🔴 既有列沒有 kind ⇒ 必須當成訂正留下來。
+//
+// 這條守的是方向。反過來預設不會有任何錯誤訊號，只會讓 D4-c 上線到 D4-g 之間
+// 寫下的每一筆真實訂正靜靜地從飛輪裡消失 —— 而後台看到的是「訂正變少了」，
+// 最像的解讀是「判得更準了」。
+func TestLegacyRowsWithoutKindCountAsCorrections(t *testing.T) {
+	t.Setenv("ADMIN_JWT_SECRET", testSecret)
+	legacy := sampleItem() // 刻意不加 kind，模擬 D4-g 之前寫下的列
+	if _, present := legacy["kind"]; present {
+		t.Fatal("這條測試的前提是 sampleItem 沒有 kind —— 前提變了就不是在驗同一件事")
+	}
+	withFakeScanner(t, []map[string]types.AttributeValue{legacy})
+
+	resp, err := handler(context.Background(), getRequest("Bearer "+tokenFor(t, adminrole.SuperAdmin)))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	var body struct {
+		Data       []Record   `json:"data"`
+		PageEvents PageEvents `json:"pageEvents"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatalf("回應不是合法 JSON: %v", err)
+	}
+	if len(body.Data) != 1 {
+		t.Fatalf("沒有 kind 的舊列必須留在 data 裡, got %d 筆", len(body.Data))
+	}
+	if body.PageEvents.Open+body.PageEvents.AsrOk+body.PageEvents.AsrFailed+body.PageEvents.Other != 0 {
+		t.Fatalf("舊列不該被算成任何事件: %#v", body.PageEvents)
+	}
+}

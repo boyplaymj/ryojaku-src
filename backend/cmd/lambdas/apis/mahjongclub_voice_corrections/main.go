@@ -56,6 +56,40 @@ type CorrectionRequest struct {
 	EngineVersion  string   `json:"engineVersion"`
 	// TS 由呼叫端提供（前端引擎刻意不取系統時間）。缺少或 <=0 一律 400。
 	TS int64 `json:"ts"`
+
+	// Kind 是這一列的種類（D4-g 漏斗埋點）。`correction`／`open`／`asr`。
+	//
+	// 🔴 **空字串一律當成 `correction`。** 這個預設是為了**既有資料**：
+	// D4-c 上線到 D4-g 之間寫下的每一筆真實訂正都沒有這個欄位，
+	// 反過來預設（空 ⇒ 事件）會把它們整批從飛輪裡丟掉。
+	//
+	// 🔴 認不得的值一律 **400**，不是「當成 correction」——
+	// 打錯字的 kind 若被吞成訂正，事件列會混進準確率的分母，
+	// 而那個方向剛好是「看起來判得更準」。
+	Kind string `json:"kind"`
+
+	// 以下只有 Kind=="asr" 用得到。ASR 成功時 AsrError 為空。
+	AsrOk    bool   `json:"asrOk"`
+	AsrTrack string `json:"asrTrack"`
+	AsrError string `json:"asrError"`
+}
+
+// 允許的 kind。🔴 這份名單與前端 utils/voiceTaiMetrics.ts 的 EVENT_KINDS 是**同一份契約**，
+// 兩邊各改一半的話：新 kind 前端送得出去、後端 400，而前端是 fail-open ⇒ 使用者無感、
+// 資料靜靜地少一整類。前端那側有一條測試把名單釘死（D4g-7）。
+var allowedKinds = map[string]bool{"correction": true, "open": true, "asr": true}
+
+const kindCorrection = "correction"
+
+// normalizeKind 把空字串補成 correction，並擋掉不認得的值。
+func normalizeKind(raw string) (string, error) {
+	if raw == "" {
+		return kindCorrection, nil
+	}
+	if !allowedKinds[raw] {
+		return "", fmt.Errorf("unknown kind %q", raw)
+	}
+	return raw, nil
 }
 
 type Response struct {
@@ -125,8 +159,13 @@ func buildItem(userID string, req CorrectionRequest, nowUnix int64) (map[string]
 	if req.TS <= 0 {
 		return nil, errors.New("ts must be a positive unix timestamp provided by the caller")
 	}
+	kind, err := normalizeKind(req.Kind)
+	if err != nil {
+		return nil, err
+	}
 
 	item := map[string]types.AttributeValue{
+		"kind":           &types.AttributeValueMemberS{Value: kind},
 		"pk":             &types.AttributeValueMemberS{Value: "USER#" + userID},
 		"sk":             &types.AttributeValueMemberS{Value: fmt.Sprintf("TS#%d#%s", req.TS, uuid.New().String())},
 		"text":           &types.AttributeValueMemberS{Value: req.Text},
@@ -139,12 +178,31 @@ func buildItem(userID string, req CorrectionRequest, nowUnix int64) (map[string]
 		"expiresAt":      &types.AttributeValueMemberN{Value: strconv.FormatInt(nowUnix+expiresAtTTLSeconds, 10)},
 	}
 
-	// DDB 的 String Set 不接受空集合：空陣列時省略該欄（缺欄＝空集合，讀取端好判斷，
-	// 也避免同一欄位在不同筆之間 SS/L 型別混雜）。
-	setStringSet(item, "parsed", req.Parsed)
-	setStringSet(item, "corrected", req.Corrected)
-	setStringSet(item, "added", req.Added)
-	setStringSet(item, "removed", req.Removed)
+	// 🔴 事件列**絕不寫入 added／removed／parsed／corrected**，即使 body 送了。
+	//
+	// 後台那道 kind 過濾是第一道防線，這裡是第二道。理由是代價不對稱：
+	// 回灌飛輪（feedback.js extractSuggestions）吃的就是 added／removed，
+	// 一旦事件列帶著它們進了表，「後台忘了過濾」的後果不是少一個數字，
+	// 是**假的訂正建議**被回灌進家規台數表 —— 而那一步是人工審核的上游。
+	// ⇒ 讓那些欄位在事件列上**根本不存在**，比依賴每一個讀取端都記得過濾安全。
+	if kind == kindCorrection {
+		// DDB 的 String Set 不接受空集合：空陣列時省略該欄（缺欄＝空集合，讀取端好判斷，
+		// 也避免同一欄位在不同筆之間 SS/L 型別混雜）。
+		setStringSet(item, "parsed", req.Parsed)
+		setStringSet(item, "corrected", req.Corrected)
+		setStringSet(item, "added", req.Added)
+		setStringSet(item, "removed", req.Removed)
+	}
+
+	if kind == "asr" {
+		item["asrOk"] = &types.AttributeValueMemberBOOL{Value: req.AsrOk}
+		if req.AsrTrack != "" {
+			item["asrTrack"] = &types.AttributeValueMemberS{Value: req.AsrTrack}
+		}
+		if req.AsrError != "" {
+			item["asrError"] = &types.AttributeValueMemberS{Value: req.AsrError}
+		}
+	}
 
 	return item, nil
 }
