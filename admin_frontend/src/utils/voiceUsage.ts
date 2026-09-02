@@ -267,3 +267,46 @@ export function countLabel(n: number, complete: boolean): string {
 export function pctLabel(rate: number | null, digits = 1): string {
   return rate === null ? '—' : `${(rate * 100).toFixed(digits)}%`;
 }
+
+// ── 翻頁 ─────────────────────────────────────────────────────────────
+
+/**
+ * 最多翻幾頁。25 × 200 = 5,000 列。
+ *
+ * 🔴 上限存在的理由不是效能，是**它一定要被說出來**：撞到上限時後面的資料沒有被看到，
+ *    而「沒看到」與「沒有」在每一格數字上長得一模一樣。撞上限時最後一頁仍帶著
+ *    `nextCursor` ⇒ `aggregate` 的 `complete` 自然是 `false` ⇒ 每個計數都會標「至少」。
+ */
+export const MAX_PAGES = 25;
+
+export interface CollectResult {
+  pages: VoicePage[];
+  /** 是不是因為撞上限才停的（而不是因為翻完了）。給卡片講得更精確用。 */
+  hitCap: boolean;
+}
+
+/**
+ * 從第一頁一路翻到底（或到上限）。
+ *
+ * `fetchPage` 由呼叫端注入 —— 這支不碰 `fetch`，因為「翻頁會不會停下來」
+ * 是這裡唯一值得測的東西，而它要可測就不能自己開連線。
+ */
+export async function collectPages(
+  fetchPage: (cursor: string) => Promise<VoicePage>,
+  maxPages: number = MAX_PAGES
+): Promise<CollectResult> {
+  const pages: VoicePage[] = [];
+  let cursor = '';
+  while (pages.length < maxPages) {
+    const page = await fetchPage(cursor);
+    pages.push(page);
+    const next = page.nextCursor ?? '';
+    if (!next) break;
+    // 🔴 cursor 沒有前進就停。後端若因為某種原因一直回同一個 cursor，
+    //    這裡會是一個**打真實 API 的無窮迴圈** —— 那不是慢，是打爆自己的後端。
+    if (next === cursor) break;
+    cursor = next;
+  }
+  const last = pages[pages.length - 1];
+  return { pages, hitCap: pages.length >= maxPages && !!last?.nextCursor };
+}

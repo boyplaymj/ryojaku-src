@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   aggregate,
   classifyTs,
+  collectPages,
   countLabel,
   pctLabel,
   SAMPLE_GATE,
@@ -275,4 +276,45 @@ test('T19 缺 data／缺 pageEvents 的頁不拋，也不亂加', () => {
   assert.equal(s.open, 0);
   assert.equal(s.skipped, 0);
   assert.equal(s.complete, true);
+});
+
+// ── 翻頁 ─────────────────────────────────────────────────────────────
+
+test('T20 collectPages 翻到 nextCursor 為空就停', async () => {
+  const pages: VoicePage[] = [
+    { data: [], nextCursor: 'c1' },
+    { data: [], nextCursor: 'c2' },
+    { data: [], nextCursor: '' },
+  ];
+  const seen: string[] = [];
+  const r = await collectPages(async (cursor) => {
+    seen.push(cursor);
+    return pages[seen.length - 1];
+  });
+  assert.deepEqual(seen, ['', 'c1', 'c2']);
+  assert.equal(r.pages.length, 3);
+  assert.equal(r.hitCap, false);
+  assert.equal(aggregate(r.pages, { nowMs: NOW_MS }).complete, true);
+});
+
+test('T21 撞上限時 hitCap=true，而且 aggregate 必須是 complete=false', async () => {
+  // 🔴 每頁要給**不同**的 cursor：全部回同一個的話會先撞上 T22 那道「沒有前進就停」，
+  //    量到的就變成另一件事（第一版就是這樣寫的，2 頁不是 3 頁）。
+  let n = 0;
+  const r = await collectPages(async () => ({ data: [], nextCursor: `c${n++}` }), 3);
+  assert.equal(r.pages.length, 3);
+  assert.equal(r.hitCap, true);
+  // 🔴 這一條才是重點：撞上限之後每一個計數都只是下限。
+  assert.equal(aggregate(r.pages, { nowMs: NOW_MS }).complete, false);
+});
+
+test('T22 cursor 沒有前進就停 —— 否則是打真實 API 的無窮迴圈', async () => {
+  let calls = 0;
+  const r = await collectPages(async () => {
+    calls++;
+    return { data: [], nextCursor: 'stuck' };
+  });
+  // 第 1 次拿到 'stuck'（cursor 從 '' 前進到 'stuck'），第 2 次又是 'stuck' ⇒ 停。
+  assert.equal(calls, 2);
+  assert.equal(r.pages.length, 2);
 });

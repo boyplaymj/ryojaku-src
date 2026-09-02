@@ -100,6 +100,14 @@ MUTANTS = [
      "return rate === null ? '—' : `${(rate * 100).toFixed(digits)}%`;",
      "return rate === null ? '0.0%' : `${(rate * 100).toFixed(digits)}%`;",
      "T6"),
+    ("M15", "翻頁時 cursor 沒有前進也照翻（打真實 API 的無窮迴圈）",
+     "if (next === cursor) break;",
+     "if (false) break;",
+     "T22"),
+    ("M16", "撞上限時不承認撞了上限",
+     "return { pages, hitCap: pages.length >= maxPages && !!last?.nextCursor };",
+     "return { pages, hitCap: false };",
+     "T21"),
 ]
 
 

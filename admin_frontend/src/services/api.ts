@@ -298,6 +298,26 @@ export const api = {
             return res.data;
         }
     },
+    voiceTai: {
+        /**
+         * 語音判台的訂正／漏斗資料（D6）。
+         *
+         * 🔴 **回整包，不要只回 `res.data`。** 其他端點的慣例是 `{success, data}`
+         *    ⇒ 呼叫端習慣性地取 `.data`；而這支回的是
+         *    `{data, nextCursor, skipped, pageEvents}` —— 只取 `data` 的話，
+         *    翻頁（nextCursor）、形狀壞掉的列（skipped）、整個漏斗（pageEvents）
+         *    會一起消失，而畫面上只會少幾個數字，不會有任何錯誤。
+         *
+         * ⚠️ `pageEvents` 是**這一頁**（Scan 200 筆）的計數，不是全表總數。
+         *    加總是 `utils/voiceUsage.ts` 的 `collectPages` + `aggregate` 的事。
+         */
+        getCorrectionsPage: async (cursor?: string) => {
+            const url = cursor
+                ? `/admin/voice-corrections?cursor=${encodeURIComponent(cursor)}`
+                : '/admin/voice-corrections';
+            return request(url);
+        }
+    },
     activities: {
         list: async () => {
             const res = await request('/admin/activities');

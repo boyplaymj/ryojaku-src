@@ -45,7 +45,7 @@ const MIN = [22, 18, 0];
 // ⚠️ minTests 訂在目前的實際條數：這批測試由 tools/mahjong-tai 這條線維護，
 //    條數我說了算（與 frontend 的 `utils` 那組刻意放寬的理由相反 —— 那組別條 session 會動）。
 const DEFAULT_TARGETS = [
-    { glob: 'src/utils/*.test.ts', min: 1, minTests: 20 },
+    { glob: 'src/utils/*.test.ts', min: 1, minTests: 23 },
 ];
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

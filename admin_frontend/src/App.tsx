@@ -19,6 +19,7 @@ import TokenAnalysis from './pages/TokenAnalysis';
 import AnalysisLedger from './pages/AnalysisLedger';
 import ActivitySettings from './pages/ActivitySettings';
 import AnalysisInvite from './pages/AnalysisInvite';
+import VoiceTaiUsage from './pages/VoiceTaiUsage';
 
 import { Navigate } from 'react-router-dom';
 
@@ -47,6 +48,7 @@ const App: React.FC = () => {
           <Route path="analysis/token" element={<TokenAnalysis />} />
           <Route path="analysis/ledger" element={<AnalysisLedger />} />
           <Route path="analysis/invite" element={<AnalysisInvite />} />
+          <Route path="analysis/voice-tai" element={<VoiceTaiUsage />} />
 
           {/* Protected Routes for Super Admin only */}
           <Route path="users" element={<ProtectedRoute requireSuper><Users /></ProtectedRoute>} />
