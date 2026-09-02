@@ -31,7 +31,45 @@ const MIN = [22, 18, 0];
 // 🔴 engine 那條只收 engine/ 這一層的 *.test.ts，**不可**寫成會掃到
 //    engine/mahjong-tai/*.js 的樣子：那三支引擎檔是 UMD/CJS，
 //    在 "type":"module" 下會當場 `require is not defined`（DESIGN_APP.md §11.3a）。
-const DEFAULT_TARGETS = ['utils/*.test.ts', 'engine/*.test.ts'];
+//
+// 🔴 `min` 是 fail-closed 下限，不是裝飾：glob 沒命中時 `node --test` 是
+//    **`tests 0 / pass 0 / rc=0`**（實測 `run-tests.mjs 'engine/nonexistent-*.test.ts'`）——
+//    「沒跑」與「全過」逐字相同，正是 §11.3a 的第一個失敗模式。
+//    而真實情形更沒有徵兆：engine 測試檔被刪掉 ⇒ `36 pass / rc=0`，
+//    那**正是加 engine 這條之前的輸出** ⇒ 靜靜退回原狀，沒有任何一行會變。
+//    ⇒ 加測試檔時要把 min 跟著抬高，否則「有人刪掉一個檔」不會被叫出來
+//      （與 tools/mahjong-tai/verify_sync.sh 的清單下限同一個道理）。
+const DEFAULT_TARGETS = [
+    { glob: 'utils/*.test.ts', min: 3 },
+    { glob: 'engine/*.test.ts', min: 1 },
+];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 展開一條 target。回傳命中的檔案清單；**認不得的形狀回 null**（不敢猜就不敢跑）。
+ * 只支援「固定目錄 + 檔名含 *」這一種形狀 —— 我們用到的就這一種，
+ * 支援得越寬，「下限驗的是不是同一批檔」就越說不準。
+ */
+function expandTarget(pattern) {
+    if (!pattern.includes('*')) return existsSync(pattern) ? [pattern] : [];
+    if (pattern.includes('**')) return null;
+    const cut = pattern.lastIndexOf('/');
+    const dir = cut === -1 ? '.' : pattern.slice(0, cut);
+    const base = cut === -1 ? pattern : pattern.slice(cut + 1);
+    if (dir.includes('*')) return null;
+    const re = new RegExp(`^${base.split('*').map(escapeRe).join('[^/]*')}$`);
+    let entries;
+    try {
+        entries = readdirSync(dir);
+    } catch {
+        return [];
+    }
+    return entries
+        .filter((n) => re.test(n))
+        .map((n) => (dir === '.' ? n : `${dir}/${n}`))
+        .sort();
+}
 
 function parseVersion(text) {
     const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(text).trim());
@@ -93,8 +131,36 @@ function findRunner() {
     return null;
 }
 
-const targets = process.argv.slice(2);
-const useTargets = targets.length > 0 ? targets : DEFAULT_TARGETS;
+const explicit = process.argv.slice(2);
+// 手動指定時下限一律 1：指定了卻一個檔都沒命中，那也該大聲，不該安靜跑 0 條。
+const useTargets = explicit.length > 0 ? explicit.map((glob) => ({ glob, min: 1 })) : DEFAULT_TARGETS;
+
+// 🔴 先驗下限，再決定要不要跑。rc=2 是「設備問題」不是「測試失敗」——
+//    量不到不等於量到全過（同 verify_sync.sh 的 rc 約定）。
+const matched = [];
+let shortfall = false;
+for (const t of useTargets) {
+    const files = expandTarget(t.glob);
+    if (files === null) {
+        console.error(`❌ [設備] 認不得的 target 形狀：${t.glob} —— 驗不了下限，不敢往下跑`);
+        shortfall = true;
+        continue;
+    }
+    console.log(`[run-tests] ${t.glob} → ${files.length} 檔（下限 ${t.min}）${files.length ? '：' + files.join(' ') : ''}`);
+    if (files.length < t.min) {
+        console.error(`❌ [設備] ${t.glob} 只命中 ${files.length} 個檔，下限是 ${t.min}。`);
+        shortfall = true;
+    }
+    matched.push(...files);
+}
+if (shortfall) {
+    console.error(
+        `\n   測試檔被刪掉／搬走／glob 漂掉時，node --test 會回 tests 0 / rc=0 ——\n` +
+        `   「沒跑」與「全過」在輸出上逐字相同，所以這裡擋在跑之前。\n` +
+        `   若這是刻意的（例如真的移除了一組測試），請同時調低 DEFAULT_TARGETS 的 min。`
+    );
+    process.exit(2);
+}
 
 const runner = findRunner();
 if (!runner) {
@@ -115,9 +181,11 @@ if (!runner) {
 
 // 永遠印出「用了哪一個 node」。少了這一行，re-exec 就變成隱形的：
 // 測試在哪個 runtime 上綠的變成不可知，而那正是這支腳本存在的理由。
-console.log(`[run-tests] node v${fmt(runner.version)}（${runner.why}）→ ${useTargets.join(' ')}`);
+// 🔴 交給 node 的是**上面驗過下限的那份展開結果**，不是原始 glob ——
+//    否則「我數的那批」與「node 跑的那批」會是兩個來源，可以各自漂而下限失去意義。
+console.log(`[run-tests] node v${fmt(runner.version)}（${runner.why}）→ ${matched.length} 檔：${matched.join(' ')}`);
 
-const result = spawnSync(runner.exe, ['--test', ...useTargets], { stdio: 'inherit' });
+const result = spawnSync(runner.exe, ['--test', ...matched], { stdio: 'inherit' });
 
 if (result.error) {
     console.error(`❌ 無法執行 ${runner.exe}：${result.error.message}`);
