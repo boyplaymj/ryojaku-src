@@ -1,6 +1,9 @@
 # deps / build
 node_modules/
 vendor/
+# ↑ 的例外:判台引擎的 pinyin-pro 是「鎖定版 vendor」,刻意不走 npm
+#   (換版會靜靜改變拼音輸出,mahjong-tai D2-1)⇒ 必須進版控
+!frontend/engine/mahjong-tai/vendor/
 dist/
 .vite/
 *.tsbuildinfo

@@ -1,0 +1,385 @@
+{
+  "meta": {
+    "title": "台灣十六張麻將 台數對照表",
+    "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
+    "version": "0.1.0",
+    "ruleset": "台灣16張(常見家規預設)",
+    "usage": {
+      "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
+      "asr_correction": "辨識後先用 aliases/asr_confusions 做關鍵字比對與糾錯,再對應到 id。",
+      "scoring": "累加各命中台種的 tai;注意 excludes(互斥)與 requires_self_draw(需自摸)。"
+    },
+    "notes": [
+      "底(base)與台(tai)分開計:底是每局固定、台是牌型加成,結算另乘。",
+      "門清自摸的算法家規分歧最大:有算門清1+自摸1=2、也有再加不求人=3。此表拆成獨立台種,由設定決定是否疊加。",
+      "字一色 / 四暗刻 / 天地人胡 等大牌台數各地差異大,以下為常見值,請以你們賽制明文為準。"
+    ]
+  },
+
+  "config": {
+    "base_di": 1,
+    "allow_stack_menqing_zimo": true,
+    "comment": "base_di=每局底;allow_stack_menqing_zimo=門清與自摸是否可同時計台。"
+  },
+
+  "combos": [
+    { "surfaces": ["連一拉一", "莊連一拉一", "連一", "拉一", "一連莊", "連莊一次", "連莊一"], "expand": [{ "id": "lianzhuang", "count": 1 }] },
+    { "surfaces": ["連二拉二", "莊連二拉二", "連二", "拉二", "二連莊", "連莊二次", "連莊二"], "expand": [{ "id": "lianzhuang", "count": 2 }] },
+    { "surfaces": ["連三拉三", "莊連三拉三", "連三", "拉三", "三連莊", "連莊三次", "連莊三"], "expand": [{ "id": "lianzhuang", "count": 3 }] },
+    { "surfaces": ["連四拉四", "莊連四拉四", "連四", "拉四", "四連莊", "連莊四次", "連莊四"], "expand": [{ "id": "lianzhuang", "count": 4 }] },
+    { "surfaces": ["連五拉五", "莊連五拉五", "連五", "拉五", "五連莊", "連莊五次", "連莊五"], "expand": [{ "id": "lianzhuang", "count": 5 }] }
+  ],
+
+  "ignores": [],
+
+  "categories": ["莊家", "基本", "牌型", "字牌", "花牌", "時機", "大牌"],
+
+  "fans": [
+    {
+      "id": "zhuang",
+      "name": "莊家",
+      "tai": 1,
+      "aliases": ["做莊", "當莊", "莊"],
+      "asr_confusions": ["莊嫁", "裝家"],
+      "category": "莊家",
+      "auto": true,
+      "note": "莊家胡或被胡皆計。「莊」單字採計 1 台(2026-09-01 gameboy 拍板):它原本只活在 ignores,D1-A 清空後掉出詞庫,造成「莊 門清自摸」3 台而「莊家 門清自摸」4 台。單音節誤判由 phonetic.js:135 擋(原文須真的出現該字);不會咬掉長詞,因 INDEX 依音節數降序、同分取 n 大 —— 由 D1-7 的防咬斷言釘住。"
+    },
+    {
+      "id": "lianzhuang",
+      "name": "連莊",
+      "tai": 2,
+      "tai_base": 1,
+      "per_unit": true,
+      "excludes": ["zhuang"],
+      "aliases": ["拉莊", "連莊拉莊"],
+      "asr_confusions": ["連裝", "連桩"],
+      "category": "莊家",
+      "formula": "連莊次數 × 2 + 1(即 連N拉N)",
+      "note": "家規 2N+1(2026-09-01 拍板):tai=每次連莊 2 台、tai_base=莊家台 1(含在公式的 +1),故與 zhuang 互斥。「連N拉N」句型由頂層 combos 展開(字面 alias 結構上不會命中,勿加回)。"
+    },
+
+    {
+      "id": "zimo",
+      "name": "自摸",
+      "tai": 1,
+      "aliases": ["摸到", "自摸胡"],
+      "asr_confusions": ["自磨", "字摸"],
+      "category": "基本",
+      "note": "自己摸到胡牌;與多數台可疊加。"
+    },
+    {
+      "id": "menqing",
+      "name": "門清",
+      "tai": 1,
+      "aliases": ["門前清", "門清胡"],
+      "asr_confusions": ["門青", "悶清"],
+      "category": "基本",
+      "note": "全手牌無吃、碰、明槓,胡別人打的牌。與自摸可疊加(見 config)。"
+    },
+    {
+      "id": "menqing_zimo",
+      "name": "門清自摸",
+      "tai": 3,
+      "aliases": ["門清一摸三", "不求人", "門前清自摸"],
+      "asr_confusions": ["門青自摸"],
+      "category": "基本",
+      "excludes": ["menqing", "zimo"],
+      "requires_self_draw": true,
+      "note": "門清 + 自摸的合併台種。若賽制採合併3台,請用本項並排除 menqing/zimo 以免重複計。"
+    },
+    {
+      "id": "pinghu",
+      "name": "平胡",
+      "tai": 2,
+      "aliases": ["平和", "屁胡加台"],
+      "asr_confusions": ["瓶壺", "平湖"],
+      "category": "基本",
+      "note": "無字牌、無花、無碰槓、兩面聽、胡順子的門清牌;定義家規略異。"
+    },
+    {
+      "id": "quanqiuren",
+      "name": "全求人",
+      "tai": 2,
+      "aliases": ["全求", "全部求人"],
+      "asr_confusions": ["全球人", "全囚人"],
+      "category": "基本",
+      "requires_discard": true,
+      "note": "全靠吃碰、單吊胡別人打的牌(無自摸)。"
+    },
+    {
+      "id": "dandiao",
+      "name": "獨聽",
+      "tai": 1,
+      "aliases": ["單吊", "單釣", "獨聽將", "單騎"],
+      "asr_confusions": ["讀聽", "獨廳", "單掉"],
+      "category": "基本",
+      "note": "只聽一張牌(邊張/坎張/單釣將)。"
+    },
+    {
+      "id": "wumenqi",
+      "name": "五門齊",
+      "tai": 1,
+      "aliases": ["五門", "麻將五門齊"],
+      "asr_confusions": ["五們齊"],
+      "category": "基本",
+      "note": "手牌含萬筒條+風牌+三元牌五種門類。"
+    },
+
+    {
+      "id": "duiduihu",
+      "name": "碰碰胡",
+      "tai": 4,
+      "aliases": ["對對胡", "湊一色", "碰碰"],
+      "asr_confusions": ["碰碰湖", "對對湖"],
+      "category": "牌型",
+      "note": "全刻子(碰/槓)+將。"
+    },
+    {
+      "id": "hunyise",
+      "name": "混一色",
+      "tai": 4,
+      "aliases": ["混一", "花色帶字"],
+      "asr_confusions": ["混一se", "昏一色"],
+      "category": "牌型",
+      "excludes": ["qingyise"],
+      "note": "單一花色 + 字牌。"
+    },
+    {
+      "id": "qingyise",
+      "name": "清一色",
+      "tai": 8,
+      "aliases": ["清一", "清色"],
+      "asr_confusions": ["青一色", "清衣色"],
+      "category": "牌型",
+      "excludes": ["hunyise"],
+      "note": "全部同一花色、無字牌。"
+    },
+    {
+      "id": "sananke",
+      "name": "三暗刻",
+      "tai": 2,
+      "aliases": ["三暗"],
+      "asr_confusions": ["三案刻", "三暗克"],
+      "category": "牌型",
+      "note": "三組暗刻(未碰、藏在手內)。"
+    },
+    {
+      "id": "sianke",
+      "name": "四暗刻",
+      "tai": 5,
+      "aliases": ["四暗"],
+      "asr_confusions": ["四案刻"],
+      "category": "牌型",
+      "excludes": ["sananke"],
+      "note": "四組暗刻。"
+    },
+    {
+      "id": "wuanke",
+      "name": "五暗刻",
+      "tai": 8,
+      "aliases": ["五暗"],
+      "asr_confusions": ["五案刻"],
+      "category": "牌型",
+      "excludes": ["sianke", "sananke"],
+      "note": "五組暗刻(16張制)。"
+    },
+
+    {
+      "id": "quanfeng_ke",
+      "name": "圈風刻",
+      "tai": 1,
+      "aliases": ["圈風", "場風刻"],
+      "asr_confusions": ["全風刻"],
+      "category": "字牌",
+      "note": "當前圈風(東/南/西/北)的刻子。"
+    },
+    {
+      "id": "menfeng_ke",
+      "name": "門風刻",
+      "tai": 1,
+      "aliases": ["門風", "自風刻"],
+      "asr_confusions": ["門封刻"],
+      "category": "字牌",
+      "note": "自己座位風的刻子。"
+    },
+    {
+      "id": "sanyuan_ke",
+      "name": "三元牌刻",
+      "tai": 1,
+      "aliases": ["中發白刻", "箭刻", "元牌"],
+      "asr_confusions": ["三元克"],
+      "category": "字牌",
+      "note": "中/發/白任一組刻子,每組1台。"
+    },
+    {
+      "id": "xiaosanyuan",
+      "name": "小三元",
+      "tai": 4,
+      "aliases": ["小三"],
+      "asr_confusions": ["小山院"],
+      "category": "字牌",
+      "note": "兩組三元刻 + 第三種三元牌作將。"
+    },
+    {
+      "id": "dasanyuan",
+      "name": "大三元",
+      "tai": 8,
+      "aliases": ["大三"],
+      "asr_confusions": ["大山院"],
+      "category": "字牌",
+      "excludes": ["xiaosanyuan"],
+      "note": "中發白三組刻子。"
+    },
+    {
+      "id": "xiaosixi",
+      "name": "小四喜",
+      "tai": 8,
+      "aliases": ["小四"],
+      "asr_confusions": ["小四西"],
+      "category": "字牌",
+      "note": "三組風刻 + 第四種風牌作將。"
+    },
+    {
+      "id": "dasixi",
+      "name": "大四喜",
+      "tai": 16,
+      "aliases": ["大四"],
+      "asr_confusions": ["大四西"],
+      "category": "字牌",
+      "excludes": ["xiaosixi"],
+      "note": "東南西北四組風刻。"
+    },
+    {
+      "id": "ziyise",
+      "name": "字一色",
+      "tai": 8,
+      "aliases": ["字一", "全字"],
+      "asr_confusions": ["自一色"],
+      "category": "字牌",
+      "note": "全部由字牌組成;部分家規計16台。"
+    },
+
+    {
+      "id": "hua",
+      "name": "花牌",
+      "tai": 1,
+      "aliases": ["花", "一朵花"],
+      "asr_confusions": ["華"],
+      "category": "花牌",
+      "per_unit": true,
+      "note": "每張花1台(一般花);與正花區分。"
+    },
+    {
+      "id": "zhenghua",
+      "name": "正花",
+      "tai": 1,
+      "aliases": ["對花", "本花"],
+      "asr_confusions": ["爭花", "正華", "整花"],
+      "category": "花牌",
+      "per_unit": true,
+      "note": "花號對應自己座位風(如東家拿到春/梅…依規則)。"
+    },
+    {
+      "id": "huagang",
+      "name": "花槓",
+      "tai": 2,
+      "aliases": ["湊一組花", "四花"],
+      "asr_confusions": ["花缸"],
+      "category": "花牌",
+      "note": "集滿春夏秋冬 或 梅蘭竹菊一組。"
+    },
+    {
+      "id": "baxian",
+      "name": "八仙過海",
+      "tai": 8,
+      "aliases": ["八仙", "集滿八花"],
+      "asr_confusions": ["八仙過河"],
+      "category": "花牌",
+      "excludes": ["hua", "zhenghua", "huagang"],
+      "note": "集滿全部八張花;已含所有花,不再逐張/成組另計。"
+    },
+    {
+      "id": "wuhua",
+      "name": "無花",
+      "tai": 1,
+      "aliases": ["沒有花", "免花"],
+      "asr_confusions": ["五花"],
+      "category": "花牌",
+      "excludes": ["hua", "zhenghua", "huagang", "baxian"],
+      "note": "胡牌時手上無任何花牌(部分家規才計);與任何花牌台種邏輯互斥,並存代表誤聽。"
+    },
+
+    {
+      "id": "gangshang_kaihua",
+      "name": "槓上開花",
+      "tai": 1,
+      "aliases": ["槓上自摸", "槓花"],
+      "asr_confusions": ["缸上開花", "槓上開華"],
+      "category": "時機",
+      "requires_self_draw": true,
+      "note": "開槓補牌後自摸胡。"
+    },
+    {
+      "id": "qianggang",
+      "name": "搶槓胡",
+      "tai": 1,
+      "aliases": ["搶槓", "槓上炮"],
+      "asr_confusions": ["槍槓", "搶缸"],
+      "category": "時機",
+      "requires_discard": true,
+      "note": "他人加槓時攔胡那張牌(胡別人,非自摸)。"
+    },
+    {
+      "id": "haidi_laoyue",
+      "name": "海底撈月",
+      "tai": 1,
+      "aliases": ["海底", "海底摸月", "最後一張自摸"],
+      "asr_confusions": ["海底撈魚", "海底老月"],
+      "category": "時機",
+      "requires_self_draw": true,
+      "note": "摸到牌牆最後一張並自摸胡。"
+    },
+    {
+      "id": "hedi_laoyu",
+      "name": "河底撈魚",
+      "tai": 1,
+      "aliases": ["河底", "河底撈", "最後一張胡"],
+      "asr_confusions": ["河底撈月", "和底撈魚"],
+      "category": "時機",
+      "requires_discard": true,
+      "note": "胡最後一張打出的牌(非自摸)。"
+    },
+
+    {
+      "id": "tianhu",
+      "name": "天胡",
+      "tai": 24,
+      "aliases": ["天糊"],
+      "asr_confusions": ["田胡", "天湖"],
+      "category": "大牌",
+      "requires_self_draw": true,
+      "note": "莊家起手即胡(自摸性質)。台數家規差異大。"
+    },
+    {
+      "id": "dihu",
+      "name": "地胡",
+      "tai": 16,
+      "aliases": ["地糊"],
+      "asr_confusions": ["帝胡", "地湖"],
+      "category": "大牌",
+      "requires_self_draw": true,
+      "note": "閒家第一巡自摸胡(未經吃碰)。"
+    },
+    {
+      "id": "renhu",
+      "name": "人胡",
+      "tai": 8,
+      "aliases": ["人糊"],
+      "asr_confusions": ["仁胡", "人湖"],
+      "category": "大牌",
+      "requires_discard": true,
+      "note": "閒家第一巡胡別人打的牌(非自摸);部分家規不設此台。"
+    }
+  ]
+}
