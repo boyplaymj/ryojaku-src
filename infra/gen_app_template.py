@@ -335,6 +335,50 @@ HTTP_AUTHZ_PERMISSION = """
       SourceArn: !Sub 'arn:aws:execute-api:${{AWS::Region}}:${{AWS::AccountId}}:${{HttpApi}}/authorizers/*'
 """
 
+# ---------------------------------------------------------------------------
+# WebSocket 主動推送（PostToConnection）需要的兩件東西，模板從頭到尾都沒給過：
+#   ① env WS_API_ENDPOINT —— 沒有它，SDK 會把 management API 解析成
+#      https://execute-api.<region>.amazonaws.com（不指向任何一個 API），推送必失敗。
+#   ② IAM execute-api:ManageConnections —— 全部 function 只發 DDB_POLICY，
+#      連 execute-api 一個動作都沒有，所以就算 ① 補了也是 AccessDenied。
+#
+# 🔴 兩者都**只寫 log、不改回傳值**（main.go 的設計是刻意的），於是失敗的形狀是
+#    「什麼都沒發生」——與「這條路根本沒人走」逐字相同。實查 stg 日誌：
+#    `Broadcasting to` 出現 0 次 ⇒ 廣播路徑從沒被執行過，所以連一筆失敗紀錄都不存在，
+#    「壞掉」與「沒量過」在證據上分不開。
+#
+# 🔴 判準寫成「這支 lambda 的原始碼有沒有呼叫 PostToConnection」，不是一份手抄名單。
+#    手抄名單的失效方式零徵兆：下一支要推 WS 的 lambda 不會有任何東西提醒你回來加名字，
+#    而症狀就是上面那種「安靜地什麼都沒發生」。
+WS_PUSH_MARKER = "PostToConnection"
+BACKEND = os.path.normpath(os.path.join(HERE, "..", "backend"))
+
+def needs_ws_push(f):
+    """該 function 的 Go 原始碼是否呼叫 PostToConnection（排除 _test.go）。"""
+    d = os.path.join(BACKEND, f["projectPath"])
+    if not os.path.isdir(d):
+        # fail-closed：路徑解不到就不能靜靜回 False —— 那會讓整個掃描退化成
+        # 「一支都不需要」，產出一份看起來完全正常、而 WS 推送全滅的模板。
+        raise SystemExit(f"❌ 掃不到 {f['name']} 的原始碼目錄：{d}")
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".go") or fn.endswith("_test.go"):
+            continue
+        with open(os.path.join(d, fn), encoding="utf-8", errors="replace") as fp:
+            if WS_PUSH_MARKER in fp.read():
+                return True
+    return False
+
+# management API 端點與 IAM。resource 形狀是 <api-id>/<stage>/POST/@connections/*，
+# 只涵蓋本 stack 自己那個 WS API，不是 '*'。
+WS_PUSH_ENV = """      Environment:
+        Variables:
+          WS_API_ENDPOINT: !Sub 'https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+"""
+WS_PUSH_STATEMENT = """            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*'
+"""
+
 def fn_block(f):
     lid = logical(f["name"])
     # path 允許以逗號列多條（同一支 lambda 掛多個路由）。用於「bare 路徑與子路徑都要」的支：
@@ -397,7 +441,14 @@ def fn_block(f):
         # 供 S2 開 stream 後再 wire）。見 README TODO。避免引用不存在的 StreamArn。
         pass
     # WEBSOCKET 由下方 WS 區塊統一處理，這裡只出 function 本體
+    ws_push = needs_ws_push(f)
+    if ws_push:
+        # Globals 的 Environment.Variables 與 function 層是「合併」不是「覆蓋」，
+        # 所以這裡只需列多出來的那一個，不必重抄 Globals 那 18 個。
+        b.append(WS_PUSH_ENV.rstrip("\n"))
     b.append(DDB_POLICY.rstrip("\n"))
+    if ws_push:
+        b.append(WS_PUSH_STATEMENT.rstrip("\n"))
     return "\n".join(b)
 
 def ws_block(ws):
@@ -514,8 +565,18 @@ parts += ["",
           "  HttpApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }",
           "  WebSocketUrl: { Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }"]
 
+# 🔴 產出前的 fail-closed 自檢：有 WS API 卻沒有任何一支 function 需要推送，
+#    代表上面那個原始碼掃描壞了（改路徑、改 marker、manifest 的 projectPath 漂掉）。
+#    這種壞法不會噴錯，只會安靜地少產兩段 YAML —— 與「本來就不需要」逐字相同。
+_ws_push = [f["name"] for f in MAN if needs_ws_push(f)]
+if ws and not _ws_push:
+    raise SystemExit("❌ 有 WebSocket API，但掃不到任何呼叫 PostToConnection 的 lambda —— "
+                     "掃描判準壞了（見 needs_ws_push），拒絕產出")
+
 out = "\n".join(parts) + "\n"
 with open(os.path.join(HERE, "02-app.generated.yaml"), "w") as fp:
     fp.write(out)
 print(f"generated 02-app.generated.yaml: {len(MAN)} functions "
       f"({len(fns)} api/{len(ws)} ws), {out.count(chr(10))} lines")
+print(f"  WS 推送接線（env WS_API_ENDPOINT + execute-api:ManageConnections）: "
+      f"{len(_ws_push)} 支 -> {', '.join(_ws_push) or '(無)'}")

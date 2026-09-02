@@ -928,6 +928,9 @@ Resources:
     Properties:
       CodeUri: ../build/apis__mahjongclub_chat_ws_send_message
       FunctionName: !Sub 'ryojaku-${Stage}-chat-ws-send-message'
+      Environment:
+        Variables:
+          WS_API_ENDPOINT: !Sub 'https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -946,6 +949,9 @@ Resources:
             - Effect: Allow
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*'
 
   FnCommunityAddComment:
     Type: AWS::Serverless::Function
