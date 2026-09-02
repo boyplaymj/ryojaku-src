@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {
   noteBlocked,
   noteOk,
+  noteWsFrame,
   isInMaintenance,
   normalizePath,
   resetMaintenanceSignal,
+  MAINTENANCE_EVENT,
+  MAINTENANCE_CLEAR_EVENT,
 } from './maintenanceSignal.ts';
 
 // 模組級狀態會跨 test case 殘留 —— 不清的話，上一條的殘留會讓下一條「剛好通過」。
@@ -61,6 +64,72 @@ describe('noteOk：公開 route 的 200 不可以解除維護', () => {
   test('沒在維護時收到 200 不會誤報解除', () => {
     assert.equal(noteOk('/ledger?userId=A'), false);
     assert.equal(isInMaintenance(), false);
+  });
+});
+
+describe('noteWsFrame：WebSocket 這條路', () => {
+  // 背景：WS 的整合回應不會送回瀏覽器（實測 commit 110d9bc），所以 503 對使用者
+  // 不可觀察 —— 後端改為主動推一幀系統訊息，本組驗前端怎麼判讀它。
+
+  test('維護幀 → 進入維護，且必須被吞掉不往 callback 傳', () => {
+    const v = noteWsFrame({ type: 'system', event: 'maintenance' }, 'U1');
+    assert.equal(v.event, MAINTENANCE_EVENT);
+    assert.equal(v.consumed, true, '系統幀沒有 roomId，漏下去會害 ChatContext 去 fetchRooms()');
+    assert.equal(isInMaintenance(), true);
+  });
+
+  test('重複的維護幀不再發事件（但一樣要吞掉）', () => {
+    noteWsFrame({ type: 'system', event: 'maintenance' }, 'U1');
+    const v = noteWsFrame({ type: 'system', event: 'maintenance' }, 'U1');
+    assert.equal(v.event, null, '每則被擋的發言都彈一次提示＝洗版');
+    assert.equal(v.consumed, true);
+  });
+
+  test('認不得的系統幀也要吞掉', () => {
+    // 🔴 判準是 type==='system'，不是「我認得這個 event」。日後後端加新的系統幀，
+    //    前端還沒跟上時應該安靜忽略，而不是把它當聊天訊息送進渲染路徑。
+    const v = noteWsFrame({ type: 'system', event: 'something-new' }, 'U1');
+    assert.equal(v.event, null);
+    assert.equal(v.consumed, true);
+  });
+
+  test('自己的訊息廣播回來 → 解除，但**不可**吞掉（那是要顯示的聊天訊息）', () => {
+    noteBlocked('/ledger?userId=A');
+    const v = noteWsFrame({ roomId: 'r1', senderId: 'U1', content: 'hi' }, 'U1');
+    assert.equal(v.event, MAINTENANCE_CLEAR_EVENT);
+    assert.equal(v.consumed, false, '吞掉的話自己發的訊息不會出現在聊天室');
+    assert.equal(isInMaintenance(), false);
+  });
+
+  test('WS 回音是強訊號：即使當初被擋的是 REST 也解除', () => {
+    // 與 noteOk 的差別就在這裡。公開 route 的 200 證明不了旗標關了，
+    // 但 chat_ws_send_message 自己會讀旗標回 503 ⇒ 廣播得出來就代表它是關的。
+    noteBlocked('/ledger?userId=A');
+    noteBlocked('/my-games?userId=A');
+    const v = noteWsFrame({ roomId: 'r1', senderId: 'U1' }, 'U1');
+    assert.equal(v.event, MAINTENANCE_CLEAR_EVENT);
+    assert.equal(isInMaintenance(), false);
+  });
+
+  test('別人的訊息不算解除', () => {
+    // 別人的訊息是廣播來的，不代表**我**發得出去；而且維護中根本不會有人發得成。
+    noteBlocked('/ledger?userId=A');
+    const v = noteWsFrame({ roomId: 'r1', senderId: 'U2' }, 'U1');
+    assert.equal(v.event, null);
+    assert.equal(isInMaintenance(), true);
+  });
+
+  test('沒在維護時收到自己的回音，不誤報解除事件', () => {
+    const v = noteWsFrame({ roomId: 'r1', senderId: 'U1' }, 'U1');
+    assert.equal(v.event, null, '沒進過維護就沒有「解除」這個轉換');
+    assert.equal(v.consumed, false);
+  });
+
+  test('尚未登入（selfUserId 為 null）不可把任何訊息當成自己的', () => {
+    noteBlocked('/ledger?userId=A');
+    assert.equal(noteWsFrame({ senderId: 'U2' }, null).event, null);
+    assert.equal(noteWsFrame({}, null).event, null, 'senderId 缺席時不可與 null 相等而誤解除');
+    assert.equal(isInMaintenance(), true);
   });
 });
 

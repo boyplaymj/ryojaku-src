@@ -1,4 +1,5 @@
 import { STORAGE_KEYS } from '../constants';
+import { noteWsFrame } from '../utils/maintenanceSignal';
 
 export interface ChatMessage {
     roomId: string;
@@ -46,6 +47,19 @@ class ChatService {
             try {
                 const data = JSON.parse(event.data);
                 console.log('Chat WS Message received:', data);
+
+                // 維護訊號：判讀邏輯在 utils/maintenanceSignal.ts（那裡測得到，本檔測不到
+                // —— 本檔 import 了 ../constants，node 的 type-stripping 解析不動）。
+                //
+                // 🔴 `consumed` 必須 return，不可以只發事件就繼續往下傳：系統幀沒有 roomId，
+                //    而 ChatContext 的全域 '*' 訂閱者對「roomId 找不到」的反應是呼叫
+                //    fetchRooms()（contexts/ChatContext.tsx）。每一則被擋下的發言都會因此
+                //    多打一次 REST —— 而維護中那支自己也會 403，等於用一個 403 換另一個 403。
+                const verdict = noteWsFrame(data, this.userId);
+                if (verdict.event) {
+                    window.dispatchEvent(new CustomEvent(verdict.event));
+                }
+                if (verdict.consumed) return;
 
                 // Match specific room callbacks
                 const roomId = data.roomId;

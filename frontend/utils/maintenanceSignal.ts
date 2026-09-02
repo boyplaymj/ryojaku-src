@@ -62,6 +62,64 @@ export function noteOk(endpoint: string): boolean {
   return true;
 }
 
+/**
+ * WS 發言在本狀態機裡的鍵。
+ *
+ * WebSocket 沒有 URL path，但「曾被擋過才算解除」那條規則需要一個鍵才能參與。
+ * 🔴 定義放這裡、由 chatService 匯入 —— 兩邊各寫一次字面值就會漂，而漂掉的症狀是
+ *    「提示出得來、永遠消不掉」（noteBlocked 用 A、解除時比對 B）。
+ * 後端推回來的幀長什麼樣，定義在
+ * backend/cmd/lambdas/apis/mahjongclub_chat_ws_send_message/main.go 的 MaintenanceFrame。
+ */
+export const WS_SEND_PATH = 'ws:sendMessage';
+
+/**
+ * 記錄一個「證明維護已結束」的**強訊號**。回傳 true 代表解除轉換剛剛發生。
+ *
+ * 🔴 為什麼這支不像 noteOk 那樣要求「曾被擋過」：兩者的證明力不同。
+ *    REST 的 2xx 弱 —— 維護中公開 route 照樣回 200（已量，見上方註解）。
+ *    但 WS 發言成功不一樣：chat_ws_send_message **自己**會讀旗標並回 503
+ *    （main.go 的 maintenanceCheck），所以「我的訊息被廣播回來了」代表那道閘門
+ *    確實放行 ⇒ 旗標是關的。這是全域事實，不必管當初是哪條路被擋。
+ *
+ * ⚠️ 用它的前提是「發話者收得到自己的訊息」。那是廣播迴圈不排除 sender 的結果
+ *    （main.go 的成員迴圈；排除只寫在推播那半邊）——**目前是讀程式碼得到的結論，
+ *    尚未在真連線上量過**。真瀏覽器端到端驗證前不要把它當已證實。
+ */
+export function noteMaintenanceOver(): boolean {
+  if (blockedPaths.size === 0) return false;
+  blockedPaths.clear();
+  return true;
+}
+
+export interface WsFrameVerdict {
+  /** true = 這是系統幀，呼叫端**不可**再往 callback 傳（理由見 chatService.ts）。 */
+  consumed: boolean;
+  /** 要 dispatch 的事件名；null = 不發。 */
+  event: string | null;
+}
+
+/**
+ * 判讀一幀 WS 訊息對維護訊號的意義，並更新狀態機。
+ *
+ * 🔴 邏輯放這裡而不是 chatService，是被**測得到**這件事決定的：chatService.ts
+ *    import 了 `../constants`（無副檔名），node 的 type-stripping 解析不動
+ *    （實測 ERR_MODULE_NOT_FOUND）⇒ 那個檔在 node 下根本 import 不起來。
+ *    本檔零 import，所以判讀邏輯擺這裡就有單元測試，chatService 只剩一行接線。
+ *    ⚠️ 代價照舊：那一行「有沒有真的接上」本檔測不到，由 maintenance_browser_e2e.mjs 守。
+ */
+export function noteWsFrame(data: any, selfUserId: string | null): WsFrameVerdict {
+  if (data?.type === 'system') {
+    const raise = data.event === 'maintenance' && noteBlocked(WS_SEND_PATH);
+    return { consumed: true, event: raise ? MAINTENANCE_EVENT : null };
+  }
+  // 自己的訊息廣播回來 ⇒ 發言閘門放行 ⇒ 旗標是關的（強訊號，見 noteMaintenanceOver）。
+  if (data?.senderId && data.senderId === selfUserId && noteMaintenanceOver()) {
+    return { consumed: false, event: MAINTENANCE_CLEAR_EVENT };
+  }
+  return { consumed: false, event: null };
+}
+
 export function isInMaintenance(): boolean {
   return blockedPaths.size > 0;
 }

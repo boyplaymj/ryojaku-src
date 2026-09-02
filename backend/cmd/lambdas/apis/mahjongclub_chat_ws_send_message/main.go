@@ -60,6 +60,45 @@ func init() {
 // 生產上永遠是 shared.IsMaintenanceMode（讀取失敗 fail-open，見 shared/maintenance.go）。
 var maintenanceCheck = shared.IsMaintenanceMode
 
+// MaintenanceFrame 是維護中主動推回發話者的系統幀。
+//
+// 🔴 刻意**不帶 roomId**：前端 ChatContext 的全域訂閱者收到 roomId 找不到的訊息會去
+//    fetchRooms()（contexts/ChatContext.tsx），維護中那支自己也會 403。所以這一幀由
+//    chatService 攔在 callback 之前處理、不往下傳，兩邊的契約寫在 frontend/services/chatService.ts。
+const MaintenanceFrame = `{"type":"system","event":"maintenance"}`
+
+// notifySenderBlocked 以 package 級變數注入，讓單元測試能斷言「有沒有推」
+// 而不必打真的 API Gateway（WS_API_ENDPOINT 在測試環境是空的）。
+var notifySenderBlocked = postMaintenanceFrame
+
+func newAPIGWClient() *apigatewaymanagementapi.Client {
+	callbackAPI := os.Getenv("WS_API_ENDPOINT")
+	return apigatewaymanagementapi.NewFromConfig(awsCfg, func(o *apigatewaymanagementapi.Options) {
+		if callbackAPI != "" {
+			o.BaseEndpoint = aws.String(callbackAPI)
+		}
+	})
+}
+
+// postMaintenanceFrame 把維護提示推回發話者自己的連線。
+//
+// ⚠️ 推送失敗只記 log、**不改變 Handler 的回傳值**：擋下發言的是那個 503，這一幀只是
+//    通知。讓通知的失敗去否決 kill switch，等於把輔助功能變成安全機制的開關
+//    （記憶：輔助功能用自己的體積把安全機制關掉）。
+func postMaintenanceFrame(ctx context.Context, connID string) {
+	if connID == "" {
+		return
+	}
+	_, err := newAPIGWClient().PostToConnection(ctx, &apigatewaymanagementapi.PostToConnectionInput{
+		ConnectionId: aws.String(connID),
+		Data:         []byte(MaintenanceFrame),
+	})
+	if err != nil {
+		// 常見且無害：使用者在這之間關掉分頁 → GoneException。
+		log.Printf("[chat-ws-send-message] 維護提示推送失敗 conn=%s: %v", connID, err)
+	}
+}
+
 func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("SendMessage: ConnectionID=%s, Body=%s", request.RequestContext.ConnectionID, request.Body)
 
@@ -73,11 +112,15 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 	// 這裡回 503 而不是 authorizer 那側的 403：本函式是一般 Lambda handler，不受
 	// 「authorizer 只能回 401/403」的限制，503 才是「服務暫時不可用」的正確語意，
 	// 也正好是後台 UI 當初對 maintenanceMode 的承諾。
-	// ⚠️ 已知落差：WS route 的整合回應不會送回瀏覽器（chatService.ts 只掛 onmessage /
-	//    onerror），所以使用者實際看到的是「訊息送不出去」，不是一則維護提示。
-	//    這與既有的非成員 403 是同一個既有限制，本次不處理。
+	// 🔴 這個 503 使用者看不到，所以要另外推一幀回去（2026-09-02 補）。
+	//    WS route 的整合回應不會送回瀏覽器 —— 這不是推測，是量到的（commit 110d9bc：
+	//    同一個 connectionId 保持開著翻旗標，client 端全程沒收到任何回應）。
+	//    不推那一幀的話，聊天室看到的只有「訊息送不出去」，跟斷線／壞掉長得一樣。
+	//    ⚠️ 既有的「非成員 403」仍然沒有這個通知，那是另一件事（它不該告訴對方
+	//       「你不是成員」，那會變成房間成員的探測器）。
 	if maintenanceCheck(ctx) {
 		log.Printf("[chat-ws-send-message] 維護模式（kill switch）開啟，拒絕發言 conn=%s", request.RequestContext.ConnectionID)
+		notifySenderBlocked(ctx, request.RequestContext.ConnectionID)
 		return events.APIGatewayProxyResponse{StatusCode: 503}, nil
 	}
 
@@ -198,11 +241,9 @@ func Handler(ctx context.Context, request events.APIGatewayWebsocketProxyRequest
 		callbackAPI := os.Getenv("WS_API_ENDPOINT")
 		log.Printf("Broadcasting to %d members in room %s using endpoint %s", len(room.MemberIDs), payload.RoomID, callbackAPI)
 
-		apigwClient := apigatewaymanagementapi.NewFromConfig(awsCfg, func(o *apigatewaymanagementapi.Options) {
-			if callbackAPI != "" {
-				o.BaseEndpoint = aws.String(callbackAPI)
-			}
-		})
+		// 與維護提示共用同一份端點解析 —— 兩份會漂（其中一份改了 WS_API_ENDPOINT
+		// 的處理而另一份沒改，症狀是「提示推不出去」而廣播正常，很難聯想到這裡）。
+		apigwClient := newAPIGWClient()
 
 		displayContent := payload.Content
 		if payload.Type == "image" {
