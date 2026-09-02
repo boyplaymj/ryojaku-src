@@ -33,6 +33,7 @@ import { Loader2 } from 'lucide-react';
 import { RefreshProvider, useRefresh, usePullToRefresh } from './contexts/RefreshContext';
 import { ChatProvider } from './contexts/ChatContext';
 import { ToastProvider } from './contexts/ToastContext';
+import MaintenanceNotice from './components/MaintenanceNotice';
 import { chatService } from './services/chatService';
 import { notificationService } from './services/notificationService';
 
@@ -331,6 +332,9 @@ function App() {
     <PWAInstallPrompt>
       <VersionGuard minVersion={minRequiredVersion} updateUrl={updateUrl} />
       <ToastProvider>
+        {/* 維護模式的提示掛在這裡（ToastProvider 之內、路由之外）：
+            它要能覆蓋每一個頁面，而不是由各頁自己記得顯示。 */}
+        <MaintenanceNotice />
         {renderContent()}
       </ToastProvider>
     </PWAInstallPrompt>

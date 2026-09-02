@@ -11,7 +11,8 @@ interface Toast {
 }
 
 interface ToastContextType {
-    showToast: (message: string, type?: ToastType, title?: string, duration?: number) => void;
+    /** 回傳這則 toast 的 id —— 常駐型提示（duration: Infinity）要靠它才收得回來。 */
+    showToast: (message: string, type?: ToastType, title?: string, duration?: number) => string;
     hideToast: (id: string) => void;
 }
 
@@ -35,6 +36,8 @@ export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 hideToast(id);
             }, duration);
         }
+
+        return id;
     }, [hideToast]);
 
     return (

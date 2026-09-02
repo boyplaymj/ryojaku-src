@@ -4,6 +4,12 @@
 
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
+import {
+  MAINTENANCE_EVENT,
+  MAINTENANCE_CLEAR_EVENT,
+  noteBlocked,
+  noteOk,
+} from '../utils/maintenanceSignal';
 
 // fail-closed：原本沒設 VITE_API_BASE_URL 就回退到工程師的「正式」API,
 // 等於 staging 版本會安靜地對真實用戶資料下手。寧可整個 app 起不來也不要打錯後端。
@@ -98,10 +104,25 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
       //    WebSocket 不經過 apiRequest）—— 這是推論，不是協定保證。
       //    日後若有 REST handler 開始回 403，要回來改這段，否則會把它說成維護中。
       if (response.status === 403) {
+        // 🔴 除了回傳字串，還要發一個**全域**訊號。理由：這個 error 是**回傳值**，
+        //    而各頁面幾乎都只看 response.success 就走人（Ledger.tsx 直接渲染一本
+        //    空帳本），於是「服務維護中」翻譯出來了卻沒有人把它畫出來。
+        //    逐頁去改的話，漏掉的那一頁零徵兆 —— 所以載體放在呼叫點之上。
+        //    只在「進入維護」那一次發事件，不是每個 403 都發：見 utils/maintenanceSignal.ts。
+        if (noteBlocked(endpoint)) {
+          window.dispatchEvent(new CustomEvent(MAINTENANCE_EVENT));
+        }
         return { success: false, error: '服務維護中，請稍後再試' };
       }
 
       return { success: false, error: data.error || `HTTP error! status: ${response.status}` };
+    }
+
+    // 曾被 403 擋過的那條路自己通了 ⇒ 維護結束。
+    // ⚠️ 不可以簡化成「任何 2xx 就解除」：維護中公開 route 照樣回 200（實測，
+    //    見 infra/maintenance_public_routes_probe.sh），那樣寫提示會閃爍。
+    if (noteOk(endpoint)) {
+      window.dispatchEvent(new CustomEvent(MAINTENANCE_CLEAR_EVENT));
     }
 
     return data;
