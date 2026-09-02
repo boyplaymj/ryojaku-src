@@ -2474,6 +2474,72 @@ Resources:
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
 
+  FnVoiceCorrections:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_voice_corrections
+      FunctionName: !Sub 'ryojaku-${Stage}-voice-corrections'
+      Events:
+        Rest0:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/voice-corrections'
+            Method: post
+            Auth:
+              Authorizer: RyojakuUserAuth
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
+  FnAdminVoiceCorrections:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_admin_voice_corrections
+      FunctionName: !Sub 'ryojaku-${Stage}-admin-voice-corrections'
+      Events:
+        Rest0:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: '/admin/voice-corrections'
+            Method: get
+            Auth:
+              Authorizer: RyojakuAdminAuth
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
 
   # ---------- WebSocket API ----------
   WebSocketApi:

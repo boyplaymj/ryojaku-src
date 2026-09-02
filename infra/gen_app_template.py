@@ -96,6 +96,15 @@ AUTHORIZER_PILOT = {
     # ⚠️ 尚未列舉的同族 user 端點：auth-bind-google / auth-unbind / auth-change-password /
     #    auth-logout-all。四支都在程式內自驗 JWT（fromJWT 必須為 true）故非漏洞，
     #    但缺第二層；要不要一起補屬另案，別在這裡順手改而沒實測。
+
+    # 語音判台「訂正資料飛輪」的寫入端（D3，正典 tools/mahjong-tai/DESIGN_APP.md §4.3）。
+    # 依上面 S4 那條教訓，新增 user 端點必須同步列舉 —— 只在 manifest 寫 auth:"user"
+    # 不會掛上任何閘門，而且不會有任何錯誤訊號。
+    # ⚠️ 它自己也 fail-closed（AuthorizerUserID 為空即 401），掛 authorizer 是第二層：
+    #    未帶 token 在 gateway 就被擋掉，不進 lambda。兩層都要，因為第一層漏掉時沒人會叫。
+    # ⓘ 配對的 admin 讀取端 admin-voice-corrections **不必**列在這裡：
+    #    下面 authorizer_for() 對 auth=="admin" 是自動掛 RyojakuAdminAuth 的。
+    "voice-corrections",      # REST_V1 POST /voice-corrections
 }
 
 def authorizer_for(f):

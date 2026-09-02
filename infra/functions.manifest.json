@@ -905,6 +905,28 @@
       "tables": [
         "Users"
       ]
+    },
+    {
+      "name": "voice-corrections",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_voice_corrections",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/voice-corrections",
+      "auth": "user",
+      "tables": [
+        "VoiceCorrections"
+      ]
+    },
+    {
+      "name": "admin-voice-corrections",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_admin_voice_corrections",
+      "apiType": "REST_V1",
+      "method": "GET",
+      "path": "/admin/voice-corrections",
+      "auth": "admin",
+      "tables": [
+        "VoiceCorrections"
+      ]
     }
   ]
 }

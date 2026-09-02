@@ -497,6 +497,25 @@ Resources:
       KeySchema: [ { AttributeName: rlKey, KeyType: HASH } ]
       TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # 窗口過後自清
 
+  VoiceCorrectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      # 語音判台「訂正資料飛輪」(正典 /opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §4.2)
+      # PK=USER#<userId>;SK=TS#<ts>#<uuid>(ts 由呼叫端提供,feedback.js 刻意不取系統時間)
+      # 🔴 每次送出都寫一筆,用 hadDiff 分辨「判對了」與「判錯並訂正」——
+      #    只記有訂正的話,「0 筆」會同時代表「判很準」與「沒人用」(§4.4)。
+      # 🔴 只存文字不存音檔(§4.5):存音檔＝S3＋個資保存,成本與責任完全不同等級。
+      TableName: !Sub '${TablePrefix}VoiceCorrections'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      # GSI 暫不開:v1 的查詢只有後台列出待審建議,全表掃,量級極小(§4.2)。
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # 建議 365 天
+
 Outputs:
   TablePrefix:
     Value: !Ref TablePrefix
