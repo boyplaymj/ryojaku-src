@@ -1,11 +1,11 @@
-// pages/TrainingVoiceTai.tsx — 語音判台（訓練工具）D4-a：修正盤
+// pages/TrainingVoiceTai.tsx — 語音判台（訓練工具）D4-a：修正盤 ／ D4-b：麥克風
 //
-// 正典：/opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §4／§6／§9
+// 正典：/opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §2／§3.1／§4／§6／§9
 // 視覺經 gameboy 確認（§9 目視 gate，2026-09-02），參考預覽
 // /opt/sml/repo/tools/mahjong-tai/preview_voice_tai.html。
 //
-// 🔴 D4-a 的範圍只有「修正盤」：可點、可 ±、合計即時算。
-//    麥克風與語音辨識在 D4-b，飛輪上傳（POST /voice-corrections）在 D4-c。
+// 🔴 範圍：D4-a 修正盤（可點、可 ±、合計即時算）＋ D4-b 麥克風與語音辨識。
+//    飛輪上傳（POST /voice-corrections）仍在 D4-c。
 //    ⚠️ 本頁**目前沒有入口**（沒有任何地方 navigate 到 /training/voice-tai）——
 //    這是刻意的中間狀態，不是忘了接：入口與飛輪一起在 D4-c 落地。
 //    在那之前它只能靠手打網址到達，所以不會有使用者撞到半成品。
@@ -13,6 +13,22 @@
 //
 // 🔴 所有台數都走 utils/voiceTai.ts，本檔一個算術都不做 ——
 //    連莊的 2N+1 有個 tai_base，自己乘會少一台而且看起來合理（見那支檔頭）。
+//    判台管線一律走 utils/voiceTaiAsr.ts 的 recognize()，本檔不自己呼叫
+//    MahjongPhonetic／MahjongTai —— 那兩支之間有個「必須先 buildIndex」的
+//    全域狀態順序，漏掉時畫面完全正常、只有音近誤聽會失效（見那支檔頭）。
+//
+// ── D4-b：只有 Web Speech 這一軌，這是有意的界線，不是漏做 ──────────────
+//
+// 🔴 §3.1 規劃的是**雙軌**（原生 Capacitor ＋ Web Speech），D4-b 只做後者。
+//    實查（2026-09-02）：`@capacitor-community/speech-recognition`
+//    **沒有裝**（package.json 只有 @capacitor/{core,cli,ios,android} 四個）。
+//    裝它要一併動 iOS Info.plist 與 Android 權限宣告，那是原生專案設定，
+//    不該混進這一塊。
+//    ⚠️ **後果要講清楚**：iOS 的 WKWebView 沒有 SpeechRecognition
+//    ⇒ 裝成 App 用的 iPhone 使用者按下去只會看到「這個環境不支援」。
+//    瀏覽器／PWA（Chrome、Edge）才走得通。原生軌另開一塊做。
+//    ⇒ 所以 `supported === false` 時必須把話說完整（是環境不支援，不是壞了），
+//      而不是讓按鈕靜靜地按不動。
 //
 // 🔴 驗這一頁時,先關掉每日獎勵彈窗(或種好 localStorage),否則格子點不動。
 //    DailyBonusModal 是 App.tsx 裡 render 在 <Routes> 旁邊的全域覆蓋層,
@@ -27,10 +43,12 @@
 //   · 合計台數釘在修正盤上方，不隨捲動消失（禁做①：它是唯一要被確認的數字）
 //   · 不用模糊／半透明／漸層（質感層）
 //   · 沒有自動送出倒數（禁做③）
+//   · 麥克風是**狀態切換、不是循環動畫**（禁做②：牌桌上很吵，
+//     回饋要靠狀態變化；`animate-pulse` 這類無條件循環動畫不得使用）
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Minus, Plus, RotateCcw } from 'lucide-react';
+import { ChevronLeft, Mic, Minus, Plus, RotateCcw } from 'lucide-react';
 import fanTable from '../engine/mahjong-tai/fan_table.json';
 import {
   buildPad,
@@ -39,19 +57,177 @@ import {
   step,
   taiOf,
   toggle,
-  type FanTable,
   type Selection,
 } from '../utils/voiceTai';
+import {
+  micErrorMessage,
+  recognize,
+  type AsrFanTable,
+  type Heard,
+} from '../utils/voiceTaiAsr';
 
-const TABLE = fanTable as unknown as FanTable;
+const TABLE = fanTable as unknown as AsrFanTable;
+
+/**
+ * Web Speech 的最小型別。刻意寫在本檔而不是 types.ts：
+ * types.ts 是整個 App 共用的檔（別條 session 也在改），為了一頁的實驗性功能
+ * 去動它，代價是別人的 diff 裡多出看不懂的東西。等原生軌也接上、
+ * 這層變成共用的 ASR 抽象時再搬。
+ */
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+}
+
+function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as Record<string, unknown>;
+  return (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRecognitionLike) | null;
+}
 
 const TrainingVoiceTai: React.FC = () => {
   const navigate = useNavigate();
   const [sel, setSel] = useState<Selection>({});
+  const [listening, setListening] = useState(false);
+  const [heard, setHeard] = useState<Heard | null>(null);
+  const [notice, setNotice] = useState('');
 
   const pad = useMemo(() => buildPad(TABLE), []);
   const total = grandTotal(TABLE, sel);
   const picked = Object.keys(sel);
+
+  // ── 麥克風 ────────────────────────────────────────────────────────────
+  //
+  // 🔴 這裡的三個 ref 不是「不想用 state」，是 state 在這裡**不會動**：
+  //    SpeechRecognition 的 callback 是在 rec 物件上掛一次的，closure 會永遠
+  //    看到第一次 render 的 state 值。累積中的辨識文字若放 state，
+  //    onend 讀到的會是空字串 —— 而那與「真的沒講話」在畫面上一模一樣。
+  const recRef = useRef<SpeechRecognitionLike | null>(null);
+  const finalTextRef = useRef('');
+  const pressedRef = useRef(false);
+  const micGrantedRef = useRef(false);
+
+  const supported = useMemo(() => getSpeechRecognitionCtor() !== null, []);
+
+  /** 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。 */
+  const analyze = useCallback((text: string) => {
+    try {
+      const h = recognize(TABLE, text);
+      setHeard(h);
+      if (h.ids.length === 0) {
+        // 🔴 「聽到了但沒有台種」與「沒聽到」要分開講 —— 前者是講法不在詞庫裡
+        //    （使用者該做的是用下面的格子補），後者是再講一次。
+        setNotice(`聽到「${h.raw}」，但沒有對到任何台種。可以直接點下面的格子補上。`);
+      } else {
+        setNotice('');
+        setSel(h.sel);
+      }
+    } catch (err) {
+      // recognize 的 fail-closed（音近索引建不起來）會走到這裡。
+      // 那代表詞庫壞了，不是使用者講錯 ⇒ 照實講，別說「請再試一次」。
+      setNotice(`判台失敗：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  // rec 實例建一次。掛在 ref 上，卸載時 abort（否則離開頁面麥克風還開著）。
+  useEffect(() => {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+    const rec = new Ctor();
+    rec.lang = 'zh-TW';
+    rec.interimResults = true;
+    rec.continuous = false;
+
+    rec.onstart = () => {
+      setListening(true);
+      setNotice('');
+    };
+    rec.onerror = (e) => setNotice(micErrorMessage(e.error));
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalTextRef.current += t;
+        else interim += t;
+      }
+      // 講到一半的即時字：只當回饋，不進判台（判台在 onend）。
+      setHeard((prev) => ({
+        raw: (finalTextRef.current + interim).trim(),
+        normalized: '',
+        leftover: '',
+        ignored: [],
+        sel: prev?.sel ?? {},
+        ids: prev?.ids ?? [],
+      }));
+    };
+    rec.onend = () => {
+      setListening(false);
+      const text = finalTextRef.current.trim();
+      if (text) analyze(text);
+      else setNotice((n) => n || '沒聽到內容，再試一次。');
+    };
+
+    recRef.current = rec;
+    return () => {
+      rec.onstart = rec.onend = rec.onerror = rec.onresult = null;
+      try {
+        rec.abort();
+      } catch {
+        /* 已經停了就算了 */
+      }
+      recRef.current = null;
+    };
+  }, [analyze]);
+
+  /**
+   * iOS Safari 直接 rec.start() 會丟 not-allowed 且**不跳權限對話框**，
+   * 所以先用 getUserMedia 主動把授權叫出來，拿到就立刻關掉那條軌。
+   * （沿用 demo.html:275-290 已驗證的做法。）
+   */
+  const ensureMic = useCallback(async () => {
+    if (micGrantedRef.current) return true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      micGrantedRef.current = true; // 沒有這個 API 就直接讓 rec.start() 自己去要
+      return true;
+    }
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      micGrantedRef.current = true;
+      return true;
+    } catch (err) {
+      setNotice(micErrorMessage((err as { name?: string })?.name || 'not-allowed'));
+      return false;
+    }
+  }, []);
+
+  const startListening = useCallback(async () => {
+    if (listening || !recRef.current) return;
+    pressedRef.current = true;
+    const ok = await ensureMic();
+    // 授權對話框期間使用者可能已經放開 ⇒ 那就不要開始（否則會變成「按一下就一直錄」）
+    if (!ok || !pressedRef.current) return;
+    finalTextRef.current = '';
+    setHeard(null);
+    try {
+      recRef.current.start();
+    } catch {
+      /* 連續快速按會丟 InvalidStateError，忽略即可 */
+    }
+  }, [listening, ensureMic]);
+
+  const stopListening = useCallback(() => {
+    pressedRef.current = false;
+    if (recRef.current && listening) recRef.current.stop();
+  }, [listening]);
 
   // 算式明細：讓合計不是一個「憑空出現的數字」。
   // 使用者要確認的是台數對不對，看得到組成才有辦法確認。
@@ -63,6 +239,12 @@ const TrainingVoiceTai: React.FC = () => {
       return `${label} ${taiOf(TABLE, id, units)}`;
     })
     .join(' ＋ ');
+
+  const reset = () => {
+    setSel({});
+    setHeard(null);
+    setNotice('');
+  };
 
   return (
     // 🔴 全螢幕頁一律用 `h-screen`，**不可以用 `fixed inset-0`**（2026-09-02 實測踩到）。
@@ -104,9 +286,9 @@ const TrainingVoiceTai: React.FC = () => {
           <div className="min-w-0 text-[0.6875rem] font-bold leading-relaxed text-neutral-500">
             {picked.length === 0 ? (
               <>
-                點下面的台種<span className="text-neutral-900">直接算台</span>
+                按住下面的<span className="text-neutral-900">麥克風報台</span>
                 <br />
-                一台都沒選也有底
+                或直接點格子自己算
               </>
             ) : (
               <span className="text-neutral-900 break-words">
@@ -121,6 +303,31 @@ const TrainingVoiceTai: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 聽到什麼、校正成什麼。
+            🔴 原文一定要照實顯示：使用者要能判斷「是我講錯還是它聽錯」，
+               只給正規名的話這兩者長得一模一樣。 */}
+        {heard && heard.raw && (
+          <div className="mt-2.5 pt-2.5 border-t border-black/[0.04] text-[0.625rem] font-bold leading-relaxed">
+            <div className="text-neutral-500">
+              聽到：<span className="text-neutral-900">{heard.raw}</span>
+            </div>
+            {heard.normalized && heard.normalized !== heard.raw && (
+              <div className="text-neutral-500">
+                校正為：<span className="text-[#c5a059]">{heard.normalized}</span>
+              </div>
+            )}
+            {heard.leftover && (
+              <div className="text-neutral-400">沒對到的音：{heard.leftover}</div>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <div className="mt-2.5 text-[0.625rem] font-bold leading-relaxed text-[#b4532f]">
+            {notice}
+          </div>
+        )}
       </div>
 
       {/* 修正盤：3 欄可點格子（照 score_pad.html 的 .yaku 盤，配色換成両雀奶油＋金） */}
@@ -203,21 +410,63 @@ const TrainingVoiceTai: React.FC = () => {
         ))}
       </div>
 
-      {/* 底部：釘住 */}
+      {/* 底部：釘住。麥克風是主要動作，清空是次要。 */}
       <div className="flex-none bg-white border-t border-black/[0.04] px-4 pt-3 pb-[calc(1rem+var(--safe-bottom))]">
-        <button
-          type="button"
-          onClick={() => setSel({})}
-          disabled={picked.length === 0}
-          className={`w-full rounded-[0.8125rem] py-3.5 text-[0.875rem] font-black tracking-wide flex items-center justify-center gap-2 transition-colors ${
-            picked.length === 0
-              ? 'bg-[#f2f2f0] text-neutral-300'
-              : 'bg-neutral-900 text-white active:bg-black'
-          }`}
-        >
-          <RotateCcw size="1rem" strokeWidth={2.6} />
-          清空重算
-        </button>
+        {!supported && (
+          // 🔴 講完整：是這個環境沒有這個 API，不是功能壞了。
+          //    iOS 的 WKWebView（＝裝成 App 的 iPhone）就屬於這一類。
+          <div className="mb-2.5 text-[0.625rem] font-bold leading-relaxed text-neutral-500">
+            這個環境沒有語音辨識（iPhone 的 App 內建瀏覽器就沒有）。
+            <br />
+            用 Chrome 或 Edge 開這一頁可以講話；在這裡仍可以直接點格子算台。
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!supported}
+            aria-label="按住講話"
+            aria-pressed={listening}
+            onMouseDown={startListening}
+            onMouseUp={stopListening}
+            onMouseLeave={stopListening}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              startListening();
+            }}
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              stopListening();
+            }}
+            // 🔴 §9 禁做②：狀態切換，不是循環動畫。這裡只有 transition-colors，
+            //    沒有 animate-pulse／animate-ping 之類無條件播放的東西。
+            className={`flex-1 select-none touch-none rounded-[0.8125rem] py-3.5 text-[0.875rem] font-black tracking-wide flex items-center justify-center gap-2 transition-colors ${
+              !supported
+                ? 'bg-[#f2f2f0] text-neutral-300'
+                : listening
+                  ? 'bg-[#b4532f] text-white'
+                  : 'bg-neutral-900 text-white active:bg-black'
+            }`}
+          >
+            <Mic size="1rem" strokeWidth={2.6} />
+            {listening ? '聆聽中…放開結束' : '按住講話'}
+          </button>
+
+          <button
+            type="button"
+            onClick={reset}
+            disabled={picked.length === 0 && !heard}
+            aria-label="清空重算"
+            className={`flex-none rounded-[0.8125rem] px-4 py-3.5 transition-colors ${
+              picked.length === 0 && !heard
+                ? 'bg-[#f2f2f0] text-neutral-300'
+                : 'bg-[#f2f2f0] text-neutral-900 active:bg-[#e6e6e2]'
+            }`}
+          >
+            <RotateCcw size="1rem" strokeWidth={2.6} />
+          </button>
+        </div>
       </div>
     </div>
   );
