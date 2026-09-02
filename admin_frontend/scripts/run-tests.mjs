@@ -48,7 +48,7 @@ const DEFAULT_TARGETS = [
     { glob: 'src/utils/*.test.ts', min: 1, minTests: 23 },
     // 🔴 引擎副本的漂移守衛。**必須列進來** —— 這支是「會自己跑」的那道，
     //    沒進 DEFAULT_TARGETS 的話它跟不存在逐字相同（檔案在、內容對、從沒被執行）。
-    { glob: 'src/engine/*.test.ts', min: 1, minTests: 5 },
+    { glob: 'src/engine/*.test.ts', min: 1, minTests: 6 },
 ];
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

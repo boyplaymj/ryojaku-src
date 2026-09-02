@@ -24,6 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,6 +103,29 @@ test('每個副本檔案都存在，且 sha256 與證物相符', () => {
         [],
         `副本與 SYNC.sha256 對不上 —— 有人直接改了副本，或正典改了而沒重跑 sync_to_app.sh：\n` +
             mismatches.join('\n')
+    );
+});
+
+test('證物列的每個檔都真的進了版控（不是只躺在我的磁碟上）', () => {
+    // 🔴 這條是被咬過才長出來的（2026-09-02）：根 .gitignore 有一條 `vendor/`，
+    //    它把 engine 副本裡的 vendor/pinyin-pro.js 一起吃掉了。
+    //    後果不是「少一個檔」，是**本機每一項檢查都是綠的**（檔案在磁碟上，
+    //    sha256 對得上、build 過得去、測試全綠），而 CI／新 clone 上那個檔根本不存在。
+    //    ⇒ 「有寫進來」與「有進版控」是兩件事，而它們在本機的所有讀數上逐字相同。
+    //    frontend 那份當年是 git add -f 進去的，同一個坑第二次。
+    const rels = parseList().map((e) => e.rel);
+    const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', ...rels], {
+        cwd: ENGINE_DIR,
+        encoding: 'utf8',
+    });
+    // git 不在就 fail-closed：查不到不可以說成沒問題（「跳過」與「通過」不可同號）。
+    assert.ok(r.status !== null, `跑不動 git（${r.error?.message ?? '未知'}）—— 查不到不等於沒問題`);
+    assert.equal(
+        r.status,
+        0,
+        `證物列的檔有沒進版控的（最可能是被 .gitignore 吃掉，例如根目錄那條 vendor/）：\n` +
+            `${(r.stderr || '').trim()}\n` +
+            `修法：git add -f <那個檔>`
     );
 });
 
