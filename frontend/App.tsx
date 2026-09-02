@@ -22,6 +22,7 @@ import RateGame from './pages/RateGame';
 
 import RateUser from './pages/RateUser';
 import Ledger from './pages/Ledger';
+import TrainingVoiceTai from './pages/TrainingVoiceTai';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import { GroupEvent, User } from './types';
 import DailyBonusModal from './components/DailyBonusModal';
@@ -311,6 +312,7 @@ function App() {
 
                 <Route path="/rate-user" element={<RateUser />} />
                 <Route path="/ledger" element={<Ledger />} />
+                <Route path="/training/voice-tai" element={<TrainingVoiceTai />} />
               </Routes>
               {/* Daily Bonus Modal Overlay */}
               <DailyBonusModal
