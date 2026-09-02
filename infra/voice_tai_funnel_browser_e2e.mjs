@@ -167,6 +167,38 @@ const main = async () => {
     if (body.includes('語音報台')) ok('畫面上找得到「語音報台」（React 真的畫出來了，不是只有 bundle 載進來）');
     else no(`畫面上沒有「語音報台」。前 200 字：${JSON.stringify(body.slice(0, 200))}`);
 
+    // ── 空白狀態必須是屁胡 0 台（2026-09-02 gameboy 報的那個 bug）────────────
+    // 🔴 修正前線上是「1 台」（截圖 /tmp/ryojaku-d4g-e2e/2-voice-tai.png，15:33 那次）——
+    //    畫面用了 grandTotal（含底）。底不報語音，什麼都沒選就是屁胡 0 台。
+    // 🔴 選擇器找不到 ⇒ **rc=2（量不到）**，不進成敗：
+    //    「元素找不到」與「數字是錯的」處置完全不同，混在一起會把設備問題讀成產品缺陷。
+    const readTotal = () => page.evaluate(() => {
+      const big = [...document.querySelectorAll('div')].find(
+        (d) => typeof d.className === 'string' && d.className.includes('text-[2.75rem]'));
+      const btn = [...document.querySelectorAll('button')].find((b) => /確認送出/.test(b.textContent || ''));
+      return { big: big ? big.textContent.trim() : null, btn: btn ? btn.textContent.trim() : null };
+    });
+    const empty = await readTotal();
+    if (empty.big === null || empty.btn === null) {
+      die(`量不到畫面上的台數（大數字=${empty.big} 送出鈕=${empty.btn}）—— 選擇器過期了，這不是產品缺陷`);
+    }
+    if (empty.big === '0台') ok('空白狀態顯示 0 台（屁胡；底不報語音）');
+    else no(`空白狀態顯示「${empty.big}」而不是「0台」—— 畫面又用回含底的數字了`);
+    if (empty.btn === '確認送出 0 台') ok('送出鈕也是 0 台');
+    else no(`送出鈕是「${empty.btn}」而不是「確認送出 0 台」`);
+
+    // 非空的情形:整排一起差 1 是看不出來的,所以要挑一個知道答案的台種。
+    // 點不到一律當設備問題（同上），不當成產品缺陷。
+    try {
+      await page.locator('text=平胡').first().click({ timeout: 15000 });
+      await page.waitForTimeout(1200);
+      const one = await readTotal();
+      if (one.big === '2台') ok('點了「平胡」（2 台）後顯示 2 台，不是 3 台');
+      else no(`點了「平胡」後顯示「${one.big}」而不是「2台」`);
+    } catch (e) {
+      die(`點不到「平胡」那一格（${String(e.message).slice(0, 80)}）—— 設備問題，不是產品缺陷`);
+    }
+
     const after = rowsOf(userId);
     const opens = after.filter((i) => i.kind?.S === 'open');
     if (opens.length === 1) ok('進頁後恰好 1 筆 kind=open');
