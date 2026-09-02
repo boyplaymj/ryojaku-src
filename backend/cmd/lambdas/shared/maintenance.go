@@ -226,11 +226,56 @@ package shared
 //    **修法保住了 session，但沒有保住「使用者知道發生什麼事」**。已知、未修。
 //    （本項不影響本輪的主張 —— 主張是 session 不被清，那格是綠的。）
 //
+// 第七輪：公開 route 的 POST（同日）—— 而「登入照常可用」比檔頭寫的還成立
+//
+// 探針：infra/maintenance_public_routes_probe.sh（curl，rc 0/1/2）
+//       ＋ maintenance_browser_e2e.mjs 的 P7（瀏覽器裡從零登入）。
+// 前幾輪只打過 GET /app-version-config 一條，POST 那些一條都沒打過。
+//
+// 結構那一半（涵蓋全部 24 條，不是抽樣）：
+//   (a) `shared.IsMaintenanceMode` 的**生產呼叫端只有兩個**（grep，排除測試）：
+//       mahjongclub_authorizer/main.go:31、mahjongclub_chat_ws_send_message/main.go:61。
+//   (b) 對線上 REST API 逐 method 查：那 24 條的 authorizationType 全是 NONE。
+//   ⇒ 它們結構上不可能吐出 authorizer 的 Deny。
+//
+// 經驗那一半（判準是**403 且 x-amzn-errortype: AccessDeniedException**，
+// 不是「有沒有 403」—— handler 自己也會回 403，混在一起就分不出被誰擋的）：
+//
+//   量到 | 同一次翻轉的差分見證 ・GET /chat/rooms   → 403|AccessDeniedException
+//   量到 | 同上               ・GET /user-profile  → 403|AccessDeniedException
+//   量到 | 旗標 ON ・GET  /app-version-config       → 200
+//   量到 | 旗標 ON ・POST /app-login（合法帳密）    → **200**
+//   量到 | 旗標 ON ・POST /app-register（新帳號）   → **200**，帳號真的建立了
+//   量到 | 旗標 ON ・POST /auth/change-password     → 401（handler 拒 garbage token）
+//   量到 | 旗標 ON ・POST /auth/logout-all          → 401（同上）
+//   量到 | 旗標 ON ・POST /auth/unbind              → 401（同上）
+//   量到 | 旗標 ON ・POST /auth/forgot-password     → 200
+//   ⇒ 後四條都**不是** Deny ⇒ 維護中它們仍到得了 handler。
+//
+// 🔴 檔頭原本只點名「登入與註冊照常可用」（聽起來像好事）。同一批公開 route 裡還有
+//    change-password / logout-all / unbind —— **會改帳號狀態的操作**，緊急封鎖期間
+//    照樣打得進來。這不是 bug（沒掛 authorizer 就是沒有），但
+//    「kill switch 拉下去 ＝ 全站凍結」這個直覺是錯的。
+//
+// 🔴 而我對「維護中登入」的預測整個錯了，錯法值得留著：
+//    我讀了 authService.adoptSession（它打**受保護的** /user-profile）就推論
+//    「維護中登入會走進 catch、把半套 session 清掉」。實測 P7：使用者**完整登入成功**，
+//    三把鑰匙都拿到，全程沒有任何 /user-profile 呼叫。
+//    去讀 login 的定義才發現：`adoptSession` 只服務 **Google／LINE**；email/密碼走
+//    loginWithEmail，直接用 /app-login **回應裡自帶的 profile**（authService.ts:60），
+//    不打第二支 API ⇒ 整條路都在公開 route 上。
+//    ⇒ 我讀了「引用它的地方」就當成讀過「定義它的地方」。
+//    ⇒ Google／LINE 登入在維護中**預期**會失敗（機制已量到：/user-profile 回 Deny），
+//      但 adoptSession 的 catch 行為仍是**讀碼推論**，真跑一次要 OAuth，未實打。
+//
+// ⚠️ 使用者實際看到什麼（截圖存證）：維護中登入成功後落在**一個完全正常的首頁**——
+//    社群動態、發文框、底部導覽俱全，還印著「安全連線已啟動 • 2026/9/2」，
+//    零維護跡象。首頁餵的是公開 route（community-get-posts / user-info 等），
+//    所以它有內容；踩到那 24 條受保護 route 才 403，而 403 又被各頁面吞掉（見第六輪）。
+//    ⇒ 開關拉下去時，App 的**外觀是健康的**。這是這顆開關最容易被誤解的一點。
+//
 // 仍是推論（未實打，不要當成已驗）：
-//   - 公開 route 只打了 app-version-config（GET）；app-login／app-register（POST）未逐一打。
-//     ⚠️ 附帶一提，authService.adoptSession 登入後會打 /user-profile（**受保護**）⇒
-//     維護中「登入」這條路會走進它的 catch 把剛寫入的半套 session 清掉。那是新登入，
-//     不是既有 session，與本輪主張不衝突；但沒實打過，別當已驗。
+//   - Google／LINE 登入在維護中的實際行為（見上，需真 OAuth）。
 //   - 後台 UI 的按鈕本身沒點過：前面幾輪打的是它背後的 API。
 //   - 只驗了 REST。WS 既有連線那條見第四輪，client 端仍收不到任何提示。
 // ─────────────────────────────────────────────────────────────────────────────

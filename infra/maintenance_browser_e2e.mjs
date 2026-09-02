@@ -275,6 +275,67 @@ try {
   else fail('401 分支沒有 reload —— 兩條分支在這個維度上沒有差異，差分不乾淨');
   if (authWarns.length) console.log(`  旁證 console：${authWarns[authWarns.length - 1]}`);
 
+  // ── P7 維護中從零登入 ─────────────────────────────────────────────────
+  // 「API 端點通不通」與「產品用不用得了」是兩件事，本格量的是後者。
+  //
+  // 🔴 我原本預測這裡會失敗，理由是 authService.adoptSession 拿到 token 後會再打
+  //    **受保護的** GET /user-profile ⇒ 403 ⇒ throw 並清掉半套 session。實測打臉：
+  //    `adoptSession` 只服務 **Google／LINE** 登入；email/密碼走的是 loginWithEmail，
+  //    它直接用 /app-login **回應裡自帶的 profile**（authService.ts:60「response.user
+  //    || response.data」），**不打第二支 API**。⇒ 整條路都在公開 route 上。
+  //    教訓：我讀了 adoptSession 就假設它在登入路徑上，沒去讀 login 的定義。
+  //
+  // ⇒ 所以檔頭「登入照常可用」比它自己寫的還要成立：不只端點回 200，
+  //   **使用者可以在維護中完整登入並拿到 session**。
+  console.log('\n══ P7 維護中從零登入 —— 端點通了，然後呢 ══');
+  await page.unroute(`${API}/ledger?**`);
+  flagSet(true);
+  if (String(flagRead()).toLowerCase() !== 'true') die('P7：旗標沒寫進去');
+
+  const seen = [];
+  const tap = (r) => {
+    const u = r.url();
+    if (u.startsWith(`${API}/app-login`) || u.startsWith(`${API}/user-profile`)) {
+      seen.push(`${r.status()} ${r.request().method()} ${u.replace(API, '').split('?')[0]}`);
+    }
+  };
+  page.on('response', tap);
+  await page.goto(SITE, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForTimeout(2500);
+
+  const box7 = page.locator('input[type=email][placeholder="your@email.com"]');
+  if (await box7.count() === 0) die('P7：登入頁沒出現（P6 之後應該是登出狀態）');
+  await box7.first().fill(EMAIL);
+  await page.locator('input[type=password]').first().fill(PASSWORD);
+  await page.getByText('通行證核准', { exact: false }).first().click();
+  await page.waitForTimeout(8000);
+  page.off('response', tap);
+
+  console.log(`  觀察到的呼叫：${seen.join(' / ') || '(無)'}`);
+  const gotLogin200 = seen.some((x) => x.startsWith('200 POST /app-login'));
+  const gotProfile403 = seen.some((x) => x.startsWith('403 GET /user-profile'));
+  if (gotLogin200) ok('端點層：POST /app-login 在維護中回 200（公開 route 擋不到，宣稱成立）');
+  else fail(`端點層：沒觀察到 200 的 /app-login（${seen.join(' / ')}）`);
+  // 🔴 下面兩格是**斷言**不是警告：maintenance.go 第七輪把這個行為寫成了紀錄，
+  //    紀錄就得有人守。紅掉的意思是「文件的描述過期了，回去改它」，不是「產品壞了」。
+  if (!gotProfile403) {
+    ok('email/密碼登入全程沒打受保護的 /user-profile（profile 由 /app-login 自帶）');
+  } else {
+    fail('登入途中出現 /user-profile 403 —— 登入流程改成走 adoptSession 了，' +
+         'maintenance.go 第七輪的描述要重寫');
+  }
+
+  const s7 = await snapshot();
+  await page.screenshot({ path: SHOT_DIR + '/p7-login-during-maintenance.png', fullPage: true });
+  const body7 = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').trim();
+  if (s7.jwt && s7.user && s7.authType) {
+    ok('🔴 結果：維護中**可以完整登入**（三把鑰匙都拿到）—— 不只端點通，session 真的建立了');
+  } else {
+    fail(`維護中登不進去（jwt=${!!s7.jwt} user=${!!s7.user} authType=${JSON.stringify(s7.authType)}）` +
+         ` —— 與量到的行為相反，maintenance.go 第七輪的描述要重寫`);
+  }
+  console.log(`     使用者讀到：${JSON.stringify(body7.slice(0, 140))}`);
+
 } finally {
   console.log('\n══ 收尾 ══');
   try {
