@@ -5,11 +5,15 @@
 // /opt/sml/repo/tools/mahjong-tai/preview_voice_tai.html。
 //
 // 🔴 範圍：D4-a 修正盤 ＋ D4-b 麥克風 ＋ D4-c 訂正飛輪（POST /voice-corrections）。
-//    ⚠️ **本頁仍然沒有入口**（全專案沒有任何地方 navigate 到 /training/voice-tai）——
-//    入口位置卡在 §12 那條未拍板的「§6 宿主：放哪、要不要接 Ledger」，
-//    **不是忘了接**。在那之前它只能靠手打網址到達。
-//    （記在這裡是因為「模組寫好卻沒人叫」這種洞平常零徵兆 ——
-//     所有測試都會綠，而使用者數是 0，且那個 0 與「做了沒人愛用」長得一樣。）
+//    ✅ **入口已接**（2026-09-02 gameboy 拍板放 Ledger）：`pages/Ledger.tsx` 摘要卡下方
+//    那張「語音判台」卡片，`navigate('/training/voice-tai')`。
+//    ⚠️ **只有入口，沒有接資料** —— 判完不會寫進帳本（§6 待拍板那半仍未拍）。
+//    判錯的代價要留在「練習答錯」，不要變成「帳記錯」。
+//    ⚠️ Ledger 有 overlay 模式（Profile → LedgerOverlay，`fixed inset-0 z-[100]` portal），
+//    入口卡片因此**不能放在 Ledger 的 header** —— 那段 `!isOverlay` 才繪。
+//    （本段原本寫「本頁仍然沒有入口」。留著這句改寫是因為「模組寫好卻沒人叫」
+//     這種洞平常零徵兆 —— 所有測試都會綠，而使用者數是 0，
+//     且那個 0 與「做了沒人愛用」長得一樣。）
 //
 // 🔴 所有台數都走 utils/voiceTai.ts，本檔一個算術都不做 ——
 //    連莊的 2N+1 有個 tai_base，自己乘會少一台而且看起來合理（見那支檔頭）。

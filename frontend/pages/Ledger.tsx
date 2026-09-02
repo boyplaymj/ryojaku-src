@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Trash2, TrendingUp, TrendingDown, Calendar, ChevronLeft, ChevronRight, Plus, X, Search, Filter, Share2, Download, PieChart, List, CreditCard, Clock, MessageSquare, ChevronDown, Trophy, Target, Activity, Users, Info, ArrowLeft, ArrowRight, Wallet, CheckCircle, Save, Loader2, Sparkles, Smile, Meh, Frown, User as UserIcon, Layers, Coins, History } from 'lucide-react';
+import { Trash2, TrendingUp, TrendingDown, Calendar, ChevronLeft, ChevronRight, Plus, X, Search, Filter, Share2, Download, PieChart, List, CreditCard, Clock, MessageSquare, ChevronDown, Trophy, Target, Activity, Users, Info, ArrowLeft, ArrowRight, Wallet, CheckCircle, Save, Loader2, Sparkles, Smile, Meh, Frown, User as UserIcon, Layers, Coins, History, Mic } from 'lucide-react';
 import { api } from '../services/dataService';
 import { authService } from '../services/authService';
 import html2canvas from 'html2canvas';
@@ -574,6 +574,34 @@ const LedgerPage: React.FC<LedgerProps> = ({ isOverlay, onClose, onAddActionTrig
                     </div>
                 </div>
             </div>
+
+            {/* 語音判台入口（訓練工具）—— 只導頁，不接記帳資料。
+                🔴 放在這裡而不是 header：header 在 isOverlay 模式整段不算繪（Ledger 由
+                Profile 以 LedgerOverlay 開啟時走的就是那條路），入口會跟著消失。
+                正典 tools/mahjong-tai/DESIGN_APP.md §6／§11 待辦「入口放哪」。 */}
+            <button
+                onClick={() => {
+                    // overlay 是 fixed inset-0 z-[100] 的 portal，不關掉的話導頁後
+                    // 使用者只會看到蓋在上面的記帳本，像是按鈕沒反應。
+                    if (isOverlay && onClose) onClose();
+                    navigate('/training/voice-tai');
+                }}
+                className="w-full mb-3 flex items-center gap-4 bg-white rounded-lg border border-black/[0.03] shadow-sm px-5 py-4 text-left hover:shadow-md transition-all active:scale-[0.99]"
+            >
+                <div className="w-11 h-11 rounded-lg bg-neutral-900 flex items-center justify-center text-[#c5a059] flex-shrink-0">
+                    <Mic size="1.25rem" strokeWidth={2.5} />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                        <h3 className="text-[0.8125rem] font-black text-neutral-900 tracking-[0.1em]">語音判台</h3>
+                        <span className="text-[0.5rem] font-black text-[#c5a059] border border-[#c5a059]/30 px-1.5 py-0.5 rounded uppercase tracking-[0.2em]">訓練工具</span>
+                    </div>
+                    <p className="text-[0.6875rem] font-medium text-neutral-400 leading-relaxed">
+                        講出牌型直接算台數 · <span className="text-neutral-500">不會寫入帳本</span>
+                    </p>
+                </div>
+                <ChevronRight size="1.125rem" strokeWidth={2.5} className="text-neutral-300 flex-shrink-0" />
+            </button>
 
             <div className="flex items-center mb-3 overflow-x-auto scrollbar-hide py-1">
                 <div className="flex bg-white p-1.5 rounded-lg border border-black/[0.03] shadow-sm w-full">
