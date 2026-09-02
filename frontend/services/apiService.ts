@@ -7,6 +7,7 @@ import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
 import { clientPlatformHeader } from '../utils/clientPlatform';
 import type { CorrectionPayload } from '../utils/voiceCorrection';
+import type { MetricEventPayload } from '../utils/voiceTaiMetrics';
 import {
   MAINTENANCE_EVENT,
   MAINTENANCE_CLEAR_EVENT,
@@ -914,6 +915,20 @@ export async function claimPushBonus(userId: string) {
 //    payload 由 utils/voiceCorrection.ts 的 buildCorrection() 組，不要在這裡拼。
 
 export async function postVoiceCorrection(payload: CorrectionPayload) {
+  return apiRequest('/voice-corrections', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * 漏斗事件（D4-g）。**同一個端點、同一張表**，靠 payload 的 `kind` 區分。
+ *
+ * 🔴 刻意不開第二個端點：訂正是分子、事件是分母，兩者要能對得起來。
+ *    分兩條管道的話，「事件管道壞了」會長得像「沒人用」，而那正是本功能要消滅的誤讀。
+ *    附帶的好處是它們共用同一組 auth 與同一份護欄。
+ */
+export async function postVoiceTaiEvent(payload: MetricEventPayload) {
   return apiRequest('/voice-corrections', {
     method: 'POST',
     body: JSON.stringify(payload),

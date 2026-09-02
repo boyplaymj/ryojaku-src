@@ -20,6 +20,7 @@ import { grandTotal, totalTai, type FanTable } from './voiceTai.ts';
 import {
   currentIndexSize,
   ensureIndex,
+  micErrorCode,
   micErrorMessage,
   recognize,
   resetIndex,
@@ -139,4 +140,22 @@ test('D4b-11 麥克風錯誤訊息：認得的講人話，認不得的照實印�
   //    那會把「不給權限」和「沒聲音」講成同一句，而兩者的處置相反。
   assert.match(micErrorMessage('some-new-code'), /some-new-code/);
   assert.match(micErrorMessage(''), /沒有錯誤代碼/);
+});
+
+test('D4g-8 🔴 兩條路徑的錯誤代碼必須是同一套字彙', () => {
+  // getUserMedia 給 DOMException 名稱，Web Speech 給連字號代碼 —— 指的是同一件事。
+  assert.equal(micErrorCode('NotAllowedError'), 'not-allowed');
+  assert.equal(micErrorCode('SecurityError'), 'not-allowed');
+  assert.equal(micErrorCode('NotFoundError'), 'audio-capture');
+  assert.equal(micErrorCode('NotReadableError'), 'audio-capture');
+  assert.equal(micErrorCode('AbortError'), 'aborted');
+
+  // 🔴 翻完之後一定要接得上人話 —— 這條才是「使用者真的讀到什麼」。
+  //    實測（D4-g 收件端）翻譯之前顯示的是萬用分支「辨識錯誤：NotFoundError」。
+  assert.match(micErrorMessage(micErrorCode('NotAllowedError')), /權限/);
+  assert.match(micErrorMessage(micErrorCode('NotFoundError')), /找不到麥克風/);
+
+  // 🔴 認不得的原樣回傳，不吞成 not-allowed：吞掉的話，瀏覽器新增一種失敗原因時
+  //    後台看到的是「權限問題變多了」，而不是「有個沒見過的東西」。
+  assert.equal(micErrorCode('SomeFutureError'), 'SomeFutureError');
 });

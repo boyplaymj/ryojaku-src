@@ -50,7 +50,7 @@
 //   · 麥克風是**狀態切換、不是循環動畫**（禁做②：牌桌上很吵，
 //     回饋要靠狀態變化；`animate-pulse` 這類無條件循環動畫不得使用）
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, ChevronLeft, Mic, Minus, Plus, RotateCcw } from 'lucide-react';
 import fanTable from '../engine/mahjong-tai/fan_table.json';
@@ -66,7 +66,9 @@ import {
 } from '../utils/voiceTai';
 import { recognize, type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
 import { buildCorrection, nowTs, shouldUpload } from '../utils/voiceCorrection';
-import { postVoiceCorrection } from '../services/apiService';
+import { buildEvent, type MetricEventKind } from '../utils/voiceTaiMetrics';
+import type { AsrSettle } from '../hooks/useVoiceAsr';
+import { postVoiceCorrection, postVoiceTaiEvent } from '../services/apiService';
 
 const TABLE = fanTable as unknown as AsrFanTable;
 
@@ -79,6 +81,54 @@ const TrainingVoiceTai: React.FC = () => {
   const [submitted, setSubmitted] = useState(false);
 
   const pad = useMemo(() => buildPad(TABLE), []);
+
+  /**
+   * 漏斗事件（D4-g）。正典 DESIGN_APP.md §📈。
+   *
+   * 🔴 **fail-open 且不彈訊息** —— 這一條與送出訂正那條（submit）刻意不同：
+   *    訂正是使用者按了「確認送出」，他有權知道成敗；漏斗事件是**我們**要的資料，
+   *    為了它去打斷使用者是本末倒置。
+   *
+   * ⚠️ 但「不彈訊息」不等於「看不見」。事件與訂正走**同一個端點**，
+   *    所以「事件不見了而訂正還在」是查得出來的（同一組 auth、同一份護欄，
+   *    只有事件消失＝這裡出事，兩者一起消失＝端點或登入出事）。
+   *    另外留一行 console.warn，真機除錯時它是唯一的線索。
+   */
+  const sendEvent = useCallback((kind: MetricEventKind, asr?: AsrSettle) => {
+    try {
+      const payload = buildEvent({
+        kind,
+        ts: nowTs(Date.now()),
+        rulesetVersion: TABLE.meta?.version ?? 'unknown',
+        asr: asr ? { ok: asr.ok, track: asr.track, errorCode: asr.errorCode } : undefined,
+      });
+      void postVoiceTaiEvent(payload).catch((err) => {
+        console.warn('[voice-tai] 漏斗事件送不出去（不影響判台）:', kind, err);
+      });
+    } catch (err) {
+      // buildEvent 自己會擋壞掉的 ts／缺結果的 asr。走到這裡代表呼叫端寫錯了，
+      // 不是網路問題 —— 一樣不擋使用者，但要留痕。
+      console.warn('[voice-tai] 漏斗事件組不出來:', kind, err);
+    }
+  }, []);
+
+  /**
+   * 進到這一頁就記一筆。
+   *
+   * 🔴 沒有這一筆的話，「沒人點入口」與「點了但沒算完」在資料上**逐字相同**
+   *    （兩者都是 0 筆訂正）—— 而它們的處置完全不同：前者改入口位置，
+   *    後者修頁面或文案。這一筆就是那兩件事之間唯一的分界。
+   *
+   * ⚠️ ref 擋重複：index.tsx 有 React.StrictMode，開發模式下 effect 會跑兩次。
+   *    production build 不會，但依賴「正式環境剛好不會」去保證計數正確，
+   *    等於把一個量測的正確性交給一個 build 旗標。
+   */
+  const openSentRef = useRef(false);
+  useEffect(() => {
+    if (openSentRef.current) return;
+    openSentRef.current = true;
+    sendEvent('open');
+  }, [sendEvent]);
   const total = grandTotal(TABLE, sel);
   const picked = Object.keys(sel);
 
@@ -109,7 +159,16 @@ const TrainingVoiceTai: React.FC = () => {
   //    本頁只看得到一個統一介面。會判錯而且錯了不會有東西轉紅的那些判斷
   //    （選哪一軌、原生 partial 是取代而 web final 是累加）已經挖到
   //    utils/asrTrack.ts 並有測試守著 —— 不要把它們搬回這裡。
-  const asr = useVoiceAsr(analyze);
+  /**
+   * 一次按壓結束（成功或失敗都要記）。
+   *
+   * 🔴 這裡分的是「不想用」與「用不了」。只有 open 與 correction 兩個載體的話，
+   *    「進了頁面卻沒有訂正」有兩種完全不同的原因：他看了看就走（產品問題），
+   *    或者他講了但麥克風沒權限／沒聽到（技術問題）。混在一起會修錯東西。
+   */
+  const onAsrSettle = useCallback((s: AsrSettle) => sendEvent('asr', s), [sendEvent]);
+
+  const asr = useVoiceAsr(analyze, onAsrSettle);
   const listening = asr.listening;
   const supported = asr.track !== 'none';
 

@@ -27,7 +27,7 @@ import {
   reduceWebFinal,
   type AsrTrack,
 } from '../utils/asrTrack';
-import { micErrorMessage } from '../utils/voiceTaiAsr';
+import { micErrorCode, micErrorMessage } from '../utils/voiceTaiAsr';
 
 /** Web Speech 的最小型別（這個環境沒有官方型別，只宣告我們真的用到的部分）。 */
 interface SpeechRecognitionLike {
@@ -56,6 +56,20 @@ function webSpeechCtor(): (new () => SpeechRecognitionLike) | null {
     | null;
 }
 
+/**
+ * 一次按壓的結果（D4-g 漏斗埋點）。
+ *
+ * 🔴 `errorCode` 是**代碼**不是畫面上那句中文。用顯示訊息當指標＝用外觀定址：
+ *    文案改一個字，指標就靜靜地換一個分類，而不會有任何東西轉紅。
+ *    代碼的來源是 Web Speech 的 `e.error`／`getUserMedia` 的 `err.name`／
+ *    我們自己給的幾個（`no-speech`／`init-failed`／`start-failed`／`stop-failed`）。
+ */
+export interface AsrSettle {
+  ok: boolean;
+  track: AsrTrack;
+  errorCode?: string;
+}
+
 export interface VoiceAsr {
   /** 這個環境走哪一軌。`none` ⇒ UI 要講清楚是環境不支援，不是壞了。 */
   track: AsrTrack;
@@ -72,7 +86,15 @@ export interface VoiceAsr {
 /**
  * @param onFinal 講完之後拿到的完整文字。空字串不會呼叫（那是「沒聽到」）。
  */
-export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
+/**
+ * @param onFinal 講完之後拿到的完整文字。空字串不會呼叫（那是「沒聽到」）。
+ * @param onSettle 一次按壓結束時回報成敗（成功也會叫）。
+ *   🔴 **每一條會結束這次嘗試的路徑都要叫到它**，包含那些**根本走不到 `finish()`**
+ *      的早退：權限被拒、原生 `start()` 拋、初始化失敗。少叫任何一條，
+ *      那一類失敗就會從漏斗裡消失 —— 而它消失的樣子是「使用者沒有嘗試」，
+ *      正好是本功能要分辨的兩件事之一。
+ */
+export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrSettle) => void): VoiceAsr {
   const [track] = useState<AsrTrack>(() =>
     pickAsrTrack({
       isNative: Capacitor.isNativePlatform(),
@@ -93,12 +115,43 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
   const micGrantedRef = useRef(false);
   const onFinalRef = useRef(onFinal);
   onFinalRef.current = onFinal;
+  const onSettleRef = useRef(onSettle);
+  onSettleRef.current = onSettle;
+  const trackRef = useRef(track);
+  trackRef.current = track;
+  // 一次按壓只回報一次。web 軌的 onerror 後面還會來一個 onend → finish()，
+  // 沒有這道旗標的話同一次失敗會被記成兩筆（而且第二筆的原因是 no-speech，
+  // 把真正的原因稀釋掉）。
+  const settledRef = useRef(false);
+
+  const settle = useCallback((ok: boolean, errorCode?: string) => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onSettleRef.current?.({ ok, track: trackRef.current, errorCode });
+  }, []);
+
+  /** 設錯誤訊息 ＋ 記一筆失敗。兩件事一定要一起做，分開寫就會漏掉其中一半。 */
+  const fail = useCallback(
+    (code: string, message: string) => {
+      setError(message);
+      settle(false, code);
+    },
+    [settle],
+  );
 
   const finish = useCallback(() => {
     const text = textRef.current.trim();
-    if (text) onFinalRef.current(text);
-    else setError((e) => e || '沒聽到內容，再試一次。');
-  }, []);
+    if (text) {
+      onFinalRef.current(text);
+      settle(true);
+      return;
+    }
+    setError((e) => e || '沒聽到內容，再試一次。');
+    // 🔴 這裡用 settle 而不是 fail：錯誤訊息要保留「先發生的那個原因」
+    //    （setError 的 updater 形式就是為了這個），但成敗一定要記。
+    //    走到這裡而 settledRef 已經是 true，代表原因更早就記過了。
+    settle(false, 'no-speech');
+  }, [settle]);
 
   // ── Web 軌 ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -115,7 +168,7 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
       setListening(true);
       setError('');
     };
-    rec.onerror = (e) => setError(micErrorMessage(e.error));
+    rec.onerror = (e) => fail(e.error || 'unknown', micErrorMessage(e.error));
     rec.onresult = (e) => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -142,7 +195,7 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
       }
       webRecRef.current = null;
     };
-  }, [track, finish]);
+  }, [track, finish, fail]);
 
   // ── 原生軌 ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -170,7 +223,7 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
         }
         handles.push(partialH, stateH);
       } catch (err) {
-        setError(nativeErrorMessage(String(err)) ?? `語音辨識初始化失敗：${String(err)}`);
+        fail('init-failed', nativeErrorMessage(String(err)) ?? `語音辨識初始化失敗：${String(err)}`);
       }
     })();
 
@@ -182,7 +235,7 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
         /* 本來就沒在聽 */
       });
     };
-  }, [track, finish]);
+  }, [track, finish, fail]);
 
   /**
    * Web 軌用：iOS Safari 直接 rec.start() 會丟 not-allowed 且**不跳權限對話框**，
@@ -201,15 +254,19 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
       micGrantedRef.current = true;
       return true;
     } catch (err) {
-      setError(micErrorMessage((err as { name?: string })?.name || 'not-allowed'));
+      // 🔴 先翻成 Web Speech 的字彙再用：兩條路徑的代碼必須是同一套，
+      //    否則畫面顯示萬用訊息、指標也會分裂成兩半（見 micErrorCode 的說明）。
+      const code = micErrorCode((err as { name?: string })?.name || 'NotAllowedError');
+      fail(code, micErrorMessage(code));
       return false;
     }
-  }, []);
+  }, [fail]);
 
   const start = useCallback(() => {
     if (listeningRef.current) return;
     pressedRef.current = true;
     textRef.current = '';
+    settledRef.current = false; // 新的一次按壓＝新的一次嘗試
     setPartial('');
     setError('');
 
@@ -234,7 +291,7 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
           if (perm.speechRecognition !== 'granted') {
             const asked = await SpeechRecognition.requestPermissions();
             if (asked.speechRecognition !== 'granted') {
-              setError('沒有語音辨識權限。請到系統設定裡允許這個 App 使用麥克風與語音辨識。');
+              fail('not-allowed', '沒有語音辨識權限。請到系統設定裡允許這個 App 使用麥克風與語音辨識。');
               return;
             }
           }
@@ -247,13 +304,13 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
             popup: false,
           });
         } catch (err) {
-          setError(nativeErrorMessage(String(err)) ?? `辨識啟動失敗：${String(err)}`);
+          fail('start-failed', nativeErrorMessage(String(err)) ?? `辨識啟動失敗：${String(err)}`);
           listeningRef.current = false;
           setListening(false);
         }
       })();
     }
-  }, [track, ensureWebMic]);
+  }, [track, ensureWebMic, fail]);
 
   const stop = useCallback(() => {
     pressedRef.current = false;
@@ -263,10 +320,10 @@ export function useVoiceAsr(onFinal: (text: string) => void): VoiceAsr {
     } else if (track === 'native') {
       // 原生的收尾走 'listeningState' 事件（status: 'stopped'），finish() 在那裡呼叫。
       SpeechRecognition.stop().catch((err) => {
-        setError(nativeErrorMessage(String(err)) ?? `停止失敗：${String(err)}`);
+        fail('stop-failed', nativeErrorMessage(String(err)) ?? `停止失敗：${String(err)}`);
       });
     }
-  }, [track]);
+  }, [track, fail]);
 
   const clear = useCallback(() => {
     textRef.current = '';

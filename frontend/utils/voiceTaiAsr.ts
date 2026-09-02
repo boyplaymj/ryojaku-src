@@ -147,6 +147,40 @@ export function recognize(table: AsrFanTable, rawText: string): Heard {
  *    和「沒聽到聲音」講成同一句話，而這兩者的處置完全相反。
  *    認不得的 code 照實印出來，讓回報的人講得出是哪一種。
  */
+/**
+ * 把 `getUserMedia` 丟出來的 DOMException 名稱翻成 **Web Speech 的錯誤代碼字彙**。
+ *
+ * 🔴 這支存在的理由是量出來的（D4-g，2026-09-02 收件端實測）：
+ *    麥克風授權失敗時 `ensureWebMic` 拿到的是 `err.name`（`NotAllowedError`／
+ *    `NotFoundError`／…），而 `SpeechRecognition.onerror` 給的是
+ *    `not-allowed`／`audio-capture`／…。兩者**指的是同一件事、寫法完全不同**。
+ *
+ *    兩個後果，第二個比第一個嚴重：
+ *    ① 畫面上顯示的是 `micErrorMessage` 的萬用分支「辨識錯誤：NotFoundError」，
+ *       而不是那句寫好的「沒有麥克風權限。請在瀏覽器允許…」——實測到的就是這句。
+ *    ② D4-g 的 `asrError` 指標會**同時存在兩套字彙**：後台聚合時
+ *       `not-allowed` 與 `NotAllowedError` 會被算成兩種不同的失敗原因，
+ *       每一種都只有真實數量的一半。而它不會報錯，只會讓每一格都變小。
+ *
+ * ⚠️ 認不得的名稱**原樣回傳**，不吞成 `not-allowed`：吞掉的話，
+ *    瀏覽器新增一種失敗原因時我們會看到「權限問題變多了」而不是「有個沒見過的東西」。
+ */
+export function micErrorCode(name: string): string {
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'not-allowed';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+    case 'NotReadableError':
+      return 'audio-capture';
+    case 'AbortError':
+      return 'aborted';
+    default:
+      return name;
+  }
+}
+
 export function micErrorMessage(code: string): string {
   switch (code) {
     case 'not-allowed':
