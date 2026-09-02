@@ -4,12 +4,12 @@
 // 視覺經 gameboy 確認（§9 目視 gate，2026-09-02），參考預覽
 // /opt/sml/repo/tools/mahjong-tai/preview_voice_tai.html。
 //
-// 🔴 範圍：D4-a 修正盤（可點、可 ±、合計即時算）＋ D4-b 麥克風與語音辨識。
-//    飛輪上傳（POST /voice-corrections）仍在 D4-c。
-//    ⚠️ 本頁**目前沒有入口**（沒有任何地方 navigate 到 /training/voice-tai）——
-//    這是刻意的中間狀態，不是忘了接：入口與飛輪一起在 D4-c 落地。
-//    在那之前它只能靠手打網址到達，所以不會有使用者撞到半成品。
-//    （記在這裡是因為「模組寫好卻沒人叫」這種洞平常零徵兆。）
+// 🔴 範圍：D4-a 修正盤 ＋ D4-b 麥克風 ＋ D4-c 訂正飛輪（POST /voice-corrections）。
+//    ⚠️ **本頁仍然沒有入口**（全專案沒有任何地方 navigate 到 /training/voice-tai）——
+//    入口位置卡在 §12 那條未拍板的「§6 宿主：放哪、要不要接 Ledger」，
+//    **不是忘了接**。在那之前它只能靠手打網址到達。
+//    （記在這裡是因為「模組寫好卻沒人叫」這種洞平常零徵兆 ——
+//     所有測試都會綠，而使用者數是 0，且那個 0 與「做了沒人愛用」長得一樣。）
 //
 // 🔴 所有台數都走 utils/voiceTai.ts，本檔一個算術都不做 ——
 //    連莊的 2N+1 有個 tai_base，自己乘會少一台而且看起來合理（見那支檔頭）。
@@ -48,7 +48,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Mic, Minus, Plus, RotateCcw } from 'lucide-react';
+import { Check, ChevronLeft, Mic, Minus, Plus, RotateCcw } from 'lucide-react';
 import fanTable from '../engine/mahjong-tai/fan_table.json';
 import { useVoiceAsr } from '../hooks/useVoiceAsr';
 import {
@@ -61,6 +61,8 @@ import {
   type Selection,
 } from '../utils/voiceTai';
 import { recognize, type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
+import { buildCorrection, nowTs, shouldUpload } from '../utils/voiceCorrection';
+import { postVoiceCorrection } from '../services/apiService';
 
 const TABLE = fanTable as unknown as AsrFanTable;
 
@@ -69,6 +71,8 @@ const TrainingVoiceTai: React.FC = () => {
   const [sel, setSel] = useState<Selection>({});
   const [heard, setHeard] = useState<Heard | null>(null);
   const [notice, setNotice] = useState('');
+  const [sending, setSending] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const pad = useMemo(() => buildPad(TABLE), []);
   const total = grandTotal(TABLE, sel);
@@ -79,6 +83,9 @@ const TrainingVoiceTai: React.FC = () => {
     try {
       const h = recognize(TABLE, text);
       setHeard(h);
+      // 新的一次辨識＝新的一局，上一局的「已送出」不算數
+      // （否則講第二局時按鈕還停在「已送出」，那一局永遠送不出去）。
+      setSubmitted(false);
       if (h.ids.length === 0) {
         // 🔴 「聽到了但沒有台種」與「沒聽到」要分開講 —— 前者是講法不在詞庫裡
         //    （使用者該做的是用下面的格子補），後者是再講一次。
@@ -117,10 +124,58 @@ const TrainingVoiceTai: React.FC = () => {
     })
     .join(' ＋ ');
 
+  /**
+   * 任何對選取的改動都要解除「已送出」狀態。
+   *
+   * 🔴 少了這一層的話：使用者送出 → 發現漏了一台 → 補上 → **再也送不出去**，
+   *    而按鈕上寫著「已送出」，看起來完全正常。
+   *    而且那一筆訂正（正是最有價值的那種：他真的改了東西）永遠不會被記錄到。
+   */
+  const updateSel = useCallback((fn: (s: Selection) => Selection) => {
+    setSel(fn);
+    setSubmitted(false);
+  }, []);
+
+  /**
+   * 確認送出 → 記一筆訂正資料（§4）。
+   *
+   * 🔴 **沒有訂正也要送**（§4.4）：`hadDiff=false` 的紀錄是準確度的分母。
+   *    只送有差異的話，「訂正筆數 = 0」同時代表「判得很準」與「根本沒人用」。
+   *    ⚠️ 設計冊 §4.1 寫的「沒有差異就不送」是錯的，見 utils/voiceCorrection.ts 檔頭。
+   *
+   * 🔴 **fail-open，但不靜默**：飛輪是我們要的東西，不是使用者要的。
+   *    上傳失敗不可以擋住他繼續算下一局 —— 但也不可以假裝成功，
+   *    否則「沒人用」與「上傳壞了」在資料上會長得一模一樣（正是 §4.4 要避免的）。
+   */
+  const submit = async () => {
+    if (sending) return;
+    setSending(true);
+    setNotice('');
+    try {
+      const payload = buildCorrection({
+        heard: heard ?? { raw: '', normalized: '', leftover: '', ignored: [], sel: {}, ids: [] },
+        sel,
+        ts: nowTs(Date.now()),
+        rulesetVersion: TABLE.meta?.version ?? 'unknown',
+      });
+      if (shouldUpload(payload)) await postVoiceCorrection(payload);
+      setSubmitted(true);
+      setNotice('已記錄，謝謝 —— 這會讓之後判得更準。');
+    } catch (err) {
+      setNotice(
+        `送出失敗（${err instanceof Error ? err.message : String(err)}）。` +
+          '台數還是對的，可以繼續用；這一筆訂正沒有記錄到。',
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
   const reset = () => {
     setSel({});
     setHeard(null);
     setNotice('');
+    setSubmitted(false);
     asr.clear(); // 麥克風層的殘留（上一次的即時文字與錯誤）也要一起清
   };
 
@@ -239,7 +294,7 @@ const TrainingVoiceTai: React.FC = () => {
                   >
                     <button
                       type="button"
-                      onClick={() => setSel((s) => toggle(TABLE, s, fan.id))}
+                      onClick={() => updateSel((s) => toggle(TABLE, s, fan.id))}
                       aria-pressed={on}
                       className="w-full px-1 py-2 active:scale-[0.97] transition-transform"
                     >
@@ -269,7 +324,7 @@ const TrainingVoiceTai: React.FC = () => {
                         <button
                           type="button"
                           aria-label={`${fan.name} 減一份`}
-                          onClick={() => setSel((s) => step(TABLE, s, fan.id, -1))}
+                          onClick={() => updateSel((s) => step(TABLE, s, fan.id, -1))}
                           className="flex-1 flex justify-center py-1 text-white/90 active:bg-black/10"
                         >
                           <Minus size="0.875rem" strokeWidth={3} />
@@ -278,7 +333,7 @@ const TrainingVoiceTai: React.FC = () => {
                         <button
                           type="button"
                           aria-label={`${fan.name} 加一份`}
-                          onClick={() => setSel((s) => step(TABLE, s, fan.id, 1))}
+                          onClick={() => updateSel((s) => step(TABLE, s, fan.id, 1))}
                           className="flex-1 flex justify-center py-1 text-white/90 active:bg-black/10"
                         >
                           <Plus size="0.875rem" strokeWidth={3} />
@@ -306,6 +361,26 @@ const TrainingVoiceTai: React.FC = () => {
             用 Chrome、Edge，或直接用両雀 App 都可以講話；在這裡仍可以直接點格子算台。
           </div>
         )}
+
+        {/* 確認送出（§9：底部固定的送出列）。
+            🔴 沒有自動送出倒數（§9 禁做③）—— 判錯多算 8 台的情境下，
+               倒數會把錯誤送出去。送出永遠是使用者按下去的。
+            ⚠️ 誠實一點：v1 沒有接 Ledger，所以「送出」對使用者**沒有可見效果** ——
+               它記的是訂正資料（給我們改進判台用）。按鈕文案與送出後的訊息
+               都照這個事實寫，不要做成「已完成結算」那種暗示。 */}
+        <button
+          type="button"
+          onClick={submit}
+          disabled={sending || submitted || (picked.length === 0 && !heard)}
+          className={`w-full mb-2 rounded-[0.8125rem] py-3 text-[0.875rem] font-black tracking-wide flex items-center justify-center gap-2 transition-colors ${
+            sending || submitted || (picked.length === 0 && !heard)
+              ? 'bg-[#f2f2f0] text-neutral-300'
+              : 'bg-[#c5a059] text-white active:bg-[#b08d4a]'
+          }`}
+        >
+          <Check size="1rem" strokeWidth={2.8} />
+          {sending ? '送出中…' : submitted ? '已送出' : `確認送出 ${total} 台`}
+        </button>
 
         <div className="flex items-center gap-2">
           <button

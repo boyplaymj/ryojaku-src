@@ -48,6 +48,14 @@ export interface FanTable {
   categories?: string[];
   fans: Fan[];
   config?: { base_di?: number };
+  /**
+   * 表自身的版本（`meta.version`，現為 `0.1.0`）。訂正飛輪每筆都要送
+   * `rulesetVersion`（§4.2）—— 後台要知道「這筆訂正是對哪一版台數表做的」，
+   * 否則家規改過之後，舊的訂正會被拿去修正新的表。
+   * ⚠️ optional：拿不到時呼叫端送 `'unknown'`，不要送空字串（空字串會讓
+   * 「沒帶版本」與「版本是空的」在後台長得一樣）。
+   */
+  meta?: { version?: string };
 }
 
 /** id → 份數。份數恆 ≥ 1；不在表裡＝沒選。非 per_unit 的台種恆為 1。 */

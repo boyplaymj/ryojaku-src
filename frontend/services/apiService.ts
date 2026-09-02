@@ -6,6 +6,7 @@ import { Capacitor } from '@capacitor/core';
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
 import { clientPlatformHeader } from '../utils/clientPlatform';
+import type { CorrectionPayload } from '../utils/voiceCorrection';
 import {
   MAINTENANCE_EVENT,
   MAINTENANCE_CLEAR_EVENT,
@@ -900,6 +901,22 @@ export async function claimPushBonus(userId: string) {
   return apiRequest('/claim-push-bonus', {
     method: 'POST',
     body: JSON.stringify({ userId }),
+  });
+}
+
+// ============ 語音判台：訂正飛輪（D4-c）============
+// 正典 /opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §4。後端 auth: user
+// ⇒ apiRequest 會自動帶 Authorization，未登入時後端回 401。
+//
+// 🔴 **每次送出都要呼叫，包含使用者沒有訂正的那些**（§4.4）。
+//    只送有差異的話，「訂正筆數 = 0」同時代表「判得很準」與「根本沒人用」，
+//    而這兩件事的處置完全相反 —— hadDiff=false 的紀錄就是準確度的分母。
+//    payload 由 utils/voiceCorrection.ts 的 buildCorrection() 組，不要在這裡拼。
+
+export async function postVoiceCorrection(payload: CorrectionPayload) {
+  return apiRequest('/voice-corrections', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 
