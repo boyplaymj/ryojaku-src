@@ -148,7 +148,16 @@ export function totalTai(table: FanTable, sel: Selection): number {
   return Object.entries(sel).reduce((s, [id, units]) => s + taiOf(table, id, units), 0);
 }
 
-/** 含底的合計（畫面上顯示的那個數字）。 */
+/**
+ * 含底的合計。
+ *
+ * 🔴 **畫面上不顯示這個。** 2026-09-02 gameboy 定案：報台報的是純台數，
+ * 「什麼都沒選是屁胡 0 台，1 台不是底 —— 底不會報語音」。
+ * 這支留著是因為「純 vs 含底」的區別是真的（結算要用），而且測試靠它釘住那個區別；
+ * 但**任何要顯示給使用者的地方都用 `totalTai`**。
+ * ⚠️ 本行原本寫「（畫面上顯示的那個數字）」—— 那句話正是 D4-a 把它接進畫面的理由。
+ * 註解說錯一次，錯的接線就會長回來。
+ */
 export function grandTotal(table: FanTable, sel: Selection): number {
   return totalTai(table, sel) + (table.config?.base_di ?? 0);
 }

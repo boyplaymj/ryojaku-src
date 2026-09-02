@@ -89,6 +89,32 @@ test('空盤：純台數 0，含底 = 底本身', () => {
   assert.equal(grandTotal(TABLE, {}), TABLE.config?.base_di);
 });
 
+// 🔴 這兩條釘的是**畫面用哪一支**，不是函式算得對不對。
+//    上面那兩條測試從 D4-a 起就一直是綠的，而畫面整整多顯示 1 台 ——
+//    因為沒有任何一條測試碰過「TrainingVoiceTai.tsx 呼叫的是誰」。
+//    2026-09-02 gameboy 報：「什麼都沒選是屁胡 0 台，1 台不是底，底不會報語音」。
+//    ⚠️ 這是掃原始碼的守衛，不是行為測試 —— 前端沒有 DOM runner，
+//      而「頁面顯示什麼」這件事在這個專案裡目前只有這一種載體。
+const PAGE = readFileSync(new URL('../pages/TrainingVoiceTai.tsx', import.meta.url), 'utf8');
+
+test('報台頁不可以顯示含底的數字（底不報語音）', () => {
+  const hits = PAGE.split('\n')
+    .map((l, i) => [i + 1, l] as const)
+    .filter(([, l]) => /\bgrandTotal\b/.test(l) && !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*'));
+  assert.deepEqual(
+    hits.map(([n, l]) => `${n}: ${l.trim()}`),
+    [],
+    '報台頁引用了 grandTotal ⇒ 畫面會多顯示一個底。' +
+      '空白狀態會變成「1 台」（看起來像已經選了什麼，不像算錯），' +
+      '有選的時候整排一起差 1，沒有任何一格看起來突兀。'
+  );
+});
+
+test('【正控】而且它真的有在顯示台數（不是連 totalTai 一起被拿掉）', () => {
+  // 少了這條，「畫面改用純台數」與「畫面根本不顯示台數了」在上一條測試上逐字相同。
+  assert.match(PAGE, /totalTai\(TABLE, sel\)/, '報台頁應該用 totalTai 算要顯示的台數');
+});
+
 test('點一下加入、再點一下移除', () => {
   let sel: Selection = {};
   sel = toggle(TABLE, sel, 'menqing');

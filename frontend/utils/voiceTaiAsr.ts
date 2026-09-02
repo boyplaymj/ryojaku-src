@@ -111,7 +111,8 @@ export function currentIndexSize(): number {
  *    這兩種在 normalizedText 上都是空字串，退回原文對前者無害、對後者也只是照樣沒命中。
  *
  * 🔴 台數不在這裡算。hits 裡的 `tai` 是引擎當時算的值，一律丟掉，
- *    畫面上的台數只由 voiceTai.ts 的 taiOf/grandTotal 算（fromHits 的檔頭同一條）。
+ *    畫面上的台數只由 voiceTai.ts 的 taiOf/totalTai 算（fromHits 的檔頭同一條）。
+ *    ⚠️ 2026-09-02 訂正：本行原本寫 grandTotal —— 那是含底的,而報台報純台數。
  *    否則同一個台種會有兩個台數來源，分岔時不會有任何東西轉紅。
  */
 export function recognize(table: AsrFanTable, rawText: string): Heard {

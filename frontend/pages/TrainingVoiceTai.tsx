@@ -58,8 +58,8 @@ import { useVoiceAsr } from '../hooks/useVoiceAsr';
 import {
   buildPad,
   fanById,
-  grandTotal,
   step,
+  totalTai,
   taiOf,
   toggle,
   type Selection,
@@ -129,7 +129,14 @@ const TrainingVoiceTai: React.FC = () => {
     openSentRef.current = true;
     sendEvent('open');
   }, [sendEvent]);
-  const total = grandTotal(TABLE, sel);
+  // 🔴 **純台數，不含底**（2026-09-02 gameboy 定案：「什麼都沒選是屁胡 0 台，
+  //    1 台不是底 —— 底不會報語音」）。
+  //    原本這裡是 `grandTotal`（＝純台數 ＋ `config.base_di`），於是**每一個讀數都多 1 台**：
+  //    什麼都沒選顯示「1 台」、選了莊家（1 台）顯示「2 台」。
+  //    ⚠️ 它壞得很安靜 —— 空白狀態那個「1 台」看起來像「已經選了什麼」而不像算錯，
+  //    而有選的時候整排一起差 1，沒有任何一格看起來突兀。
+  //    ⚠️ 這個錯**沒有污染飛輪資料**：送出的 payload 只帶 heard/sel，不帶台數。
+  const total = totalTai(TABLE, sel);
   const picked = Object.keys(sel);
 
   /** 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。 */
@@ -287,9 +294,7 @@ const TrainingVoiceTai: React.FC = () => {
                 或直接點格子自己算
               </>
             ) : (
-              <span className="text-neutral-900 break-words">
-                {breakdown} ＋ 底 {TABLE.config?.base_di ?? 0}
-              </span>
+              <span className="text-neutral-900 break-words">{breakdown}</span>
             )}
           </div>
           <div className="flex-none text-right">
