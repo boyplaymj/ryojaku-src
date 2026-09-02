@@ -51,7 +51,8 @@ const MIN = [22, 18, 0];
 //      在那上面訂緊下限只會製造假警報，而假警報訓練出來的忽略是不可逆的 ⇒ 只守「沒有歸零」。
 const DEFAULT_TARGETS = [
     { glob: 'utils/*.test.ts', min: 3, minTests: 20 },
-    { glob: 'engine/*.test.ts', min: 1, minTests: 4 },
+    // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）
+    { glob: 'engine/*.test.ts', min: 2, minTests: 9 },
 ];
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
