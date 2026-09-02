@@ -87,10 +87,12 @@ test('D4c-5 payload 逐欄對齊後端 CorrectionRequest', () => {
     ts: 1756800000,
     rulesetVersion: '0.1.0',
   });
-  // 後端 main.go:46-58 的欄位全集。少一欄後端不會報錯（Go 的 zero value），
+  // 後端 main.go 的欄位全集。少一欄後端不會報錯（Go 的 zero value），
   // 只會靜靜地存進一個空值 ⇒ 這裡逐欄釘住。
+  // ⚠️ `kind` 是 D4-g 加的。**多送**一欄後端也不會報錯（Go 忽略不認得的欄位）——
+  //    所以前端先上、後端後上的中間態是安全的，但那段期間 kind 會被丟掉。
   assert.deepEqual(Object.keys(p).sort(), [
-    'added', 'corrected', 'engineVersion', 'hadDiff', 'normalizedText',
+    'added', 'corrected', 'engineVersion', 'hadDiff', 'kind', 'normalizedText',
     'parsed', 'removed', 'rulesetVersion', 'text', 'ts', 'unmatched',
   ]);
   assert.equal(p.text, '拉三元', 'text 是 ASR 原文，不是校正後的');

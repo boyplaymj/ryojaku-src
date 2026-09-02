@@ -51,6 +51,15 @@ export interface CorrectionInput {
 
 /** 與後端 CorrectionRequest 逐欄對齊（main.go:46-58）。 */
 export interface CorrectionPayload {
+  /**
+   * 這一列是什麼（D4-g）。訂正列一律 `'correction'`。
+   *
+   * 🔴 **一定要顯式送**，即使後端把「缺欄」也當成 correction。
+   *    缺欄的預設值是為了**既有資料**（D4-c 上線到現在寫下的那些沒有這個欄位），
+   *    不是給新程式偷懶用的 —— 讓每一列自己說明自己是什麼，
+   *    後台才不必靠「有沒有 text」這種間接證據去猜。
+   */
+  kind: 'correction';
   text: string;
   normalizedText: string;
   parsed: string[];
@@ -96,6 +105,7 @@ export function buildCorrection(input: CorrectionInput): CorrectionPayload {
   });
 
   return {
+    kind: 'correction',
     text: rec.text,
     normalizedText: input.heard.normalized,
     parsed: rec.parsed,
