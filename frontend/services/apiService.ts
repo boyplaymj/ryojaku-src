@@ -2,8 +2,10 @@
 // API Service for MahjongClub App
 // Based on LineBot/websites/mahjongclub-web/src/utils/api.js
 
+import { Capacitor } from '@capacitor/core';
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
+import { clientPlatformHeader } from '../utils/clientPlatform';
 import {
   MAINTENANCE_EVENT,
   MAINTENANCE_CLEAR_EVENT,
@@ -49,7 +51,12 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
     headers: {
       'Content-Type': 'application/json',
       'X-App-Version': APP_VERSION,
-      'X-Platform': 'Web',
+      // 🔴 這裡原本是寫死的 'Web'。後端一直在收這個 header、DDB 也一直有
+      //    platform 欄位，所以那份資料**看起來像是已經在回答「誰用哪個殼」** ——
+      //    而「使用者全是 Web」這個讀數，在一半使用者用 App 殼的世界裡逐字相同。
+      //    ⚠️ 拿不到平台時送的是 'unknown' 不是空字串（後端對空值會跳過整個欄位的
+      //    更新 ⇒ 舊的 'Web' 會原封留著）。理由見 utils/clientPlatform.ts 檔頭。
+      'X-Platform': clientPlatformHeader(Capacitor.getPlatform()),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...options.headers,
     },
