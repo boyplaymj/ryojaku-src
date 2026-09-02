@@ -159,7 +159,13 @@ try {
   await page.waitForTimeout(6000);
 
   const s0 = await snapshot();
-  if (!s0.jwt || !s0.user) die(`登入沒成功（jwt=${!!s0.jwt} user=${!!s0.user}）—— 帳密錯或站台壞了`);
+  // 🔴 三把都要求，不是兩把。少了 authType 這格，它從頭到尾是 null 時 P3 的
+  // 「逐字未變」會拿 null === null 比出 true，而 P6 也不會察覺它沒被清 ⇒
+  // 「三把鑰匙」這個宣稱只有兩把有人守。(Codex 覆驗抓到，2026-09-02)
+  if (!s0.jwt || !s0.user || !s0.authType) {
+    die(`登入沒成功（jwt=${!!s0.jwt} user=${!!s0.user} authType=${JSON.stringify(s0.authType)}）` +
+        ` —— 帳密錯、站台壞了，或 STORAGE_KEYS 改名了`);
+  }
   ok(`登入成功，三把鑰匙就位（authType=${s0.authType}）`);
   console.log(`     jwt 長度=${s0.jwt.length}  user 長度=${s0.user.length}`);
 
@@ -221,8 +227,16 @@ try {
   await page.reload({ waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForTimeout(4000);
   const s4 = await snapshot();
-  if (s4.jwt === s0.jwt && s4.user) ok('重新整理後三把鑰匙仍在 —— 使用者沒有被登出');
-  else fail(`重新整理後 session 掉了（jwt=${!!s4.jwt}）—— 維護一結束他得重新登入`);
+  // user 這把只驗「還在」不驗「逐字相同」：/user-info 是公開 route（見檔頭），
+  // 維護中重新整理它照樣回 200，fetchData 會把 user_session 覆寫成最新 profile。
+  // 要求逐字相同的話這格會因為一件與 session 無關的事而紅。
+  if (s4.jwt === s0.jwt && s4.user && s4.authType === s0.authType) {
+    ok('重新整理後三把鑰匙仍在（jwt/authType 逐字相同）—— 使用者沒有被登出');
+  } else {
+    fail(`重新整理後 session 掉了（jwt=${s4.jwt === s0.jwt ? '同' : '變/沒了'}` +
+         ` user=${!!s4.user} authType=${s4.authType === s0.authType ? '同' : '變/沒了'}）` +
+         ` —— 維護一結束他得重新登入`);
+  }
 
   // ── P5 可逆 ───────────────────────────────────────────────────────────
   console.log('\n══ P5 還原旗標 —— 不必重新登入就能繼續用 ══');
@@ -249,10 +263,12 @@ try {
   await page.waitForTimeout(6000);
 
   const s6 = await snapshot();
-  if (!s6.jwt && !s6.user) {
-    ok('🔴 注入 401 後三把鑰匙被清光 ⇒ 本腳本偵測得到「session 被清」，P3 的綠燈有鑑別力');
+  // 🔴 三把都要求被清。反控的職責就是鑑別力本身 —— 它只檢查兩把的話，
+  // authType 這把的「有沒有被清」從頭到尾沒有任何一格在守。
+  if (!s6.jwt && !s6.user && !s6.authType) {
+    ok('🔴 注入 401 後三把鑰匙全被清光 ⇒ 本腳本偵測得到「session 被清」，P3 的綠燈有鑑別力');
   } else {
-    fail(`注入 401 後鑰匙還在（jwt=${!!s6.jwt} user=${!!s6.user}）—— ` +
+    fail(`注入 401 後鑰匙還在（jwt=${!!s6.jwt} user=${!!s6.user} authType=${JSON.stringify(s6.authType)}）—— ` +
          `尺是壞的：它偵測不到 session 被清，上面每一格的綠燈都不算數`);
   }
   if (loadCount > loadsBefore6) ok(`401 分支有強制 reload（+${loadCount - loadsBefore6}）⇒ 與 403 分支行為確實不同`);
