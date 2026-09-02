@@ -9,8 +9,15 @@
       "DOM.Iterable"
     ],
     "module": "ESNext",
+    // 🔴 加 "node" 是為了 src/utils/*.test.ts（node:test／node:assert）能被型別檢查。
+    //    不加的話那兩個 import 是 TS2307，而「測試檔沒被 typecheck」與
+    //    「typecheck 全過」在 rc 上會被逼成同一個 —— 只能靠把測試排除掉來換綠，
+    //    那等於把唯一會檢查它的東西關掉。
+    //    ⚠️ 代價：node 的全域型別（process／Buffer）在瀏覽器程式碼裡也會通過檢查。
+    //    同 repo 的 frontend/tsconfig.json 早就是這個取捨，這裡跟它一致。
     "types": [
-      "vite/client"
+      "vite/client",
+      "node"
     ],
     "skipLibCheck": true,
     /* Bundler mode */
