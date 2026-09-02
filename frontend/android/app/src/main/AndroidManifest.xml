@@ -38,4 +38,19 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- 語音報台（訓練工具）用。@capacitor-community/speech-recognition 在 Android
+         要的就是 RECORD_AUDIO（它的 PermissionStatus.speechRecognition 這個別名
+         在 Android 上檢查／請求的正是這一個，見該套件 definitions.d.ts）。
+         ⚠️ 這是執行期權限（Android 6+），宣告在這裡只是讓它「可以被請求」——
+         真正的授權要由 requestPermissions() 在使用者按下麥克風時要到手。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 有些裝置的語音辨識由另一個 App 提供，Android 11+ 的套件可見性規則
+         會讓我們看不到它。這一段讓系統知道我們要找的是「能處理語音辨識的服務」。 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 </manifest>

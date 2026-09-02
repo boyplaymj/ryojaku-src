@@ -17,18 +17,18 @@
 //    MahjongPhonetic／MahjongTai —— 那兩支之間有個「必須先 buildIndex」的
 //    全域狀態順序，漏掉時畫面完全正常、只有音近誤聽會失效（見那支檔頭）。
 //
-// ── D4-b：只有 Web Speech 這一軌，這是有意的界線，不是漏做 ──────────────
+// ── D4-d：雙軌都接上了（§3.1）───────────────────────────────────────────
 //
-// 🔴 §3.1 規劃的是**雙軌**（原生 Capacitor ＋ Web Speech），D4-b 只做後者。
-//    實查（2026-09-02）：`@capacitor-community/speech-recognition`
-//    **沒有裝**（package.json 只有 @capacitor/{core,cli,ios,android} 四個）。
-//    裝它要一併動 iOS Info.plist 與 Android 權限宣告，那是原生專案設定，
-//    不該混進這一塊。
-//    ⚠️ **後果要講清楚**：iOS 的 WKWebView 沒有 SpeechRecognition
-//    ⇒ 裝成 App 用的 iPhone 使用者按下去只會看到「這個環境不支援」。
-//    瀏覽器／PWA（Chrome、Edge）才走得通。原生軌另開一塊做。
-//    ⇒ 所以 `supported === false` 時必須把話說完整（是環境不支援，不是壞了），
-//      而不是讓按鈕靜靜地按不動。
+// 本頁不知道自己走的是哪一軌 —— `useVoiceAsr` 給的是統一介面。
+// 選軌與兩軌相反的累積語意在 `utils/asrTrack.ts`（有測試）：
+//   · 原生殼一律走原生軌，**即使那個 WebView 也有 Web Speech**
+//     （Android WebView 就是這種；先看 hasWebSpeech 會在那裡走錯軌，而 iOS 上零徵兆）
+//   · 原生 partialResults 是**取代**語意，Web Speech 的 final 是**累加** —— 方向相反
+//
+// 🔴 這一頁是本 App 第一個要敏感權限的功能。iOS 兩個 UsageDescription、
+//    Android 一個 RECORD_AUDIO，都已宣告（見 ios/App/App/Info.plist、
+//    android/app/src/main/AndroidManifest.xml）。少了它們會在執行期被系統擋下，
+//    而那與「程式寫錯」在畫面上長得一樣。
 //
 // 🔴 驗這一頁時,先關掉每日獎勵彈窗(或種好 localStorage),否則格子點不動。
 //    DailyBonusModal 是 App.tsx 裡 render 在 <Routes> 旁邊的全域覆蓋層,
@@ -46,10 +46,11 @@
 //   · 麥克風是**狀態切換、不是循環動畫**（禁做②：牌桌上很吵，
 //     回饋要靠狀態變化；`animate-pulse` 這類無條件循環動畫不得使用）
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Mic, Minus, Plus, RotateCcw } from 'lucide-react';
 import fanTable from '../engine/mahjong-tai/fan_table.json';
+import { useVoiceAsr } from '../hooks/useVoiceAsr';
 import {
   buildPad,
   fanById,
@@ -59,63 +60,19 @@ import {
   toggle,
   type Selection,
 } from '../utils/voiceTai';
-import {
-  micErrorMessage,
-  recognize,
-  type AsrFanTable,
-  type Heard,
-} from '../utils/voiceTaiAsr';
+import { recognize, type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
 
 const TABLE = fanTable as unknown as AsrFanTable;
-
-/**
- * Web Speech 的最小型別。刻意寫在本檔而不是 types.ts：
- * types.ts 是整個 App 共用的檔（別條 session 也在改），為了一頁的實驗性功能
- * 去動它，代價是別人的 diff 裡多出看不懂的東西。等原生軌也接上、
- * 這層變成共用的 ASR 抽象時再搬。
- */
-interface SpeechRecognitionLike {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onstart: (() => void) | null;
-  onend: (() => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
-}
-
-function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
-  if (typeof window === 'undefined') return null;
-  const w = window as unknown as Record<string, unknown>;
-  return (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRecognitionLike) | null;
-}
 
 const TrainingVoiceTai: React.FC = () => {
   const navigate = useNavigate();
   const [sel, setSel] = useState<Selection>({});
-  const [listening, setListening] = useState(false);
   const [heard, setHeard] = useState<Heard | null>(null);
   const [notice, setNotice] = useState('');
 
   const pad = useMemo(() => buildPad(TABLE), []);
   const total = grandTotal(TABLE, sel);
   const picked = Object.keys(sel);
-
-  // ── 麥克風 ────────────────────────────────────────────────────────────
-  //
-  // 🔴 這裡的三個 ref 不是「不想用 state」，是 state 在這裡**不會動**：
-  //    SpeechRecognition 的 callback 是在 rec 物件上掛一次的，closure 會永遠
-  //    看到第一次 render 的 state 值。累積中的辨識文字若放 state，
-  //    onend 讀到的會是空字串 —— 而那與「真的沒講話」在畫面上一模一樣。
-  const recRef = useRef<SpeechRecognitionLike | null>(null);
-  const finalTextRef = useRef('');
-  const pressedRef = useRef(false);
-  const micGrantedRef = useRef(false);
-
-  const supported = useMemo(() => getSpeechRecognitionCtor() !== null, []);
 
   /** 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。 */
   const analyze = useCallback((text: string) => {
@@ -137,97 +94,17 @@ const TrainingVoiceTai: React.FC = () => {
     }
   }, []);
 
-  // rec 實例建一次。掛在 ref 上，卸載時 abort（否則離開頁面麥克風還開著）。
-  useEffect(() => {
-    const Ctor = getSpeechRecognitionCtor();
-    if (!Ctor) return;
-    const rec = new Ctor();
-    rec.lang = 'zh-TW';
-    rec.interimResults = true;
-    rec.continuous = false;
+  // 🔴 兩軌（原生 Capacitor ／ Web Speech）的差異全部關在 useVoiceAsr 裡，
+  //    本頁只看得到一個統一介面。會判錯而且錯了不會有東西轉紅的那些判斷
+  //    （選哪一軌、原生 partial 是取代而 web final 是累加）已經挖到
+  //    utils/asrTrack.ts 並有測試守著 —— 不要把它們搬回這裡。
+  const asr = useVoiceAsr(analyze);
+  const listening = asr.listening;
+  const supported = asr.track !== 'none';
 
-    rec.onstart = () => {
-      setListening(true);
-      setNotice('');
-    };
-    rec.onerror = (e) => setNotice(micErrorMessage(e.error));
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalTextRef.current += t;
-        else interim += t;
-      }
-      // 講到一半的即時字：只當回饋，不進判台（判台在 onend）。
-      setHeard((prev) => ({
-        raw: (finalTextRef.current + interim).trim(),
-        normalized: '',
-        leftover: '',
-        ignored: [],
-        sel: prev?.sel ?? {},
-        ids: prev?.ids ?? [],
-      }));
-    };
-    rec.onend = () => {
-      setListening(false);
-      const text = finalTextRef.current.trim();
-      if (text) analyze(text);
-      else setNotice((n) => n || '沒聽到內容，再試一次。');
-    };
-
-    recRef.current = rec;
-    return () => {
-      rec.onstart = rec.onend = rec.onerror = rec.onresult = null;
-      try {
-        rec.abort();
-      } catch {
-        /* 已經停了就算了 */
-      }
-      recRef.current = null;
-    };
-  }, [analyze]);
-
-  /**
-   * iOS Safari 直接 rec.start() 會丟 not-allowed 且**不跳權限對話框**，
-   * 所以先用 getUserMedia 主動把授權叫出來，拿到就立刻關掉那條軌。
-   * （沿用 demo.html:275-290 已驗證的做法。）
-   */
-  const ensureMic = useCallback(async () => {
-    if (micGrantedRef.current) return true;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      micGrantedRef.current = true; // 沒有這個 API 就直接讓 rec.start() 自己去要
-      return true;
-    }
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-      s.getTracks().forEach((t) => t.stop());
-      micGrantedRef.current = true;
-      return true;
-    } catch (err) {
-      setNotice(micErrorMessage((err as { name?: string })?.name || 'not-allowed'));
-      return false;
-    }
-  }, []);
-
-  const startListening = useCallback(async () => {
-    if (listening || !recRef.current) return;
-    pressedRef.current = true;
-    const ok = await ensureMic();
-    // 授權對話框期間使用者可能已經放開 ⇒ 那就不要開始（否則會變成「按一下就一直錄」）
-    if (!ok || !pressedRef.current) return;
-    finalTextRef.current = '';
-    setHeard(null);
-    try {
-      recRef.current.start();
-    } catch {
-      /* 連續快速按會丟 InvalidStateError，忽略即可 */
-    }
-  }, [listening, ensureMic]);
-
-  const stopListening = useCallback(() => {
-    pressedRef.current = false;
-    if (recRef.current && listening) recRef.current.stop();
-  }, [listening]);
+  // 講話中顯示即時文字，講完顯示判台後的原文。
+  // 兩者共用同一塊版面，因為它們回答的是同一個問題：「它聽到什麼」。
+  const displayRaw = listening ? asr.partial : (heard?.raw ?? '');
 
   // 算式明細：讓合計不是一個「憑空出現的數字」。
   // 使用者要確認的是台數對不對，看得到組成才有辦法確認。
@@ -244,6 +121,7 @@ const TrainingVoiceTai: React.FC = () => {
     setSel({});
     setHeard(null);
     setNotice('');
+    asr.clear(); // 麥克風層的殘留（上一次的即時文字與錯誤）也要一起清
   };
 
   return (
@@ -307,25 +185,30 @@ const TrainingVoiceTai: React.FC = () => {
         {/* 聽到什麼、校正成什麼。
             🔴 原文一定要照實顯示：使用者要能判斷「是我講錯還是它聽錯」，
                只給正規名的話這兩者長得一模一樣。 */}
-        {heard && heard.raw && (
+        {displayRaw && (
           <div className="mt-2.5 pt-2.5 border-t border-black/[0.04] text-[0.625rem] font-bold leading-relaxed">
             <div className="text-neutral-500">
-              聽到：<span className="text-neutral-900">{heard.raw}</span>
+              聽到：<span className="text-neutral-900">{displayRaw}</span>
             </div>
-            {heard.normalized && heard.normalized !== heard.raw && (
+            {/* 講話中不顯示校正／未對到的音：那兩項要等整句講完才算得準，
+                中途顯示會讓它們在使用者眼前跳動，看起來像判錯。 */}
+            {!listening && heard?.normalized && heard.normalized !== heard.raw && (
               <div className="text-neutral-500">
                 校正為：<span className="text-[#c5a059]">{heard.normalized}</span>
               </div>
             )}
-            {heard.leftover && (
+            {!listening && heard?.leftover && (
               <div className="text-neutral-400">沒對到的音：{heard.leftover}</div>
             )}
           </div>
         )}
 
-        {notice && (
+        {/* 🔴 兩個錯誤來源：notice 是判台層（詞庫壞了／沒對到台種），
+            asr.error 是麥克風層（沒權限／沒聲音／選錯軌）。
+            合成一句顯示，但判台層優先 —— 它是使用者當下正在做的事。 */}
+        {(notice || asr.error) && (
           <div className="mt-2.5 text-[0.625rem] font-bold leading-relaxed text-[#b4532f]">
-            {notice}
+            {notice || asr.error}
           </div>
         )}
       </div>
@@ -413,12 +296,14 @@ const TrainingVoiceTai: React.FC = () => {
       {/* 底部：釘住。麥克風是主要動作，清空是次要。 */}
       <div className="flex-none bg-white border-t border-black/[0.04] px-4 pt-3 pb-[calc(1rem+var(--safe-bottom))]">
         {!supported && (
-          // 🔴 講完整：是這個環境沒有這個 API，不是功能壞了。
-          //    iOS 的 WKWebView（＝裝成 App 的 iPhone）就屬於這一類。
+          // 🔴 講完整：是這個環境兩條路都沒有，不是功能壞了。
+          //    ⚠️ 這段文案在 D4-d 之前寫的是「iPhone 的 App 內建瀏覽器就沒有」——
+          //    原生軌接上之後那句話變成**反的**（App 殼現在是最好的那條路），
+          //    而它讀起來完全合理。改文案是 D4-d 的一部分，不是順手潤稿。
           <div className="mb-2.5 text-[0.625rem] font-bold leading-relaxed text-neutral-500">
-            這個環境沒有語音辨識（iPhone 的 App 內建瀏覽器就沒有）。
+            這個瀏覽器沒有語音辨識。
             <br />
-            用 Chrome 或 Edge 開這一頁可以講話；在這裡仍可以直接點格子算台。
+            用 Chrome、Edge，或直接用両雀 App 都可以講話；在這裡仍可以直接點格子算台。
           </div>
         )}
 
@@ -428,16 +313,16 @@ const TrainingVoiceTai: React.FC = () => {
             disabled={!supported}
             aria-label="按住講話"
             aria-pressed={listening}
-            onMouseDown={startListening}
-            onMouseUp={stopListening}
-            onMouseLeave={stopListening}
+            onMouseDown={asr.start}
+            onMouseUp={asr.stop}
+            onMouseLeave={asr.stop}
             onTouchStart={(e) => {
               e.preventDefault();
-              startListening();
+              asr.start();
             }}
             onTouchEnd={(e) => {
               e.preventDefault();
-              stopListening();
+              asr.stop();
             }}
             // 🔴 §9 禁做②：狀態切換，不是循環動畫。這裡只有 transition-colors，
             //    沒有 animate-pulse／animate-ping 之類無條件播放的東西。

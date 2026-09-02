@@ -45,5 +45,15 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<!-- 語音報台（訓練工具）用。這是本 App 的第一組敏感權限宣告 ——
+	     在這之前 Info.plist 一個 UsageDescription 都沒有。
+	     文案會原樣顯示在系統權限詢問框裡，也是送審時 Apple 看的用途說明，
+	     所以要講「拿去做什麼」而不是「需要麥克風」。
+	     兩個 key 缺一不可：iOS 上錄音本身要麥克風授權、SFSpeechRecognizer
+	     要語音辨識授權，少一個會在執行期被系統擋下。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用來聽你報台，把講出來的台種換算成台數。錄音不會被儲存或上傳。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用來把你報的台轉成文字，再對照家規台數表算台。內容不會被儲存。</string>
 </dict>
 </plist>
