@@ -214,12 +214,16 @@ try {
   // 🔴 這一格量的是**使用者真的讀到的字串**，不是 apiService 回傳物件裡的字串。
   // 兩者差一層：apiService 把 403 翻成「服務維護中」，但呼叫端要把它畫出來才算數。
   await page.screenshot({ path: SHOT_DIR + '/p3-maintenance-on.png', fullPage: true });
+  // 這格 2026-09-02 之前是一句 console.log 警告，因為當時畫面上**真的沒有**任何提示
+  // （計帳頁渲染成一本正常的空帳本）。修法上線後（frontend/utils/maintenanceSignal.ts
+  // ＋ components/MaintenanceNotice.tsx）升成斷言。
+  // 反控是現成的：修法上線前，線上 bundle 對「系統維護中」的命中數是 0。
   const body3 = await page.evaluate(() => document.body.innerText);
-  if (body3.includes('服務維護中')) ok('使用者讀到的字串是「服務維護中」');
-  else {
-    console.log(`  ⚠️ 畫面沒出現「服務維護中」—— apiService 翻譯出來了，但呼叫端沒畫出來。`);
-    console.log(`     使用者實際讀到：${JSON.stringify(body3.replace(/\s+/g, ' ').trim().slice(0, 160))}`);
-    console.log(`     本項不影響 session 判準（那是本測的主張），但它代表使用者被擋住卻看不到原因。`);
+  if (body3.includes('服務維護中')) {
+    ok('🔴 使用者讀到的字串真的是「服務維護中」—— 被擋住這件事看得見了');
+  } else {
+    fail('畫面沒出現「服務維護中」—— 提示沒送到使用者眼前。' +
+         `使用者實際讀到：${JSON.stringify(body3.replace(/\s+/g, ' ').trim().slice(0, 120))}`);
   }
 
   // ── P4 維護中重新整理 ─────────────────────────────────────────────────
@@ -249,6 +253,13 @@ try {
   const s5 = await snapshot();
   if (s5.jwt === s0.jwt) ok('全程用的是同一把 JWT，沒有重新登入過');
   else fail('JWT 變了 —— 中間發生過重新登入/換發');
+
+  // 🔴 解除訊號那一半。少了這格，「提示會出現」有人守而「提示會消失」沒人守 ——
+  //    而一個維護結束後還掛著「服務維護中」的 App，比沒有提示更糟（它在說謊）。
+  //    這格能成立的前提是 noteOk 只認**曾被擋過的那條路**：/ledger 剛剛回了 200。
+  const body5 = await page.evaluate(() => document.body.innerText);
+  if (!body5.includes('服務維護中')) ok('維護結束後提示自動消失了（解除訊號有送達）');
+  else fail('維護已還原但提示還掛著 —— 解除訊號沒送到，App 在對使用者說謊');
 
   // ── P6 反控 ───────────────────────────────────────────────────────────
   console.log('\n══ P6 反控：同一份線上產物注入 401，鑰匙必須被清光 ══');
