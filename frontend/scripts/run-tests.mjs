@@ -22,9 +22,9 @@
 //   node scripts/run-tests.mjs utils/version.test.ts 只跑指定檔（給重測／除錯用）
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 /** 下限。與 package.json 的 engines 一致 —— 那裡是宣告，這裡是唯一真的擋得住的地方。 */
 const MIN = [22, 18, 0];
@@ -39,9 +39,19 @@ const MIN = [22, 18, 0];
 //    那**正是加 engine 這條之前的輸出** ⇒ 靜靜退回原狀，沒有任何一行會變。
 //    ⇒ 加測試檔時要把 min 跟著抬高，否則「有人刪掉一個檔」不會被叫出來
 //      （與 tools/mahjong-tai/verify_sync.sh 的清單下限同一個道理）。
+//
+// 🔴 兩道下限方向不同，缺一不可：
+//    `min`      數**檔案**（glob 沒命中／檔被刪）
+//    `minTests` 數**條數**（檔還在、裡面的 test() 被清光 —— 一樣是 rc=0）
+//
+// ⚠️ 兩組的 minTests 嚴格程度**刻意不對稱**，不是偷懶：
+//    - `engine` 是判台包裝層，由 tools/mahjong-tai 這條線維護，條數我說了算 ⇒ 訂死 4。
+//    - `utils` 是 App 本身的測試，**別條 session 會同時在改**
+//      （實測 2026-09-02：同一天內 36 → 44，因為 maintenanceSignal.test.ts 正被改）。
+//      在那上面訂緊下限只會製造假警報，而假警報訓練出來的忽略是不可逆的 ⇒ 只守「沒有歸零」。
 const DEFAULT_TARGETS = [
-    { glob: 'utils/*.test.ts', min: 3 },
-    { glob: 'engine/*.test.ts', min: 1 },
+    { glob: 'utils/*.test.ts', min: 3, minTests: 20 },
+    { glob: 'engine/*.test.ts', min: 1, minTests: 4 },
 ];
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -133,7 +143,8 @@ function findRunner() {
 
 const explicit = process.argv.slice(2);
 // 手動指定時下限一律 1：指定了卻一個檔都沒命中，那也該大聲，不該安靜跑 0 條。
-const useTargets = explicit.length > 0 ? explicit.map((glob) => ({ glob, min: 1 })) : DEFAULT_TARGETS;
+const useTargets =
+    explicit.length > 0 ? explicit.map((glob) => ({ glob, min: 1, minTests: 0 })) : DEFAULT_TARGETS;
 
 // 🔴 先驗下限，再決定要不要跑。rc=2 是「設備問題」不是「測試失敗」——
 //    量不到不等於量到全過（同 verify_sync.sh 的 rc 約定）。
@@ -183,17 +194,92 @@ if (!runner) {
 // 測試在哪個 runtime 上綠的變成不可知，而那正是這支腳本存在的理由。
 // 🔴 交給 node 的是**上面驗過下限的那份展開結果**，不是原始 glob ——
 //    否則「我數的那批」與「node 跑的那批」會是兩個來源，可以各自漂而下限失去意義。
-console.log(`[run-tests] node v${fmt(runner.version)}（${runner.why}）→ ${matched.length} 檔：${matched.join(' ')}`);
+console.log(`[run-tests] node v${fmt(runner.version)}（${runner.why}）`);
 
-const result = spawnSync(runner.exe, ['--test', ...matched], { stdio: 'inherit' });
+/**
+ * 跑一組檔案，順便把「跑了幾條」量回來。
+ * stdout 仍給人看（spec），另開一份 TAP 寫到暫存檔當尺。
+ * ⚠️ 暫存目錄用 mkdtemp：/tmp 是所有 session 共用的，固定檔名會互相蓋。
+ */
+function runGroup(files) {
+    const dir = mkdtempSync(join(tmpdir(), 'run-tests-'));
+    const tap = join(dir, 'result.tap');
+    const r = spawnSync(
+        runner.exe,
+        [
+            '--test',
+            '--test-reporter=spec',
+            '--test-reporter-destination=stdout',
+            '--test-reporter=tap',
+            `--test-reporter-destination=${tap}`,
+            ...files,
+        ],
+        { stdio: 'inherit' }
+    );
+    let ran = null;
+    try {
+        const m = /^# tests (\d+)$/m.exec(readFileSync(tap, 'utf8'));
+        if (m) ran = Number(m[1]);
+    } catch {
+        /* 讀不到就是 null —— 下面 fail-closed，量不到不等於量到全過 */
+    }
+    try {
+        rmSync(dir, { recursive: true, force: true });
+    } catch {
+        /* 清不掉不影響判定，不要因此改變 rc */
+    }
+    return { r, ran };
+}
 
-if (result.error) {
-    console.error(`❌ 無法執行 ${runner.exe}：${result.error.message}`);
-    process.exit(1);
+/** 把 spawn 本身的異常收斂成 rc，別讓它偽裝成 0。 */
+function bailOnSpawnTrouble({ error, status, signal }) {
+    if (error) {
+        console.error(`❌ 無法執行 ${runner.exe}：${error.message}`);
+        process.exit(1);
+    }
+    // 被訊號砍掉時 status 是 null —— 那種情況回 0 等於謊報成功。
+    if (status === null) {
+        console.error(`❌ 測試行程被訊號中止（${signal}）`);
+        process.exit(1);
+    }
 }
-// 被訊號砍掉時 status 是 null —— 那種情況回 0 等於謊報成功。
-if (result.status === null) {
-    console.error(`❌ 測試行程被訊號中止（${result.signal}）`);
-    process.exit(1);
+
+// 手動指定：一次跑完就好，不套條數下限（除錯路徑，條數本來就少）。
+if (explicit.length > 0) {
+    const { r } = runGroup(matched);
+    bailOnSpawnTrouble(r);
+    process.exit(r.status);
 }
-process.exit(result.status);
+
+// 🔴 **逐組跑、逐組驗條數**，不是跑一次驗總數。
+//    總數下限有個洞：`utils` 長大可以把 `engine` 歸零蓋過去
+//    （實測 2026-09-02：utils 一度 36 條、別條 session 改動後變 44，
+//     總數下限 40 在 engine 掛零時照樣綠）。
+//    ⇒ 閘門的計量單位要跟擔心的風險同一個維度：誰的下限就數誰。
+let worst = 0;
+for (const t of useTargets) {
+    const files = expandTarget(t.glob);
+    const { r, ran } = runGroup(files);
+    bailOnSpawnTrouble(r);
+    if (r.status !== 0) {
+        // 測試自己紅了就回它的 rc —— 那個訊息比「條數不足」具體得多。
+        worst = worst || r.status;
+        continue;
+    }
+    if (ran === null) {
+        console.error(`❌ [設備] ${t.glob} 讀不到測試計數 —— 量不到不等於量到全過，不敢回 0。`);
+        process.exit(2);
+    }
+    if (ran < t.minTests) {
+        console.error(
+            `\n❌ [設備] ${t.glob} 只跑了 ${ran} 條，下限是 ${t.minTests}。\n` +
+            `   檔案還在、裡面的 test() 被清空時，node --test 一樣是 rc=0 ——\n` +
+            `   這道下限就是為了讓那種退化紅起來。\n` +
+            `   若這是刻意的（真的移除了測試），請同時調低該組的 minTests。`
+        );
+        process.exit(2);
+    }
+    console.log(`[run-tests] ${t.glob} 條數 ✓ ${ran} ≥ ${t.minTests}`);
+}
+
+process.exit(worst);
