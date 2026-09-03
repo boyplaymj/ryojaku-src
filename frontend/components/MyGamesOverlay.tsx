@@ -4,7 +4,8 @@ import { ArrowLeft, Trophy } from 'lucide-react';
 import MyGamesSection from './MyGamesSection';
 
 // 🔴 [A2-b-2] `userId` 已移除：它唯一的用途是往下傳給 MyGamesSection，
-//    而那一層本來就沒在讀（列表吃登入 token）。留在這裡只是把死 prop 往上搬一層。
+//    而那一層本來就沒在讀（列表的 userId 由 dataService 自己向 authService 拿）。
+//    留在這裡只是把死 prop 往上搬一層。
 interface MyGamesOverlayProps {
     isOpen: boolean;
     onClose: () => void;

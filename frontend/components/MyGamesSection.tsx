@@ -9,8 +9,12 @@ import { sortMyGames } from '../utils/myGamesSort';
 import { usePullToRefresh } from '../contexts/RefreshContext';
 
 // 🔴 [A2-b-2] `userId` 已移除：兩個呼叫端都傳了，而這裡從來沒有讀它。
-//    列表來自 `api.getMyGames()`，那支吃的是登入 token ⇒ 這個元件永遠只顯示
-//    **登入者自己**的局。留著 userId 會讓人以為傳別人的 id 就能看別人的局（不會）。
+//    列表來自 `api.getMyGames()`，那支**不收參數**：它自己向 `authService.getCurrentUser()`
+//    拿登入者的 userId 送給後端（`/my-games?…`，Bearer 由 apiRequest 另外帶）⇒ 這個元件
+//    結構上永遠只顯示**登入者自己**的局，元件傳什麼 prop 都改不了它。
+//    留著 userId 會讓人以為傳別人的 id 就能看別人的局（不會）。
+//    ⚠️ 「吃登入 token」是本 commit 前一版註解的講法，不精確：id 是從 authService 來的，
+//       token 是另一條（Authorization header）。兩者都不是這個 prop。
 interface MyGamesSectionProps {
     initialTab?: 'created' | 'joined';
     /**
