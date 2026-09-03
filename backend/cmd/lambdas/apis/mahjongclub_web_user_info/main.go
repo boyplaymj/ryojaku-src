@@ -237,38 +237,60 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
-	// Never return server-side credentials to the client, even to the account
-	// owner (a response body can leak via logs/caches and then be replayed).
-	//   - PasswordHash: bcrypt hash (finding 3).
-	//   - EncryptedLineID: app-login accepts this ciphertext AS an auth
-	//     credential (SECURITY_AUTH_BYPASS §5d-1, "密文即憑證"), so it is
-	//     replayable. The frontend does not read it from this endpoint
-	//     (frontend/DATA_CONSISTENCY_ANALYSIS.md marks it 不使用).
-	// (SECURITY_AUDIT_2026-09-03 findings 3 & 7)
-	if user != nil {
-		user.PasswordHash = ""
-		user.EncryptedLineID = ""
-	}
+	return events.APIGatewayProxyResponse{
+		StatusCode: http.StatusOK,
+		Headers:    headers,
+		Body:       buildUserInfoBody(user, inviterPoints, inviteePoints),
+	}, nil
+}
 
-	response := struct {
-		Success       bool         `json:"success"`
-		Data          *shared.User `json:"data,omitempty"`
-		Error         string       `json:"error,omitempty"`
-		InviterPoints string       `json:"inviterPoints"`
-		InviteePoints string       `json:"inviteePoints"`
-	}{
+// userInfoPayload is the success-response shape of this endpoint.
+type userInfoPayload struct {
+	Success       bool         `json:"success"`
+	Data          *shared.User `json:"data,omitempty"`
+	Error         string       `json:"error,omitempty"`
+	InviterPoints string       `json:"inviterPoints"`
+	InviteePoints string       `json:"inviteePoints"`
+}
+
+// stripServerSideCredentials blanks the fields of shared.User that are
+// server-side credentials and must never reach a client, not even the account
+// owner (a response body leaks via logs, proxies and caches, and both of these
+// fields are replayable):
+//
+//   - PasswordHash: bcrypt hash of the APP login password (finding 3).
+//   - EncryptedLineID: app-login accepts this ciphertext AS an auth credential
+//     (SECURITY_AUTH_BYPASS §5d-1, "密文即憑證"). The frontend never reads it
+//     back from this endpoint (frontend/DATA_CONSISTENCY_ANALYSIS.md: 不使用).
+//
+// (SECURITY_AUDIT_2026-09-03 findings 3 & 7)
+//
+// 🔴 This list is hand-picked, so a NEW credential-ish field added to
+// shared.User would silently start leaking. TestUserStructFieldsUnchanged
+// pins the field set of shared.User precisely so that adding a field turns
+// that test red and forces a decision here.
+func stripServerSideCredentials(u *shared.User) {
+	if u == nil {
+		return
+	}
+	u.PasswordHash = ""
+	u.EncryptedLineID = ""
+}
+
+// buildUserInfoBody is the ONLY place this endpoint turns a user into a
+// response body. Stripping is done here rather than at the call site so that
+// "forgot to strip" is not expressible: there is no other path from
+// *shared.User to Body.
+func buildUserInfoBody(user *shared.User, inviterPoints, inviteePoints string) string {
+	stripServerSideCredentials(user)
+
+	body, _ := json.Marshal(userInfoPayload{
 		Success:       true,
 		Data:          user,
 		InviterPoints: inviterPoints,
 		InviteePoints: inviteePoints,
-	}
-
-	body, _ := json.Marshal(response)
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusOK,
-		Headers:    headers,
-		Body:       string(body),
-	}, nil
+	})
+	return string(body)
 }
 
 func getUser(ctx context.Context, userID string) (*shared.User, error) {
