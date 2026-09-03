@@ -68,13 +68,27 @@ export const useRefresh = () => {
  */
 export const usePullToRefresh = (handler: RefreshHandler, enabled: boolean = true) => {
     const { registerRefreshHandler, unregisterRefreshHandler } = useRefresh();
-    // 每個 hook 實例一把 key：handler 換身分時原地換，不會爬到上層 modal 之上。
+    // 每個 hook 實例一把 key，決定它在堆疊裡的那一層。
     const keyRef = useRef<object>({});
+    // 🔴 最新的 handler 放 ref，**不放 effect deps**。理由見下面那段。
+    const latestRef = useRef(handler);
+    latestRef.current = handler;
 
+    // 🔴 deps 裡刻意**沒有** `handler`（[A2-b-1] 訂正，Codex 覆驗評 Medium）。
+    //    第一版寫成 `[handler, enabled, ...]`，並在註解宣稱「同一把 key 重註冊是原地換，
+    //    不會爬到 modal 上面」—— 那句話對 `refreshHandlerStack.set()` 成立，
+    //    **對這個 hook 不成立**：React 在 deps 變動時是先跑 cleanup 再跑 effect，
+    //    實際序列永遠是 remove → set ⇒ 推到堆疊最上面，原地換那條分支從元件端不可達。
+    //    受害的是 handler 身分不穩定的呼叫端（pages/Home.tsx 的 handleRefresh、
+    //    pages/ChatList.tsx 的 refreshRooms 都是純箭頭函式，每次 render 換身分）——
+    //    它們只要重渲染就會爬到自己開的 modal 上面，搶走 modal 的下拉刷新。
+    //    ⇒ 改成「掛一次穩定的 wrapper，最新的 handler 從 ref 讀」，位置就不會動。
+    //    ⚠️ 這一段沒有自動化證據可以直接驗（此 repo 無 React 測試設備）。
+    //       退而求其次的守衛在 utils/refreshHandlerStack.test.ts 的 A2b1-17／A2b1-19。
     React.useEffect(() => {
         if (!enabled) return;
         const key = keyRef.current;
-        registerRefreshHandler(key, handler);
+        registerRefreshHandler(key, () => latestRef.current());
         return () => unregisterRefreshHandler(key);
-    }, [handler, enabled, registerRefreshHandler, unregisterRefreshHandler]);
+    }, [enabled, registerRefreshHandler, unregisterRefreshHandler]);
 };
