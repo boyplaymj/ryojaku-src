@@ -11,6 +11,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ENV=${1:-stg}
+# SOCIAL=1 才會去 SSM 撈 Google／LINE 的 client id。
+# 🔴 preview 刻意設 0：那兩個 id 是**綁網域**的（Google 的「授權 JavaScript 來源」白名單、
+#    LINE console 註冊的 redirect_uri，見 services/lineLogin.ts:44 與 services/apiService.ts:255）。
+#    在沒登記的網域上撈到 id ⇒ 按鈕會出現、按下去失敗，而那是最難查的狀態
+#    （本檔下面自己寫過：「設了卻沒生效」比「沒設」難查得多）。
+#    ⇒ 寧可讓它不顯示。preview 用 Email／密碼登入（pages/Login.tsx 的 loginWithEmail）。
+SOCIAL=1
 case "$ENV" in
   stg)
     # 自訂網域（P0）。⚠️ 結尾「沒有」/stg —— base path mapping 掛在根，stage 由網域自己解析。
@@ -21,8 +28,18 @@ case "$ENV" in
     SUBDOMAIN="${SUBDOMAIN:-ryojaku-stg.boyplaymj.com}"
     S3_PREFIX="s3://boyplaymj-image/ryojaku-app-stg/"
     ;;
+  preview)
+    # 給人「用手機看一眼這一版長怎樣」用的環境（2026-09-03 開）。
+    # ⚠️ 界線：只有前端是分開的，API／WS 與 stg **共用同一套後端、同一份資料** ——
+    #    在這裡報名一場局，stg 那邊也會看到。要隔離資料是另一件事（另一套 Lambda + DDB）。
+    API_BASE="https://ryojaku-api.boyplaymj.com"
+    WS_BASE="wss://ryojaku-ws.boyplaymj.com"
+    SUBDOMAIN="${SUBDOMAIN:-ryojaku-preview.boyplaymj.com}"
+    S3_PREFIX="s3://boyplaymj-image/ryojaku-app-preview/"
+    SOCIAL=0
+    ;;
   *)
-    echo "❌ 未知環境 '$ENV'（目前只支援 stg；prod 待玩家端驗收後再開）" >&2; exit 1 ;;
+    echo "❌ 未知環境 '$ENV'（支援 stg / preview；prod 待玩家端驗收後再開）" >&2; exit 1 ;;
 esac
 
 # distribution 以 alias 反查，不硬編 —— 免得 provision 重建後這裡忘了同步而打到舊的。
@@ -42,10 +59,16 @@ echo "  目標=$S3_PREFIX  dist=$DIST_ID  URL=https://$SUBDOMAIN"
 # ⚠️ 缺值不擋部署，但前端會**靜默隱藏**那顆登入鈕（isGoogleConfigured / isLineConfigured
 #    直接回 false，不會報錯）—— 症狀是「按鈕不見了」，查起來完全沒有線索。故一定要明講。
 ssm(){ aws ssm get-parameter --region ap-southeast-1 --name "$1" --query 'Parameter.Value' --output text 2>/dev/null || true; }
-GCID=$(ssm /ryojaku/stg/GOOGLE_CLIENT_ID)
-LCID=$(ssm /ryojaku/stg/LINE_LOGIN_CHANNEL_ID)
-[ -n "$GCID" ] || echo "⚠️  未設 /ryojaku/stg/GOOGLE_CLIENT_ID → Google 登入鈕不會出現（見 DEPLOY_PREREQS ②）"
-[ -n "$LCID" ] || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_ID → LINE 登入鈕不會出現（見 DEPLOY_PREREQS ④）"
+if [ "$SOCIAL" = "1" ]; then
+  GCID=$(ssm /ryojaku/stg/GOOGLE_CLIENT_ID)
+  LCID=$(ssm /ryojaku/stg/LINE_LOGIN_CHANNEL_ID)
+  [ -n "$GCID" ] || echo "⚠️  未設 /ryojaku/stg/GOOGLE_CLIENT_ID → Google 登入鈕不會出現（見 DEPLOY_PREREQS ②）"
+  [ -n "$LCID" ] || echo "⚠️  未設 /ryojaku/stg/LINE_LOGIN_CHANNEL_ID → LINE 登入鈕不會出現（見 DEPLOY_PREREQS ④）"
+else
+  GCID=""; LCID=""
+  echo "ℹ️  $ENV：刻意不帶社群登入 client id ⇒ Google／LINE 按鈕不會出現，請用 Email 登入。"
+  echo "    （那兩個 id 綁網域，在未登記的網域上帶了只會變成「按了失敗」）"
+fi
 
 # 前四個變數都是 fail-closed：apiService.ts 缺 API 會 throw，chatService.ts 缺 WS 會拒絕連線。
 # 這是刻意的 —— 工程師原本把 prod 的 WS（ek5dythoh9…/prod）寫死到連 env 都蓋不掉。

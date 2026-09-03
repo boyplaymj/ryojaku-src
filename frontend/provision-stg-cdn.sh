@@ -13,7 +13,13 @@
 set -euo pipefail
 
 SUBDOMAIN="${SUBDOMAIN:-ryojaku-stg.boyplaymj.com}"
-S3_PREFIX_PATH="/ryojaku-app-stg"          # 桶內路徑，對應 CloudFront OriginPath
+# 🔴 桶內路徑（對應 CloudFront OriginPath）必須跟 SUBDOMAIN 一起換。
+#    2026-09-03 訂正：原本這行寫死 /ryojaku-app-stg，而 SUBDOMAIN 是可覆寫的
+#    ⇒ 只換 SUBDOMAIN 會開出一個新網域**指向同一份內容**，兩個網址看到一模一樣的東西。
+#    那種「開通成功、URL 也通」的假成功沒有任何一步會報錯 —— 只有人去比對內容才發現。
+#    ⚠️ 預設值刻意不變：既有的 ryojaku-stg 重跑行為逐字相同。
+S3_PREFIX_PATH="${S3_PREFIX_PATH:-/ryojaku-app-stg}"
+COMMENT="${COMMENT:-両雀 玩家端 staging}"   # distribution 的說明欄，開多個環境時用來分辨
 BUCKET="boyplaymj-image"
 BUCKET_DOMAIN="boyplaymj-image.s3.ap-southeast-1.amazonaws.com"
 OAC_ID="E3P906FWBYTA8I"
@@ -38,11 +44,11 @@ else
   cat > /tmp/ryojaku-stg-dist.json <<JSON
 {
   "CallerReference": "$SUBDOMAIN-v1",
-  "Comment": "両雀 玩家端 staging",
+  "Comment": "$COMMENT",
   "Aliases": { "Quantity": 1, "Items": ["$SUBDOMAIN"] },
   "DefaultRootObject": "index.html",
   "Origins": { "Quantity": 1, "Items": [{
-    "Id": "s3-$BUCKET-app-stg",
+    "Id": "s3-$BUCKET$S3_PREFIX_PATH",
     "DomainName": "$BUCKET_DOMAIN",
     "OriginPath": "$S3_PREFIX_PATH",
     "S3OriginConfig": { "OriginAccessIdentity": "" },
@@ -51,7 +57,7 @@ else
     "ConnectionAttempts": 3, "ConnectionTimeout": 10
   }]},
   "DefaultCacheBehavior": {
-    "TargetOriginId": "s3-$BUCKET-app-stg",
+    "TargetOriginId": "s3-$BUCKET$S3_PREFIX_PATH",
     "ViewerProtocolPolicy": "redirect-to-https",
     "AllowedMethods": { "Quantity": 2, "Items": ["HEAD","GET"],
       "CachedMethods": { "Quantity": 2, "Items": ["HEAD","GET"] } },
@@ -218,5 +224,5 @@ echo
 echo "✅ 開通完成"
 echo "   DIST_ID=$DIST_ID"
 echo "   URL=https://$SUBDOMAIN"
-echo "   下一步：把 DIST_ID 填進 deploy-stg.sh，然後跑 ./deploy-stg.sh"
+echo "   下一步：./deploy-stg.sh <env>（DIST_ID 由 alias 反查，不必手填）"
 echo "   注意 distribution 首次部署要 ~5-15 分鐘才會全球生效。"
