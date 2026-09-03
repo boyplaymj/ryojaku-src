@@ -41,11 +41,25 @@ func getRequest(userID string) events.APIGatewayProxyRequest {
 	return req
 }
 
-// 一份「後台真的會長這樣」的 info_value：ignores 是空陣列（D1-A 之後的正常值）。
+// 一份「後台真的會長這樣」的 info_value：ignores 是空陣列（D1-A 之後的正常值），
+// config 帶著唯一有計分作用的 base_di（scoring.js:165 直接進總台數）。
 const validRaw = `{"version":"tw16-v3",` +
 	`"fans":{"pinghu":{"tai":2,"aliases":["平胡"]},"dasanyuan":{"tai":8}},` +
 	`"combos":{"toitoi+san_anko":{"note":"合併"}},` +
-	`"ignores":[]}`
+	`"ignores":[],` +
+	`"config":{"base_di":1}}`
+
+// 🔴 五個表鍵都會造成 502 ⇒ 每一條 502 測試的 fixture 只准缺**它自己要驗的那一個**。
+// ⚠️ 本段初稿寫「D5-b2 加 config 時就一次製造了三條綠得不是地方的測試」——
+// **那是我推的，實跑打臉**：config 的檢查排在最後，所以舊 fixture（沒有 config）
+// 的 version／fans／combos／ignores 那幾條，502 的原因**仍然是對的**。
+// 突變 M6（fixture 退回舊寫法）因此存活。
+// 真正的形狀是**潛在的**：只要有人把 config 的檢查往前搬（一個很合理的重構），
+// 那些 fixture 立刻變成「因為 config 缺了而 502」，而狀態碼逐字相同。
+// 突變 M7（config 檢查移到最前面 ＋ fixture 退回舊寫法）確認 assert502Because
+// 抓得到它：`502 的原因不是 "version"…實得: ruleset config missing`。
+// ⇒ 留著它的理由是「檢查順序不該是測試綠不綠的隱性前提」，不是我修好了什麼。
+const allKeys = `"version":"v","fans":{},"combos":{},"ignores":[],"config":{}`
 
 func call(t *testing.T, req events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
 	t.Helper()
@@ -89,7 +103,7 @@ func TestRowMissingIs404(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp.Body), &out); err != nil {
 		t.Fatalf("404 body 應是 JSON: %v", err)
 	}
-	for _, k := range []string{"fans", "combos", "ignores", "version"} {
+	for _, k := range []string{"fans", "combos", "ignores", "version", "config"} {
 		if _, present := out[k]; present {
 			t.Fatalf("404 不可以夾帶 %q（那就是合成空表）: %s", k, resp.Body)
 		}
@@ -99,7 +113,7 @@ func TestRowMissingIs404(t *testing.T) {
 	}
 }
 
-// 3. 快樂路徑：三鍵原封不動、version 正確、success=true。
+// 3. 快樂路徑：四個表鍵原封不動、version 正確、success=true。
 func TestHappyPath(t *testing.T) {
 	f := withFakeStore(t, &fakeStore{raw: validRaw, found: true})
 	resp := call(t, getRequest("u1"))
@@ -115,6 +129,7 @@ func TestHappyPath(t *testing.T) {
 		Fans    json.RawMessage `json:"fans"`
 		Combos  json.RawMessage `json:"combos"`
 		Ignores json.RawMessage `json:"ignores"`
+		Config  json.RawMessage `json:"config"`
 	}
 	if err := json.Unmarshal([]byte(resp.Body), &out); err != nil {
 		t.Fatalf("body 不是 JSON: %v", err)
@@ -125,7 +140,7 @@ func TestHappyPath(t *testing.T) {
 	// 原封不動：用「語意相等」比（Go 的 json 會重排空白但不會重排鍵值）。
 	var src map[string]json.RawMessage
 	_ = json.Unmarshal([]byte(validRaw), &src)
-	for k, got := range map[string]json.RawMessage{"fans": out.Fans, "combos": out.Combos, "ignores": out.Ignores} {
+	for k, got := range map[string]json.RawMessage{"fans": out.Fans, "combos": out.Combos, "ignores": out.Ignores, "config": out.Config} {
 		if !jsonEqual(t, src[k], got) {
 			t.Fatalf("%q 沒有原封不動轉出去:\n want %s\n got  %s", k, src[k], got)
 		}
@@ -133,6 +148,12 @@ func TestHappyPath(t *testing.T) {
 	// fans 裡的巢狀鍵（aliases）也必須還在 —— 「原封不動」不是只有頂層。
 	if !strings.Contains(string(out.Fans), `"aliases":["平胡"]`) {
 		t.Fatalf("fans 的巢狀內容被丟掉了: %s", out.Fans)
+	}
+	// 🔴 config 也要驗到**值**，不能只驗「這個鍵在」：
+	// 整段 config 原封不動與「回了一個空殼 {}」在 jsonEqual 以外的檢查上都成立，
+	// 而後者正是 D5-b2 要防的失效（底傳不過去）。
+	if !strings.Contains(string(out.Config), `"base_di":1`) {
+		t.Fatalf("config.base_di 沒有原封不動轉出去（底傳不過去就是 §5b 那個缺口）: %s", out.Config)
 	}
 }
 
@@ -152,56 +173,60 @@ func TestIgnoresEmptyArrayIsValid(t *testing.T) {
 }
 
 func TestIgnoresAbsentIs502(t *testing.T) {
-	withFakeStore(t, &fakeStore{found: true, raw: `{"version":"tw16-v3","fans":{"a":1},"combos":{}}`})
+	withFakeStore(t, &fakeStore{found: true, raw: `{"version":"tw16-v3","fans":{"a":1},"combos":{},"config":{}}`})
 	resp := call(t, getRequest("u1"))
 	if resp.StatusCode != 502 {
 		t.Fatalf("ignores 缺席必須 502（否則偽裝成「沒有略過詞」）, got %d (body: %s)", resp.StatusCode, resp.Body)
 	}
 	assertNoTable(t, resp.Body)
+	assert502Because(t, resp.Body, "ignores")
 }
 
 func TestIgnoresNullIs502(t *testing.T) {
-	withFakeStore(t, &fakeStore{found: true, raw: `{"version":"tw16-v3","fans":{"a":1},"combos":{},"ignores":null}`})
+	withFakeStore(t, &fakeStore{found: true, raw: `{"version":"tw16-v3","fans":{"a":1},"combos":{},"ignores":null,"config":{}}`})
 	resp := call(t, getRequest("u1"))
 	if resp.StatusCode != 502 {
 		t.Fatalf("ignores: null 必須 502, got %d (body: %s)", resp.StatusCode, resp.Body)
 	}
 	assertNoTable(t, resp.Body)
+	assert502Because(t, resp.Body, "ignores")
 }
 
 // 5. fans／combos 缺席或 null → 502。
 func TestFansCombosMissingIs502(t *testing.T) {
-	cases := map[string]string{
-		"fans absent":   `{"version":"v","combos":{},"ignores":[]}`,
-		"fans null":     `{"version":"v","fans":null,"combos":{},"ignores":[]}`,
-		"combos absent": `{"version":"v","fans":{},"ignores":[]}`,
-		"combos null":   `{"version":"v","fans":{},"combos":null,"ignores":[]}`,
+	// 每個 fixture 只缺自己那一鍵，其餘四鍵齊全 ⇒ 502 的原因不會混。
+	cases := map[string]struct{ raw, because string }{
+		"fans absent":   {`{"version":"v","combos":{},"ignores":[],"config":{}}`, "fans"},
+		"fans null":     {`{"version":"v","fans":null,"combos":{},"ignores":[],"config":{}}`, "fans"},
+		"combos absent": {`{"version":"v","fans":{},"ignores":[],"config":{}}`, "combos"},
+		"combos null":   {`{"version":"v","fans":{},"combos":null,"ignores":[],"config":{}}`, "combos"},
 	}
-	for name, raw := range cases {
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			withFakeStore(t, &fakeStore{found: true, raw: raw})
+			withFakeStore(t, &fakeStore{found: true, raw: c.raw})
 			resp := call(t, getRequest("u1"))
 			if resp.StatusCode != 502 {
 				t.Fatalf("want 502, got %d (body: %s)", resp.StatusCode, resp.Body)
 			}
 			assertNoTable(t, resp.Body)
+			assert502Because(t, resp.Body, c.because)
 		})
 	}
 	// 正控：同形的 raw 把缺的鍵補回（空物件）就要 200 —— 否則上面的 502
 	// 可能是別的原因（例如 version）造成的，而兩者在狀態碼上逐字相同。
-	withFakeStore(t, &fakeStore{found: true, raw: `{"version":"v","fans":{},"combos":{},"ignores":[]}`})
+	withFakeStore(t, &fakeStore{found: true, raw: `{` + allKeys + `}`})
 	resp := call(t, getRequest("u1"))
 	if resp.StatusCode != 200 {
-		t.Fatalf("正控失敗：三鍵齊全（即使是空物件）應該 200, got %d (body: %s)", resp.StatusCode, resp.Body)
+		t.Fatalf("正控失敗：五鍵齊全（即使是空物件）應該 200, got %d (body: %s)", resp.StatusCode, resp.Body)
 	}
 }
 
 // 6. version 缺席／空字串／null → 502。
 func TestVersionMissingIs502(t *testing.T) {
 	cases := map[string]string{
-		"version absent": `{"fans":{},"combos":{},"ignores":[]}`,
-		"version empty":  `{"version":"","fans":{},"combos":{},"ignores":[]}`,
-		"version null":   `{"version":null,"fans":{},"combos":{},"ignores":[]}`,
+		"version absent": `{"fans":{},"combos":{},"ignores":[],"config":{}}`,
+		"version empty":  `{"version":"","fans":{},"combos":{},"ignores":[],"config":{}}`,
+		"version null":   `{"version":null,"fans":{},"combos":{},"ignores":[],"config":{}}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -211,6 +236,7 @@ func TestVersionMissingIs502(t *testing.T) {
 				t.Fatalf("want 502, got %d (body: %s)", resp.StatusCode, resp.Body)
 			}
 			assertNoTable(t, resp.Body)
+			assert502Because(t, resp.Body, "version")
 		})
 	}
 }
@@ -265,6 +291,67 @@ func TestOptionsAndMethods(t *testing.T) {
 	}
 }
 
+// 10. D5-b2：config 缺席／null → 502。
+// 🔴 這是 §5b 量到的缺口：後台把「底」從 1 改成 2，下發傳不過去，
+// App 端拿到新的 fans 配著 bundle 裡的舊 config —— 而且缺了不會叫。
+func TestConfigMissingIs502(t *testing.T) {
+	cases := map[string]string{
+		"config absent": `{"version":"v","fans":{},"combos":{},"ignores":[]}`,
+		"config null":   `{"version":"v","fans":{},"combos":{},"ignores":[],"config":null}`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			withFakeStore(t, &fakeStore{found: true, raw: raw})
+			resp := call(t, getRequest("u1"))
+			if resp.StatusCode != 502 {
+				t.Fatalf("config %s 必須 502（否則底傳不過去而零徵兆）, got %d (body: %s)", name, resp.StatusCode, resp.Body)
+			}
+			assertNoTable(t, resp.Body)
+			assert502Because(t, resp.Body, "config")
+		})
+	}
+}
+
+// 11. 🔴 這一條與上一條必須一起看，理由同 ignores 那一對：
+// 只有「缺席 502」的話，把判準寫成「config 是空物件也 502」照樣全綠 —— 那是錯的。
+// config: {} 是**合法**的：唯一有計分作用的欄位是 config.base_di，而
+// scoring.js:165 是 `if (cfg.base_di) total += cfg.base_di`
+// ⇒「base_di 缺席」與「base_di: 0」在引擎裡逐值相同，缺席就是「這家沒有底」的
+// 合法表示法。要求它存在等於發明一條引擎沒有的約束。
+func TestConfigEmptyObjectIsValid(t *testing.T) {
+	withFakeStore(t, &fakeStore{found: true, raw: `{` + allKeys + `}`})
+	resp := call(t, getRequest("u1"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("config: {} 是合法值（沒有底），必須 200, got %d (body: %s)", resp.StatusCode, resp.Body)
+	}
+	var out map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(resp.Body), &out)
+	if string(out["config"]) != "{}" {
+		t.Fatalf("空 config 要回 {} 不回 null: %s", out["config"])
+	}
+}
+
+// 12. 🔴 死旗標不進契約（§5b 實測：零讀取端）。
+// 但這支的職責是「原封不動」⇒ 後台那一列裡真的有它時，**不可以被丟掉也不可以報錯**。
+// 「不進契約」講的是「不要求它在」，不是「看到就過濾」——兩者差很多，
+// 而過濾掉會讓 D5-e 後台編輯頁存進去的東西悄悄消失。
+func TestUnknownConfigFieldsPassThrough(t *testing.T) {
+	raw := `{"version":"v","fans":{},"combos":{},"ignores":[],` +
+		`"config":{"base_di":2,"allow_stack_menqing_zimo":true,"future_knob":"x"}}`
+	withFakeStore(t, &fakeStore{found: true, raw: raw})
+	resp := call(t, getRequest("u1"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("config 裡有契約外的欄位不該擋, got %d (body: %s)", resp.StatusCode, resp.Body)
+	}
+	var out map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(resp.Body), &out)
+	for _, needle := range []string{`"base_di":2`, `"allow_stack_menqing_zimo":true`, `"future_knob":"x"`} {
+		if !strings.Contains(string(out["config"]), needle) {
+			t.Fatalf("config 沒有原封不動轉出去，少了 %s: %s", needle, out["config"])
+		}
+	}
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 // assertNoTable：非 200 的 body 不可以夾帶任何表鍵（不回半份表）。
@@ -277,10 +364,26 @@ func assertNoTable(t *testing.T, body string) {
 	if string(out["success"]) != "false" {
 		t.Fatalf("error body 的 success 必須是 false: %s", body)
 	}
-	for _, k := range []string{"fans", "combos", "ignores", "version"} {
+	for _, k := range []string{"fans", "combos", "ignores", "version", "config"} {
 		if _, present := out[k]; present {
 			t.Fatalf("錯誤回應不可以夾帶 %q（半份表）: %s", k, body)
 		}
+	}
+}
+
+// assert502Because：502 的 body 要指名**是哪一鍵**缺了。
+// 🔴 五個表鍵都會 502 ⇒ 只斷言狀態碼的話，fixture 少寫一鍵會讓測試
+// 綠得毫無鑑別力（D5-b2 加 config 時就一次製造了三條這種）。
+func assert502Because(t *testing.T, body, key string) {
+	t.Helper()
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("error body 應是 JSON: %v (%s)", err, body)
+	}
+	if !strings.Contains(out.Error, "ruleset "+key+" missing") {
+		t.Fatalf("502 的原因不是 %q —— 這條測試綠得不是地方。實得: %s", key, out.Error)
 	}
 }
 

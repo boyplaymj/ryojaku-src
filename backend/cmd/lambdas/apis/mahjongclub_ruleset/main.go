@@ -21,7 +21,7 @@ import (
 // GET /ruleset —— 把後台的家規台數表原封不動下發給 App（DESIGN_APP.md §5／§5a）。
 //
 // 載體：<TABLE_PREFIX>AdminConfigs 的**一列** info_key = "VoiceTai:Ruleset"，
-// info_value 是一段 JSON 字串 {"version","fans","combos","ignores"}。
+// info_value 是一段 JSON 字串 {"version","fans","combos","ignores","config"}。
 // 🔴 一列不是三列：三者合成一份 JSON，「表下發了、略過詞沒有」那個失效模式
 // 在載體形狀上就不存在（§0.2 的 bug 根因）。
 //
@@ -30,10 +30,26 @@ import (
 //   - 那一列不存在      → 404（⛔ 不合成空表：空 fans 會讓每句話判 0 台，
 //                              而那跟「表還沒建」在 App 端讀數上逐字相同）
 //   - info_value 解析失敗 → 502（不回 200 帶半份表）
-//   - fans/combos/ignores 任一鍵缺席或 null → 502（ignores: [] 是合法值，要與缺席分開判）
+//   - fans/combos/ignores/config 任一鍵缺席或 null → 502
+//     （ignores: [] 是合法值，要與缺席分開判；config: {} 同理，見下方 D5-b2 那段）
 //   - version 缺席或空字串 → 502
 //   - DDB 本身出錯        → 502
 //   - 沒有 authorizer userId → 401（fail-closed，比照 POST /voice-corrections）
+//
+// 🔴 D5-b2（2026-09-03）：`config` 是**第五個**表鍵，缺了要 502。
+// 起因是 §5b 量到的缺口：後台把「底」從 1 改成 2，下發傳不過去，
+// App 端拿到新的 fans 卻配著 bundle 裡的舊 config —— 而且**零徵兆**，
+// 因為它當時根本不在檢查清單裡（「表下發了、略過詞沒有」那個 bug 的同構）。
+//
+// 🔴 **界線：這支不看 config 裡面有什麼，`config: {}` 是合法的 200。**
+// 唯一有計分作用的欄位是 config.base_di（scoring.js:165
+// `if (cfg.base_di) total += cfg.base_di`）——而那一行讓「base_di 缺席」
+// 與「base_di: 0」在引擎裡逐值相同，⇒ 缺席是「這家沒有底」的**合法表示法**，
+// 不是遺失。要求它存在等於發明一條引擎沒有的約束。
+// （config.allow_stack_menqing_zimo 是零讀取端的死旗標，§5b 實測確認，
+// **不進契約**；哪天有人實作了它的語意，probe_config_flag.mjs 會轉紅。）
+// 那 config 進契約還有什麼用？擋的是**整個 config 掉了**——
+// 那一種是遺失，而它跟「這家沒有底」在 App 端的計分結果上逐字相同。
 
 const rulesetInfoKey = "VoiceTai:Ruleset"
 
@@ -62,6 +78,7 @@ type rulesetPayload struct {
 	Fans    json.RawMessage `json:"fans"`
 	Combos  json.RawMessage `json:"combos"`
 	Ignores json.RawMessage `json:"ignores"`
+	Config  json.RawMessage `json:"config"`
 }
 
 type RulesetResponse struct {
@@ -70,6 +87,7 @@ type RulesetResponse struct {
 	Fans    json.RawMessage `json:"fans"`
 	Combos  json.RawMessage `json:"combos"`
 	Ignores json.RawMessage `json:"ignores"`
+	Config  json.RawMessage `json:"config"`
 }
 
 type ErrorResponse struct {
@@ -158,12 +176,16 @@ func parseRuleset(raw string) (RulesetResponse, error) {
 	if isAbsentOrNull(p.Ignores) {
 		return RulesetResponse{}, errors.New("ruleset ignores missing")
 	}
+	if isAbsentOrNull(p.Config) {
+		return RulesetResponse{}, errors.New("ruleset config missing")
+	}
 	return RulesetResponse{
 		Success: true,
 		Version: *p.Version,
 		Fans:    p.Fans,
 		Combos:  p.Combos,
 		Ignores: p.Ignores,
+		Config:  p.Config,
 	}, nil
 }
 
