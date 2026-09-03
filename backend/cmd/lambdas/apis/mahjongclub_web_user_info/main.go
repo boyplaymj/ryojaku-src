@@ -237,6 +237,19 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
+	// Never return server-side credentials to the client, even to the account
+	// owner (a response body can leak via logs/caches and then be replayed).
+	//   - PasswordHash: bcrypt hash (finding 3).
+	//   - EncryptedLineID: app-login accepts this ciphertext AS an auth
+	//     credential (SECURITY_AUTH_BYPASS §5d-1, "密文即憑證"), so it is
+	//     replayable. The frontend does not read it from this endpoint
+	//     (frontend/DATA_CONSISTENCY_ANALYSIS.md marks it 不使用).
+	// (SECURITY_AUDIT_2026-09-03 findings 3 & 7)
+	if user != nil {
+		user.PasswordHash = ""
+		user.EncryptedLineID = ""
+	}
+
 	response := struct {
 		Success       bool         `json:"success"`
 		Data          *shared.User `json:"data,omitempty"`
