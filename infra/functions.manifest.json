@@ -928,5 +928,17 @@
         "VoiceCorrections"
       ]
     }
+,
+    {
+      "name": "ruleset",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_ruleset",
+      "apiType": "REST_V1",
+      "method": "GET",
+      "path": "/ruleset",
+      "auth": "user",
+      "tables": [
+        "AdminConfigs"
+      ]
+    }
   ]
 }
