@@ -15,6 +15,7 @@ const TopBar: React.FC = () => {
     switch (path) {
       case '/': return '社群動態';
       case '/search': return '尋找團局';
+      case '/matchmaking': return '揪咖';
       case '/my-events': return '我的團局';
       case '/profile': return '個人檔案';
       case '/create': return '建立團局';

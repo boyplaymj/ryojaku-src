@@ -5,6 +5,7 @@ import TopBar from './components/TopBar';
 import PullToRefresh from './components/PullToRefresh';
 import Home from './pages/Home';
 import SearchPage from './pages/Search';
+import Matchmaking from './pages/Matchmaking';
 import CreateGroup from './pages/CreateGroup';
 import EventDetail from './pages/EventDetail';
 import PostDetail from './pages/PostDetail';
@@ -43,7 +44,7 @@ const Layout: React.FC<{ children: React.ReactNode; user: User | null }> = ({ ch
   const { onRefresh } = useRefresh();
 
   // Routes that should have the main navigation shell (TopBar + BottomNav)
-  const mainNavRoutes = ['/', '/search', '/messages', '/profile', '/create', '/notifications', '/ledger'];
+  const mainNavRoutes = ['/', '/search', '/matchmaking', '/messages', '/profile', '/create', '/notifications', '/ledger'];
   const showNav = mainNavRoutes.includes(location.pathname) ||
     location.pathname.startsWith('/rate-game/') ||
     location.pathname.startsWith('/reviews/') ||
@@ -301,6 +302,8 @@ function App() {
               <Routes>
                 <Route path="/" element={<HomeRoute events={events} user={user} onUserUpdate={handleUserUpdate} />} />
                 <Route path="/search" element={<SearchPage />} />
+                {/* 揪咖頁（[A2-a-2]）。還不是預設頁——換 `/` 與 BottomNav 是 [A2-b]。 */}
+                <Route path="/matchmaking" element={<Matchmaking user={user} />} />
                 <Route path="/messages" element={<Messages />} />
                 <Route path="/chat/:roomId" element={<ChatRoom />} />
                 <Route path="/create" element={<CreateGroup onCreate={handleCreateGame} user={user} />} />
