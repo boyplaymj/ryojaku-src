@@ -119,6 +119,19 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 			Body:       string(body),
 		}, nil
 	}
+	// getGame returns (nil, nil) when the game does not exist. Without this
+	// guard the nil is dereferenced below (game.HostUserID) → panic → 502,
+	// which an anonymous caller can trigger at will with a bogus gameId.
+	// (SECURITY_AUDIT_2026-09-03 finding 6b)
+	if game == nil {
+		response := Response{Success: false, Error: "找不到團局"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusNotFound,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
 
 	// Get registrations for this game
 	registrations, err := getRegistrations(ctx, gameID)
@@ -232,12 +245,12 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
-	// If not authorized, hide LINE IDs
+	// If not authorized, hide contact PII for host and players. Uses the shared
+	// helper so it stays in sync with search_games and covers ContactInfo.Phone
+	// and Note, which the previous inline version missed.
+	// (SECURITY_AUDIT_2026-09-03 finding 1b)
 	if !isAuthorized {
-		game.ContactInfo.LineID = ""
-		for i := range game.JoinedPlayers {
-			game.JoinedPlayers[i].LineID = ""
-		}
+		shared.RedactContactInfo(game)
 	}
 
 	// Collect all user IDs to fetch pictures

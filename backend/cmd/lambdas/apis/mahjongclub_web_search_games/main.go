@@ -312,6 +312,14 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
+	// Redact contact PII before returning. Search is an anonymous browse view
+	// with no requester identity, so contact info is always stripped here;
+	// it is only revealed via game_detail to an authorized requester.
+	// (SECURITY_AUDIT_2026-09-03 finding 1)
+	for _, g := range games {
+		shared.RedactContactInfo(g)
+	}
+
 	// Return games
 	response := Response{
 		Success: true,
