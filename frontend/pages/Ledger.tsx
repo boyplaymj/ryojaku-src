@@ -14,27 +14,11 @@ import CyberpunkConfirmModal from '../components/CyberpunkConfirmModal';
 import { AppInput, AppSelect, AppButton } from '../components/ui/CommonUI';
 import { Game } from '../types';
 
+import { Opponent, LedgerEntry, filterEntriesByMonth, computeLedgerStats } from '../utils/ledgerStats';
 
 // --- Types ---
-interface Opponent {
-    name: string;
-    userId?: string;
-}
-
-interface LedgerEntry {
-    userId: string;
-    ledgerId?: string;
-    date: string;
-    stakes: string;
-    rounds: number;
-    winLoss: number;
-    actualAmount: number;
-    opponents: Opponent[];
-    mood: string;
-    note: string;
-    gameId?: string;
-    createdAt?: number;
-}
+// Opponent / LedgerEntry 已搬到 utils/ledgerStats.ts（[A1-a-1]）。
+// LedgerSummary 留在這裡：它是後端回來的那份，跟 computeLedgerStats 算的 LedgerStats 欄位不同，不要合併。
 
 interface LedgerSummary {
     totalEntries: number;
@@ -221,64 +205,9 @@ const LedgerPage: React.FC<LedgerProps> = ({ isOverlay, onClose, onAddActionTrig
         }
     }, []);
 
-    const filteredEntries = entries.filter(e => {
-        const [y, m] = e.date.split('-').map(Number);
-        return y === currentMonth.getFullYear() && (m - 1) === currentMonth.getMonth();
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const filteredEntries = filterEntriesByMonth(entries, currentMonth);
 
-    const computedSummary = React.useMemo(() => {
-        const totalEntries = filteredEntries.length;
-        const totalRounds = filteredEntries.reduce((sum, e) => sum + (e.rounds || 0), 0);
-        const totalWinLoss = filteredEntries.reduce((sum, e) => sum + (e.winLoss || 0), 0);
-        const averageWin = totalEntries > 0 ? totalWinLoss / totalEntries : 0;
-        const winRate = totalEntries > 0 ? (filteredEntries.filter(e => e.winLoss >= 0).length / totalEntries) * 100 : 0;
-
-        // Opponent stats
-        const opponentCounts: Record<string, number> = {};
-        const opponentWinCounts: Record<string, number> = {};
-        const stakesCounts: Record<string, number> = {};
-
-        filteredEntries.forEach(entry => {
-            // Stakes
-            if (entry.stakes) {
-                stakesCounts[entry.stakes] = (stakesCounts[entry.stakes] || 0) + 1;
-            }
-
-            // Opponents
-            (entry.opponents || []).forEach(opp => {
-                if (opp.name && opp.name.trim()) {
-                    opponentCounts[opp.name] = (opponentCounts[opp.name] || 0) + 1;
-                    if ((entry.winLoss || 0) > 0) {
-                        opponentWinCounts[opp.name] = (opponentWinCounts[opp.name] || 0) + 1;
-                    }
-                }
-            });
-        });
-
-        const sortedOpps = Object.entries(opponentCounts).sort((a, b) => b[1] - a[1]);
-        const mostFrequentOpponent = sortedOpps[0]?.[0] || '無';
-
-        const sortedWinOpps = Object.entries(opponentWinCounts).sort((a, b) => b[1] - a[1]);
-        const mostWonOpponent = sortedWinOpps[0]?.[0] || '無';
-
-        const sortedStakes = Object.entries(stakesCounts).sort((a, b) => b[1] - a[1]);
-        const topStakes = sortedStakes.slice(0, 3).map(([stake, count]) => ({
-            label: stake,
-            count: count,
-            percentage: totalEntries > 0 ? Math.round((count / totalEntries) * 100) : 0
-        }));
-
-        return {
-            totalEntries,
-            totalRounds,
-            totalWinLoss,
-            averageWin,
-            winRate,
-            mostFrequentOpponent,
-            mostWonOpponent,
-            topStakes
-        };
-    }, [filteredEntries]);
+    const computedSummary = React.useMemo(() => computeLedgerStats(filteredEntries), [filteredEntries]);
 
     useEffect(() => {
         if (onAddActionTrigger && onAddActionTrigger > 0) {
