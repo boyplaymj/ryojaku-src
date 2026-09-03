@@ -105,6 +105,20 @@ AUTHORIZER_PILOT = {
     # ⓘ 配對的 admin 讀取端 admin-voice-corrections **不必**列在這裡：
     #    下面 authorizer_for() 對 auth=="admin" 是自動掛 RyojakuAdminAuth 的。
     "voice-corrections",      # REST_V1 POST /voice-corrections
+
+    # 語音判台「家規台數表下發」的讀取端（D5-b，正典 tools/mahjong-tai/DESIGN_APP.md §5）。
+    # 🔴 這是本名單第三次被漏列（S4 event-get-upload-url → D3 voice-corrections → 本次），
+    #    而前兩次的教訓就寫在上面兩段裡，我照樣漏了。原因是結構的，不是紀律：
+    #    manifest 寫 auth:"user" 是**一個看起來已經宣告完成的動作**，它產生的錯誤訊號是零。
+    #    D5-b 的 commit 訊息、設計冊 §5a 都寫著「auth user」，三處一致 —— 而三處都不接線。
+    #    ⇒ 在 S2 把這裡改成讀 manifest 的 auth 欄位之前，**這裡沒有守衛**。
+    #      （本句 2026-09-03 訂正：初稿寫「唯一的守衛是 audit_auth_matrix.py，而它是手動閘門」，
+    #       兩半都不對。實查：①全 repo 沒有任何腳本／Makefile／CI 觸發它 ②它尾巴只有 print、
+    #       沒有 sys.exit ⇒ 它是報表不是閘門，跑了也永遠 rc=0。實測本次缺陷它**分得出來**
+    #       （修前 `ruleset user 無`／修後 `ruleset user RyojakuUserAuth`）卻不會叫 ——
+    #       「有算、有印」不等於「有接上」。)
+    # ⚠️ 它自己也 fail-closed（AuthorizerUserID 為空即 401），掛 authorizer 是第二層。
+    "ruleset",                # REST_V1 GET  /ruleset
 }
 
 def authorizer_for(f):
