@@ -8,8 +8,10 @@ import { Loader2, Settings, Star, Layers, FileText } from 'lucide-react';
 import { sortMyGames } from '../utils/myGamesSort';
 import { usePullToRefresh } from '../contexts/RefreshContext';
 
+// 🔴 [A2-b-2] `userId` 已移除：兩個呼叫端都傳了，而這裡從來沒有讀它。
+//    列表來自 `api.getMyGames()`，那支吃的是登入 token ⇒ 這個元件永遠只顯示
+//    **登入者自己**的局。留著 userId 會讓人以為傳別人的 id 就能看別人的局（不會）。
 interface MyGamesSectionProps {
-    userId: string;
     initialTab?: 'created' | 'joined';
     /**
      * 要不要把 fetchMyGames 掛到下拉刷新（[A2-b-1]）。預設 **false**：
@@ -20,7 +22,7 @@ interface MyGamesSectionProps {
     pullToRefresh?: boolean;
 }
 
-const MyGamesSection: React.FC<MyGamesSectionProps> = ({ userId, initialTab = 'created', pullToRefresh = false }) => {
+const MyGamesSection: React.FC<MyGamesSectionProps> = ({ initialTab = 'created', pullToRefresh = false }) => {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<'created' | 'joined'>(initialTab);
     const [events, setEvents] = useState<GroupEvent[]>([]);

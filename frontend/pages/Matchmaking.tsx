@@ -14,7 +14,11 @@
 //    （MyGamesOverlay 從個人頁點進去的就是它）。
 //
 // 🔴 tab 記在網址 `?tab=mine|find`（useSearchParams），不是 useState：
-//    底部導覽才能直接指定 tab，返回鍵也才會退回上一個 tab。解析在 utils/matchmakingTab.ts。
+//    底部導覽與外部連結才能直接指定 tab。解析在 utils/matchmakingTab.ts。
+//    ⚠️ [A2-b-2] 訂正：切 tab 走 `replace`，**不會**新增一筆 history。原本那句
+//    「返回鍵會退回上一個 tab」是 [A2-a-2] 揪咖還在 `/matchmaking` 二級頁時寫的，
+//    變成著陸頁之後它的代價是「來回點 tab 幾次就按不完返回鍵」。理由寫在
+//    utils/matchmakingTab.ts 的 MATCHMAKING_TAB_NAV_OPTIONS。
 //
 // 🔴 [A2-b-1]：`/` 與 `/matchmaking` 都畫這一頁（utils/appRoutes.ts），底欄第一格指到 `/`。
 //    它是著陸頁，所以「我的局」那個 tab 要接下拉刷新：MyGamesSection 傳 `pullToRefresh`
@@ -26,18 +30,20 @@ import { useSearchParams } from 'react-router-dom';
 import { CalendarCheck, Search as SearchIcon } from 'lucide-react';
 import MyGamesSection from '../components/MyGamesSection';
 import SearchContent from '../components/SearchContent';
-import { User } from '../types';
 import {
     MATCHMAKING_TABS,
+    MATCHMAKING_TAB_NAV_OPTIONS,
     MATCHMAKING_TAB_PARAM,
     MatchmakingTab,
+    buildMatchmakingTabParams,
     matchmakingTabLabel,
     parseMatchmakingTab,
 } from '../utils/matchmakingTab';
 
-interface MatchmakingProps {
-    user: User;
-}
+// 🔴 [A2-b-2] 這一頁不收任何 prop。它原本收 `user`，而 user 唯一的用途是餵
+//    `MyGamesSection userId={user.userId}` —— 那個 userId 本身是死的（見該檔），
+//    收掉它之後 `user` 也一起沒有消費端了。要再加回來的時候要有真的讀它的程式碼，
+//    不是「頁面大概會用到」。
 
 /** tab 列高度（h-14＝3.5rem）。SearchContent 的子 tab 列要貼在 TopBar(4rem)＋這一列之下。 */
 const TAB_BAR_STICKY_TOP = 'top-[calc(4rem+env(safe-area-inset-top))]';
@@ -48,17 +54,13 @@ const TAB_ICONS: Record<MatchmakingTab, React.ComponentType<{ size?: string | nu
     find: SearchIcon,
 };
 
-const Matchmaking: React.FC<MatchmakingProps> = ({ user }) => {
+const Matchmaking: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const activeTab = parseMatchmakingTab(searchParams.get(MATCHMAKING_TAB_PARAM));
 
     const selectTab = (tab: MatchmakingTab) => {
         if (tab === activeTab) return;
-        setSearchParams(prev => {
-            const next = new URLSearchParams(prev);
-            next.set(MATCHMAKING_TAB_PARAM, tab);
-            return next;
-        });
+        setSearchParams(prev => buildMatchmakingTabParams(prev, tab), MATCHMAKING_TAB_NAV_OPTIONS);
     };
 
     return (
@@ -92,7 +94,7 @@ const Matchmaking: React.FC<MatchmakingProps> = ({ user }) => {
 
             {activeTab === 'mine' ? (
                 <div className="max-w-2xl mx-auto w-full py-6">
-                    <MyGamesSection userId={user.userId} pullToRefresh />
+                    <MyGamesSection pullToRefresh />
                 </div>
             ) : (
                 <SearchContent stickyTopClass={SEARCH_STICKY_TOP_UNDER_TAB_BAR} />

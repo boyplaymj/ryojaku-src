@@ -73,8 +73,8 @@ const Layout: React.FC<{ children: React.ReactNode; user: User | null }> = ({ ch
 };
 
 // Wrapper for Home to handle refresh registration
-const HomeRoute: React.FC<{ events: GroupEvent[]; user: User | null; onUserUpdate: (user: User) => void }> = ({ events, user, onUserUpdate }) => {
-  return <Home events={events} user={user} onUserUpdate={onUserUpdate} />;
+const HomeRoute: React.FC<{ user: User | null; onUserUpdate: (user: User) => void }> = ({ user, onUserUpdate }) => {
+  return <Home user={user} onUserUpdate={onUserUpdate} />;
 };
 
 function App() {
@@ -298,9 +298,9 @@ function App() {
             <Layout user={user}>
               <Routes>
                 {/* [A2-b-1] 揪咖是預設頁（§3.1）：`/` 與 `/matchmaking` 都畫它。動態牆搬到 /feed，入口在個人頁。 */}
-                <Route path={APP_ROUTES.matchmaking} element={<Matchmaking user={user} />} />
-                <Route path={APP_ROUTES.matchmakingLegacy} element={<Matchmaking user={user} />} />
-                <Route path={APP_ROUTES.feed} element={<HomeRoute events={events} user={user} onUserUpdate={handleUserUpdate} />} />
+                <Route path={APP_ROUTES.matchmaking} element={<Matchmaking />} />
+                <Route path={APP_ROUTES.matchmakingLegacy} element={<Matchmaking />} />
+                <Route path={APP_ROUTES.feed} element={<HomeRoute user={user} onUserUpdate={handleUserUpdate} />} />
                 {/* /search 保留給書籤／舊連結；底欄已不再有它（內容＝揪咖頁「找場次」tab）。 */}
                 <Route path={APP_ROUTES.search} element={<SearchPage />} />
                 <Route path="/messages" element={<Messages />} />

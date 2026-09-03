@@ -1121,7 +1121,6 @@ const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUserUpdate, inviter
                     <MyGamesOverlay
                         isOpen={isMyGamesOpen}
                         onClose={() => setIsMyGamesOpen(false)}
-                        userId={user.userId}
                         initialTab={myGamesTab}
                     />
                 )

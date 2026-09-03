@@ -43,3 +43,29 @@ export function parseMatchmakingTab(raw: unknown): MatchmakingTab {
 export function matchmakingTabLabel(tab: MatchmakingTab): string {
     return LABELS[tab];
 }
+
+/**
+ * 切 tab 時給 `setSearchParams` 的第二個參數。
+ *
+ * 🔴 `replace: true` 是 [A2-b-2] 的訂正。[A2-a-2] 原本用預設的 push，理由寫成
+ *    「返回鍵才會退回上一個 tab」—— 那句在揪咖還是二級頁（`/matchmaking`）時說得通，
+ *    但 [A2-b-1] 把它變成著陸頁（`/`）之後就反了：來回點兩個 tab 五次就在 history 疊十筆，
+ *    使用者要按十次返回鍵才離得開 App，而且每一次都只是在原地換 tab。
+ *    切 tab 是**同一頁的視圖切換**，不是換頁 ⇒ 取代目前這筆，不新增。
+ * ⚠️ 這不影響「從底欄或外部連結帶著 `?tab=` 進來」——那是 navigate()／開新網址，本來就是 push。
+ */
+export const MATCHMAKING_TAB_NAV_OPTIONS = { replace: true } as const;
+
+/**
+ * 算出「切到 `tab`」之後網址該有的 query。
+ *
+ * 🔴 以現有的 query 為底再 set，不是重開一份：這一頁的網址參數不只有 `tab`
+ *    （SearchContent 之後會有自己的），整包換掉會安靜地吃掉別人的參數，
+ *    而畫面上跟正常切 tab 逐格相同。抽出來是為了讓這件事有測試釘得住 ——
+ *    寫在 JSX 裡的時候沒有任何東西碰得到它。
+ */
+export function buildMatchmakingTabParams(prev: URLSearchParams, tab: MatchmakingTab): URLSearchParams {
+    const next = new URLSearchParams(prev);
+    next.set(MATCHMAKING_TAB_PARAM, tab);
+    return next;
+}

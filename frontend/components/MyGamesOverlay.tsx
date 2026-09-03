@@ -3,14 +3,15 @@ import { createPortal } from 'react-dom';
 import { ArrowLeft, Trophy } from 'lucide-react';
 import MyGamesSection from './MyGamesSection';
 
+// 🔴 [A2-b-2] `userId` 已移除：它唯一的用途是往下傳給 MyGamesSection，
+//    而那一層本來就沒在讀（列表吃登入 token）。留在這裡只是把死 prop 往上搬一層。
 interface MyGamesOverlayProps {
     isOpen: boolean;
     onClose: () => void;
-    userId: string;
     initialTab: 'created' | 'joined';
 }
 
-const MyGamesOverlay: React.FC<MyGamesOverlayProps> = ({ isOpen, onClose, userId, initialTab }) => {
+const MyGamesOverlay: React.FC<MyGamesOverlayProps> = ({ isOpen, onClose, initialTab }) => {
     const [shouldRender, setShouldRender] = useState(isOpen);
 
     useEffect(() => {
@@ -76,7 +77,7 @@ const MyGamesOverlay: React.FC<MyGamesOverlayProps> = ({ isOpen, onClose, userId
             {/* Content Scrollable area */}
             <div className="flex-1 overflow-y-auto relative z-10 no-scrollbar bg-[#f9f9f7]">
                 <div className="max-w-2xl mx-auto py-6 pb-SafeBottom">
-                    <MyGamesSection userId={userId} initialTab={initialTab} />
+                    <MyGamesSection initialTab={initialTab} />
                 </div>
             </div>
         </div>,

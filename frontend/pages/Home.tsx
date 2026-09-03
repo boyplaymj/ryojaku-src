@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, GroupEvent } from '../types';
+import { User } from '../types';
 import { Dices, Search, Trophy, Activity, Target, Zap, Users, Edit3, Image as ImageIcon } from 'lucide-react';
 import PostFeed from '../components/PostFeed';
 import AppShareWidget from '../components/AppShareWidget';
@@ -14,8 +14,11 @@ import { api } from '../services/dataService';
 import { notificationService } from '../services/notificationService';
 import { claimPushBonus } from '../services/apiService';
 
+// 🔴 [A2-b-2] `events` 已移除：它宣告在 props 裡但從來沒有被解構、更沒有被讀。
+//    §1 缺陷 #1「Home 不顯示 events」的解法是 [A2-b-1] 換著陸頁（動態牆降到 /feed），
+//    不是在這裡把它渲染出來 ⇒ 這個 prop 沒有將來的消費端，留著只會讓下一個人
+//    以為動態牆頁應該要顯示團局。
 interface HomeProps {
-    events: GroupEvent[];
     user: User | null;
     onUserUpdate?: (user: User) => void;
 }
