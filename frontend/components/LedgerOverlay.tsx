@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Plus } from 'lucide-react';
-import LedgerPage from '../pages/Ledger';
+import LedgerContent from './ledger/LedgerContent';
 
 interface LedgerOverlayProps {
     isOpen: boolean;
@@ -82,7 +82,13 @@ const LedgerOverlay: React.FC<LedgerOverlayProps> = ({ isOpen, onClose }) => {
 
             {/* Content Scrollable area */}
             <div className="flex-1 overflow-y-auto relative z-10 scrollbar-hide">
-                <LedgerPage isOverlay onClose={onClose} onAddActionTrigger={triggerAdd} />
+                <LedgerContent
+                    autoOpenAddModalOnGameId={false}
+                    topPaddingClass="pt-8"
+                    monthBarStickyTopClass="top-0"
+                    onAddActionTrigger={triggerAdd}
+                    onBeforeNavigateAway={onClose}
+                />
             </div>
         </div>,
         document.body
