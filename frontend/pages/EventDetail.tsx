@@ -4,7 +4,8 @@ import { useToast } from '../contexts/ToastContext';
 import CyberpunkConfirmModal from '../components/CyberpunkConfirmModal';
 import { useParams, useNavigate } from 'react-router-dom';
 import { GroupEvent, Game, UserStats, User } from '../types';
-import { X, Zap, MapPin, Users, Coins, Clock, Gamepad2, Phone, Copy, Loader2, Check, Ban, Settings, Star, ArrowLeft, Gift } from 'lucide-react';
+import { X, Zap, MapPin, Users, Coins, Clock, Gamepad2, Phone, Copy, Loader2, Check, Ban, Settings, Star, ArrowLeft, Gift, Mic } from 'lucide-react';
+import { shouldShowVoiceTaiEntry } from '../utils/eventActions';
 import { api, gameToGroupEvent } from '../services/dataService';
 import { authService } from '../services/authService';
 import ProfileIncompleteModal from '../components/ProfileIncompleteModal';
@@ -921,6 +922,25 @@ const EventDetail: React.FC<EventDetailProps> = ({ events, onJoin, user }) => {
                                 </button>
                             );
                         })()}
+
+                        {/* 語音判台入口（[A1-b]，PLAYER_APP_REDESIGN.md §8 第 2 項）
+                            判台是牌桌上進行中要用的，所以放在「打完才用」的評價按鈕前面。
+                            🔴 顯示條件在 utils/eventActions.ts（有測試），不要在這裡重寫一份。
+                            🔴 不傳 gameId：判台頁目前不讀任何參數，接資料是 [A1-c] 的事。
+                            🔴 文案要寫明「不會寫入帳本」—— 從局裡點進去，使用者會預期這局的台數被記下來，
+                               而那條線還沒做。 */}
+                        {shouldShowVoiceTaiEntry({ isOwner: event.isOwner, joined: event.joined, status: event.status }) && (
+                            <button
+                                onClick={() => navigate('/training/voice-tai')}
+                                className="w-full mt-4 py-5 bg-neutral-900 text-white font-black rounded-lg shadow-xl shadow-neutral-900/20 hover:bg-black hover:scale-[1.01] transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs"
+                            >
+                                <Mic size="1.25rem" strokeWidth={2.5} className="text-[#c5a059]" />
+                                <span className="flex flex-col items-center leading-tight">
+                                    <span>語音判台</span>
+                                    <span className="text-[0.5625rem] font-medium normal-case tracking-[0.1em] text-neutral-400 mt-1">講出牌型直接算台數 · 不會寫入帳本</span>
+                                </span>
+                            </button>
+                        )}
 
                         {/* Rate Game Button - Show for participants after game */}
                         {(event.isOwner || event.joined) && gameDetail?.status === 'completed' && (
