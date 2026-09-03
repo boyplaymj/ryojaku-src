@@ -6,6 +6,7 @@ import EventDetailModal from '../components/EventDetailModal';
 import { api } from '../services/dataService';
 import { Loader2, Settings, Star } from 'lucide-react';
 import { usePullToRefresh } from '../contexts/RefreshContext';
+import { sortMyGames } from '../utils/myGamesSort';
 
 interface MyEventsProps {
     events: GroupEvent[];
@@ -46,46 +47,11 @@ const MyEvents: React.FC<MyEventsProps> = ({ events: initialEvents }) => {
         loadInitial();
     }, [fetchMyGames]);
 
-    const sortEvents = (events: GroupEvent[]) => {
-        const now = new Date();
-        return [...events].sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            const timeA = isNaN(dateA.getTime()) ? 0 : dateA.getTime();
-            const timeB = isNaN(dateB.getTime()) ? 0 : dateB.getTime();
-            const isExpiredA = timeA < now.getTime();
-            const isExpiredB = timeB < now.getTime();
-
-            const getPriority = (event: GroupEvent, isExpired: boolean) => {
-                // 已取消、已關閉或已過期的團局放在最下面 (Priority 3)
-                if (event.status === 'cancelled' || event.status === 'closed' || isExpired) return 3;
-                // 已滿員但未過期的放在最上面 (Priority 1)
-                if (event.status === 'full') return 1;
-                // 招募中的放在中間 (Priority 2)
-                if (event.status === 'recruiting') return 2;
-                return 3;
-            };
-
-            const priorityA = getPriority(a, isExpiredA);
-            const priorityB = getPriority(b, isExpiredB);
-
-            if (priorityA !== priorityB) {
-                return priorityA - priorityB;
-            }
-
-            // 同優先級時，根據日期排序
-            if (priorityA === 3) {
-                // 已結束/取消的，顯示最近的在上面 (降序)
-                return timeB - timeA;
-            } else {
-                // 進行中的，顯示即將到來的在上面 (升序)
-                return timeA - timeB;
-            }
-        });
-    };
-
-    const createdEvents = sortEvents(events.filter(e => e.isOwner));
-    const joinedEvents = sortEvents(events.filter(e => !e.isOwner && e.joined));
+    // 排序邏輯抽到 utils/myGamesSort.ts（[A2-a-1]），與 MyGamesSection 共用一份；
+    // 這裡只算 now、不重寫規則。
+    const now = Date.now();
+    const createdEvents = sortMyGames(events.filter(e => e.isOwner), now);
+    const joinedEvents = sortMyGames(events.filter(e => !e.isOwner && e.joined), now);
     const displayEvents = activeTab === 'created' ? createdEvents : joinedEvents;
 
     return (

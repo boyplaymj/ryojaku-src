@@ -5,6 +5,7 @@ import EventCard from './EventCard';
 import EventDetailModal from './EventDetailModal';
 import { api } from '../services/dataService';
 import { Loader2, Settings, Star, Layers, FileText } from 'lucide-react';
+import { sortMyGames } from '../utils/myGamesSort';
 
 interface MyGamesSectionProps {
     userId: string;
@@ -37,33 +38,11 @@ const MyGamesSection: React.FC<MyGamesSectionProps> = ({ userId, initialTab = 'c
         loadInitial();
     }, [fetchMyGames]);
 
-    const sortEvents = (events: GroupEvent[]) => {
-        const now = new Date();
-        return [...events].sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            const timeA = isNaN(dateA.getTime()) ? 0 : dateA.getTime();
-            const timeB = isNaN(dateB.getTime()) ? 0 : dateB.getTime();
-            const isExpiredA = timeA < now.getTime();
-            const isExpiredB = timeB < now.getTime();
-
-            const getPriority = (event: GroupEvent, isExpired: boolean) => {
-                if (event.status === 'cancelled' || event.status === 'closed' || isExpired) return 3;
-                if (event.status === 'full') return 1;
-                if (event.status === 'recruiting') return 2;
-                return 3;
-            };
-
-            const priorityA = getPriority(a, isExpiredA);
-            const priorityB = getPriority(b, isExpiredB);
-
-            if (priorityA !== priorityB) return priorityA - priorityB;
-            return priorityA === 3 ? timeB - timeA : timeA - timeB;
-        });
-    };
-
-    const createdEvents = sortEvents(events.filter(e => e.isOwner));
-    const joinedEvents = sortEvents(events.filter(e => !e.isOwner && e.joined));
+    // 排序邏輯抽到 utils/myGamesSort.ts（[A2-a-1]），與 MyEvents 共用一份；
+    // 這裡只算 now、不重寫規則。
+    const now = Date.now();
+    const createdEvents = sortMyGames(events.filter(e => e.isOwner), now);
+    const joinedEvents = sortMyGames(events.filter(e => !e.isOwner && e.joined), now);
     const displayEvents = activeTab === 'created' ? createdEvents : joinedEvents;
 
     return (
