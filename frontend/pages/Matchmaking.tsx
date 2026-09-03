@@ -1,4 +1,4 @@
-// pages/Matchmaking.tsx — 揪咖頁殼（[A2-a-2]）
+// pages/Matchmaking.tsx — 揪咖頁殼（[A2-a-2]），[A2-b-1] 起是預設頁（`/`）
 //
 // 正典 PLAYER_APP_REDESIGN.md §4.1：揪咖是改版後的預設頁，三個 tab：我的局／找場次／地圖。
 //
@@ -14,10 +14,12 @@
 //    （MyGamesOverlay 從個人頁點進去的就是它）。
 //
 // 🔴 tab 記在網址 `?tab=mine|find`（useSearchParams），不是 useState：
-//    [A2-b] 底部導覽才能直接指定 tab，返回鍵也才會退回上一個 tab。解析在 utils/matchmakingTab.ts。
+//    底部導覽才能直接指定 tab，返回鍵也才會退回上一個 tab。解析在 utils/matchmakingTab.ts。
 //
-// ⚠️ 這一塊做完的狀態是「/matchmaking 存在且用網址進得去」，還**不是**預設頁——
-//    `/` 路由與 BottomNav 是 [A2-b] 的事，這裡一個字沒動。
+// 🔴 [A2-b-1]：`/` 與 `/matchmaking` 都畫這一頁（utils/appRoutes.ts），底欄第一格指到 `/`。
+//    它是著陸頁，所以「我的局」那個 tab 要接下拉刷新：MyGamesSection 傳 `pullToRefresh`
+//    （預設關，因為同一個元件在 Profile 的 MyGamesOverlay 裡也被用，那邊不該搶插槽）。
+//    「找場次」那邊 SearchContent 自己本來就有掛。
 
 import React from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -90,7 +92,7 @@ const Matchmaking: React.FC<MatchmakingProps> = ({ user }) => {
 
             {activeTab === 'mine' ? (
                 <div className="max-w-2xl mx-auto w-full py-6">
-                    <MyGamesSection userId={user.userId} />
+                    <MyGamesSection userId={user.userId} pullToRefresh />
                 </div>
             ) : (
                 <SearchContent stickyTopClass={SEARCH_STICKY_TOP_UNDER_TAB_BAR} />

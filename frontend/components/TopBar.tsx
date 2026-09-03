@@ -13,7 +13,8 @@ const TopBar: React.FC = () => {
     if (path.startsWith('/rate-game/')) return '戰績結算';
 
     switch (path) {
-      case '/': return '社群動態';
+      case '/': return '揪咖';           // [A2-b-1] 預設頁換成揪咖
+      case '/feed': return '社群動態';   // 動態牆搬到這裡
       case '/search': return '尋找團局';
       case '/matchmaking': return '揪咖';
       case '/my-events': return '我的團局';

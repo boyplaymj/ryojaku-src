@@ -6,13 +6,21 @@ import EventDetailModal from './EventDetailModal';
 import { api } from '../services/dataService';
 import { Loader2, Settings, Star, Layers, FileText } from 'lucide-react';
 import { sortMyGames } from '../utils/myGamesSort';
+import { usePullToRefresh } from '../contexts/RefreshContext';
 
 interface MyGamesSectionProps {
     userId: string;
     initialTab?: 'created' | 'joined';
+    /**
+     * 要不要把 fetchMyGames 掛到下拉刷新（[A2-b-1]）。預設 **false**：
+     * 這個元件有兩個使用者 —— 揪咖頁（要，它是著陸頁）與 Profile 的 MyGamesOverlay（不要，
+     * overlay 是 portal 到 body 的另一層，Profile 自己已經掛了 fetchUserProfile）。
+     * 預設關是刻意的：新行為要明講才會發生，將來第三個使用者不會默默多掛一層。
+     */
+    pullToRefresh?: boolean;
 }
 
-const MyGamesSection: React.FC<MyGamesSectionProps> = ({ userId, initialTab = 'created' }) => {
+const MyGamesSection: React.FC<MyGamesSectionProps> = ({ userId, initialTab = 'created', pullToRefresh = false }) => {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<'created' | 'joined'>(initialTab);
     const [events, setEvents] = useState<GroupEvent[]>([]);
@@ -28,6 +36,8 @@ const MyGamesSection: React.FC<MyGamesSectionProps> = ({ userId, initialTab = 'c
             console.error('Failed to fetch my games:', error);
         }
     }, []);
+
+    usePullToRefresh(fetchMyGames, pullToRefresh);
 
     useEffect(() => {
         const loadInitial = async () => {

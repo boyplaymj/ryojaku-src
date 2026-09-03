@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Settings, User as UserIcon, Zap, Award, Clock, Smartphone, Fingerprint, Camera, Save, X, ChevronRight, ChevronDown, AlertTriangle, Edit3, Loader2, Star, Crop, FileText, Activity, Users, Layers, Gift, BellRing, CheckCircle, Info, Coins } from 'lucide-react';
+import { Settings, User as UserIcon, Zap, Award, Clock, Smartphone, Fingerprint, Camera, Save, X, ChevronRight, ChevronDown, AlertTriangle, Edit3, Loader2, Star, Crop, FileText, Activity, Users, Layers, Gift, BellRing, CheckCircle, Info, Coins, Newspaper } from 'lucide-react';
 import { User } from '../types';
 import { updateUserProfile, getUserInfo, redeemCode, getUploadUrl, claimPushBonus } from '../services/apiService';
 import { api } from '../services/dataService';
@@ -841,6 +841,27 @@ const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUserUpdate, inviter
                 </div>
             </div>
 
+            {/* 社群動態入口（[A2-b-1]）：動態牆從 `/` 降到二級，§3.1「全域發文入口降到二級（從「我的」進去）」。
+                刻意不掛 PREMIUM —— 它不是付費功能，只是搬了位置。 */}
+            <div className="px-4 mb-4">
+                <div
+                    onClick={() => navigate('/feed')}
+                    className="group relative bg-white rounded-lg border border-black/[0.04] p-4 cursor-pointer active:scale-[0.98] overflow-hidden transition-all shadow-sm"
+                >
+                    <div className="flex items-center gap-4 relative z-10">
+                        <div className="w-12 h-12 rounded-lg bg-neutral-900 flex items-center justify-center text-[#c5a059] shadow-lg group-hover:scale-105 transition-all duration-500">
+                            <Newspaper size="1.25rem" strokeWidth={2.5} />
+                        </div>
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-0.5">
+                                <h3 className="text-md font-black text-neutral-900 tracking-tight">社群動態</h3>
+                            </div>
+                            <p className="text-[0.625rem] text-neutral-300 font-bold">全域貼文牆：看看雀友在說什麼、發一篇自己的。</p>
+                        </div>
+                        <ChevronRight size="1rem" className="text-neutral-200 group-hover:text-[#c5a059] transition-colors" />
+                    </div>
+                </div>
+            </div>
 
             {/* Utilities Stack */}
             <div className="px-4 space-y-3 pb-8">

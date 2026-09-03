@@ -38,18 +38,15 @@ import { ToastProvider } from './contexts/ToastContext';
 import MaintenanceNotice from './components/MaintenanceNotice';
 import { chatService } from './services/chatService';
 import { notificationService } from './services/notificationService';
+import { APP_ROUTES, hasMainNavShell } from './utils/appRoutes';
 
 const Layout: React.FC<{ children: React.ReactNode; user: User | null }> = ({ children, user }) => {
   const location = useLocation();
   const { onRefresh } = useRefresh();
 
-  // Routes that should have the main navigation shell (TopBar + BottomNav)
-  const mainNavRoutes = ['/', '/search', '/matchmaking', '/messages', '/profile', '/create', '/notifications', '/ledger'];
-  const showNav = mainNavRoutes.includes(location.pathname) ||
-    location.pathname.startsWith('/rate-game/') ||
-    location.pathname.startsWith('/reviews/') ||
-    location.pathname.startsWith('/event/') ||
-    location.pathname.startsWith('/ledger');
+  // Routes that should have the main navigation shell (TopBar + BottomNav).
+  // 白名單在 utils/appRoutes.ts（[A2-b-1]）：新路由要進去，否則那一頁是沒殼的裸內容而且不報錯。
+  const showNav = hasMainNavShell(location.pathname);
 
   return (
     <div className="relative min-h-screen w-full bg-[#f9f9f7]">
@@ -300,10 +297,12 @@ function App() {
           <ChatProvider>
             <Layout user={user}>
               <Routes>
-                <Route path="/" element={<HomeRoute events={events} user={user} onUserUpdate={handleUserUpdate} />} />
-                <Route path="/search" element={<SearchPage />} />
-                {/* 揪咖頁（[A2-a-2]）。還不是預設頁——換 `/` 與 BottomNav 是 [A2-b]。 */}
-                <Route path="/matchmaking" element={<Matchmaking user={user} />} />
+                {/* [A2-b-1] 揪咖是預設頁（§3.1）：`/` 與 `/matchmaking` 都畫它。動態牆搬到 /feed，入口在個人頁。 */}
+                <Route path={APP_ROUTES.matchmaking} element={<Matchmaking user={user} />} />
+                <Route path={APP_ROUTES.matchmakingLegacy} element={<Matchmaking user={user} />} />
+                <Route path={APP_ROUTES.feed} element={<HomeRoute events={events} user={user} onUserUpdate={handleUserUpdate} />} />
+                {/* /search 保留給書籤／舊連結；底欄已不再有它（內容＝揪咖頁「找場次」tab）。 */}
+                <Route path={APP_ROUTES.search} element={<SearchPage />} />
                 <Route path="/messages" element={<Messages />} />
                 <Route path="/chat/:roomId" element={<ChatRoom />} />
                 <Route path="/create" element={<CreateGroup onCreate={handleCreateGame} user={user} />} />
