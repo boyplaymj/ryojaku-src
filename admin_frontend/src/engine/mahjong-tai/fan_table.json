@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
