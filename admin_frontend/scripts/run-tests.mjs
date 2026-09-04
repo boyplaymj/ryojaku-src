@@ -45,7 +45,10 @@ const MIN = [22, 18, 0];
 // ⚠️ minTests 訂在目前的實際條數：這批測試由 tools/mahjong-tai 這條線維護，
 //    條數我說了算（與 frontend 的 `utils` 那組刻意放寬的理由相反 —— 那組別條 session 會動）。
 const DEFAULT_TARGETS = [
-    { glob: 'src/utils/*.test.ts', min: 2, minTests: 43 },
+    // ⚠️ D5-e／E2 加了 voiceRuleset.test.ts（27 條，含 3 條接線守衛）⇒ 2→3 檔、43→70 條。
+    //    **下限沒跟著抬的話，新加的那 24 條被整檔刪掉也不會有東西轉紅** ——
+    //    這道守衛只擋得住「掉到下限以下」，而下限停在舊值時它擋的是舊的那批。
+    { glob: 'src/utils/*.test.ts', min: 3, minTests: 70 },
     // 🔴 引擎副本的漂移守衛。**必須列進來** —— 這支是「會自己跑」的那道，
     //    沒進 DEFAULT_TARGETS 的話它跟不存在逐字相同（檔案在、內容對、從沒被執行）。
     { glob: 'src/engine/*.test.ts', min: 1, minTests: 6 },

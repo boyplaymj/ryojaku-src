@@ -21,6 +21,7 @@ import ActivitySettings from './pages/ActivitySettings';
 import AnalysisInvite from './pages/AnalysisInvite';
 import VoiceTaiUsage from './pages/VoiceTaiUsage';
 import VoiceTaiReview from './pages/VoiceTaiReview';
+import VoiceTaiRuleset from './pages/VoiceTaiRuleset';
 
 import { Navigate } from 'react-router-dom';
 
@@ -51,6 +52,7 @@ const App: React.FC = () => {
           <Route path="analysis/invite" element={<AnalysisInvite />} />
           <Route path="analysis/voice-tai" element={<VoiceTaiUsage />} />
           <Route path="analysis/voice-tai-review" element={<VoiceTaiReview />} />
+          <Route path="analysis/voice-tai-ruleset" element={<VoiceTaiRuleset />} />
 
           {/* Protected Routes for Super Admin only */}
           <Route path="users" element={<ProtectedRoute requireSuper><Users /></ProtectedRoute>} />

@@ -316,6 +316,49 @@ export const api = {
                 ? `/admin/voice-corrections?cursor=${encodeURIComponent(cursor)}`
                 : '/admin/voice-corrections';
             return request(url);
+        },
+        /**
+         * 後台唯讀檢視：**現在下發給玩家的家規表是哪一份**（D5-e／E2）。
+         *
+         * 🔴 **刻意不走 `request()`。** 那支把所有非 2xx 壓成同一種 Error
+         *    （`throw new Error(data.error || 'Request failed')`）—— 狀態碼在呼叫端
+         *    就消失了。而這支端點的整個設計就建立在狀態碼的區別上：
+         *      404 = 這條路由還沒部署   → 去部署 stack
+         *      502 = DDB 讀不到         → 設備問題，讀數作廢
+         *      200 + state:"not-seeded" = 那一列不存在 → 去跑播種腳本
+         *    後端為了讓後兩者分得開，特地不把「不存在」做成 404（見 E1 檔頭）。
+         *    ⇒ 用 `request()` 的話，那個設計在這裡就被抹平了，而畫面完全正常。
+         *
+         * 🔴 這支**不做任何判讀**，只把 `(status, body)` 原封交出去。
+         *    判讀在 `utils/voiceRuleset.ts` 的 `interpret()`，因為那裡可測。
+         *    ⚠️ 401 仍沿用全站行為（清 token、導回登入）—— session 過期不該被
+         *    畫成「端點壞了」。
+         */
+        getRuleset: async (): Promise<{ status: number | null; body: unknown }> => {
+            const token = localStorage.getItem('adminToken');
+            if (!token) {
+                handleUnauthorized();
+                throw new Error('No token found');
+            }
+            let res: Response;
+            try {
+                res = await fetch(`${BASE_URL}/admin/voice-tai/ruleset`, {
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                });
+            } catch {
+                // fetch 本身炸掉（斷線／CORS）。status=null 讓 interpret() 分得出
+                // 「連線失敗」與「後端回了什麼」——兩者在畫面上都是「沒東西」。
+                return { status: null, body: undefined };
+            }
+            if (res.status === 401) {
+                handleUnauthorized();
+                throw new Error('Session expired');
+            }
+            // body 解析失敗不是致命的：狀態碼本身就承載了大部分意思
+            // （API Gateway 的 404 body 甚至不是我們的格式）。
+            let body: unknown;
+            try { body = await res.json(); } catch { body = undefined; }
+            return { status: res.status, body };
         }
     },
     activities: {

@@ -3,8 +3,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
     LayoutDashboard, Users, Smartphone, Ticket, Cog, LogOut, ChevronRight,
     BarChart3, MessageSquare, Gamepad2, Megaphone, ShieldAlert, Keyboard, MessageCircle,
-    Menu, X, Shield, BookOpen, Gift, Mic, ClipboardCheck
-} from 'lucide-react';
+    Menu, X, Shield, BookOpen, Gift, Mic, ClipboardCheck, BookLock } from 'lucide-react';
 
 interface NavItemProps {
     to: string;
@@ -92,6 +91,7 @@ const AdminLayout: React.FC = () => {
                             <NavItem to="/analysis/invite" icon={<Gift size={18} />} label="邀請碼成效分析" />
                             <NavItem to="/analysis/voice-tai" icon={<Mic size={18} />} label="語音判台用量" />
                             <NavItem to="/analysis/voice-tai-review" icon={<ClipboardCheck size={18} />} label="語音判台訂正審核" />
+                            <NavItem to="/analysis/voice-tai-ruleset" icon={<BookLock size={18} />} label="家規台數表（唯讀）" />
                         </div>
                     </div>
 
