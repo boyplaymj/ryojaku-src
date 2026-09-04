@@ -53,8 +53,15 @@ export default defineConfig(({ mode }) => {
       })
     ],
     define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      // 🔴 這裡曾經有兩行把 GEMINI_API_KEY 字面替換進 client bundle 的 define
+      //    （`process.env.API_KEY` 與 `process.env.GEMINI_API_KEY`，稽核 finding 4）。
+      //    `define` 是**建置期字面替換** ⇒ 只要哪天有人在 build 環境設了那個 env，
+      //    金鑰就會靜默進入所有使用者下載得到的 JS，而且沒有任何東西會報錯 ——
+      //    它當時之所以不算洩漏，只是因為「剛好沒人設過那個變數」，
+      //    那是**運氣**不是機制，而運氣與正確在建置產物上長得一模一樣。
+      // ⚠️ 前端要用 Gemini 的話走後端代理，金鑰不下放瀏覽器。不要把這兩行加回來，
+      //    也不要換成 `VITE_GEMINI_API_KEY` —— 那只是換個名字曝露同一個東西
+      //    （`VITE_` 前綴的變數本來就是設計成要進 bundle 的）。
       'global': 'window', // Polyfill for Amplify/MapLibre
     },
     resolve: {

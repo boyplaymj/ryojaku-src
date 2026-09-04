@@ -1,7 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 import { Category, CreateGroupPayload } from '../types';
 
-const apiKey = process.env.API_KEY || '';
+// 🔴 這裡刻意是空字串，不是「還沒接上」。
+//    原本寫 `process.env.API_KEY || ''`，而那個值由 vite 的 `define` 在建置期
+//    字面替換進來（稽核 finding 4）—— 等於把金鑰發給每一個使用者。define 已移除，
+//    這行若照舊讀 `process.env` 會在瀏覽器拋 `process is not defined`。
+// ⚠️ 本檔目前**零呼叫者**。要真的啟用 Gemini 的話：加一支後端 lambda 當代理，
+//    讓這裡打自家 API，金鑰留在後端。**不要**把金鑰用任何形式送進前端 bundle。
+//    下面每一支匯出函式都已經有 `if (!apiKey)` 的降級路徑，所以維持空字串是安全的。
+const apiKey = '';
 const ai = new GoogleGenAI({ apiKey });
 
 /**
