@@ -86,6 +86,44 @@ else
   esac
 fi
 
+# 🔴 D4c-7 引擎版本號閘門：**出貨前問「ENGINE_VERSION 跟得上引擎副本嗎」**
+#    （守衛在另一個 repo：/opt/sml/repo/tools/mahjong-tai/check_engine_version.sh，
+#      正典 tools/mahjong-tai/DESIGN_APP.md「ENGINE_VERSION」那節。）
+#
+# 🔴 接在**這裡**的理由，跟上面那道家規表守衛是同一個：傷害在 s3 sync 那一刻才成真。
+#    ENGINE_VERSION 是**已出貨的這包 bundle** 送訂正時自報的引擎版本；
+#    引擎同步過而它沒跟 ⇒ 從這次部署起，每一筆訂正都宣稱是舊引擎判的，
+#    而後台看不出來（它只讀 engineVersion 這個欄位，不會去驗它）。
+#    ⇒ 沒出貨就沒有假資料 ⇒ 這一支就是那個完整的閘門。
+#
+# 🔴 這條在 2026-09-04 之前是「守衛完全正常、而沒有任何東西會去觸發它」。
+#    實查：本檔與 admin_frontend/deploy.sh **都沒有跑過任何測試** ——
+#    設計冊裡「部署前閘門：npm test 全綠」那句一直是人**手動**跑的。
+#
+# ⚠️ 界線：它只跑 D4c-7 那一支檔（整包 302 支會塞爆共用 cgroup，
+#    而部署腳本內部跑的話 heavy-test-guard 看不到）。
+#    ⇒ **其餘兩百餘條測試在出貨這條路上仍然沒有閘門**，不要讀成「測試都驗過了」。
+#
+# ⚠️ 守衛在另一個 repo。找不到就**中止**，不是跳過 —— 靜默跳過的守衛
+#    與從沒裝過長得一模一樣。臨時豁免：SKIP_ENGINE_VERSION_CHECK=1（顯式）。
+ENGINE_VERSION_GUARD="${ENGINE_VERSION_GUARD:-/opt/sml/repo/tools/mahjong-tai/check_engine_version.sh}"
+if [ "${SKIP_ENGINE_VERSION_CHECK:-0}" = "1" ]; then
+  echo "⚠️  SKIP_ENGINE_VERSION_CHECK=1 ⇒ 跳過引擎版本號閘門（顯式豁免）"
+elif [ ! -f "$ENGINE_VERSION_GUARD" ]; then
+  echo "❌ 找不到引擎版本號守衛 $ENGINE_VERSION_GUARD" >&2
+  echo "   它在另一個 repo（sml/tools/mahjong-tai）。要換路徑用 ENGINE_VERSION_GUARD=..." >&2
+  echo "   確定要跳過：SKIP_ENGINE_VERSION_CHECK=1 $0 $*" >&2
+  exit 1
+else
+  evrc=0
+  bash "$ENGINE_VERSION_GUARD" --app-dir "$(pwd)" || evrc=$?
+  case "$evrc" in
+    0) ;;
+    1) echo "❌ 引擎版本號：ENGINE_VERSION 跟不上引擎副本（判定與修法見上方），中止部署" >&2; exit 1 ;;
+    *) echo "❌ 引擎版本號守衛**沒量到**（rc=$evrc，設備問題）—— 讀數作廢，不是「沒問題」，一樣中止" >&2; exit 1 ;;
+  esac
+fi
+
 [ -d node_modules ] || npm ci
 
 # 社群登入的 client id（都是**公開值**，前端本來就會內嵌，非機密）。
