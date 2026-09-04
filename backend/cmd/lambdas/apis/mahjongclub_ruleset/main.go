@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"mahjongclub-backend/cmd/lambdas/ruleset"
 	"mahjongclub-backend/cmd/lambdas/shared"
 )
 
@@ -51,7 +51,9 @@ import (
 // 那 config 進契約還有什麼用？擋的是**整個 config 掉了**——
 // 那一種是遺失，而它跟「這家沒有底」在 App 端的計分結果上逐字相同。
 
-const rulesetInfoKey = "VoiceTai:Ruleset"
+// 🔴 D5-e：契約（InfoKey／Parse）已搬到 cmd/lambdas/ruleset，因為後台唯讀檢視頁
+// 是第二個讀取端。兩份實作會漂，而漂掉之後「後台說沒問題、App 拿到 502」
+// 兩邊都不報錯。本檔保留同名的薄包裝，讓既有 14 條測試逐字不動地繼續跑。
 
 type Config struct {
 	AWSRegion   string
@@ -69,26 +71,8 @@ type rulesetStore interface {
 	GetRulesetRaw(ctx context.Context) (raw string, found bool, err error)
 }
 
-// rulesetPayload 是 info_value 的形狀。三個表鍵用 json.RawMessage 承接：
-// 🔴 原封不動轉出去，不重新塑形、不挑鍵 —— 這支不知道也不該知道表裡有什麼。
-// json.RawMessage 同時讓「鍵缺席」（nil）與「鍵存在但值是 null」（"null"）
-// 與「空陣列」（"[]"）三者在解析後仍然分得開。
-type rulesetPayload struct {
-	Version *string         `json:"version"`
-	Fans    json.RawMessage `json:"fans"`
-	Combos  json.RawMessage `json:"combos"`
-	Ignores json.RawMessage `json:"ignores"`
-	Config  json.RawMessage `json:"config"`
-}
-
-type RulesetResponse struct {
-	Success bool            `json:"success"`
-	Version string          `json:"version"`
-	Fans    json.RawMessage `json:"fans"`
-	Combos  json.RawMessage `json:"combos"`
-	Ignores json.RawMessage `json:"ignores"`
-	Config  json.RawMessage `json:"config"`
-}
+// RulesetResponse 是 ruleset.Response 的別名 —— 回應形狀的定義只有一份。
+type RulesetResponse = ruleset.Response
 
 type ErrorResponse struct {
 	Success bool   `json:"success"`
@@ -134,7 +118,7 @@ func (d *Database) GetRulesetRaw(ctx context.Context) (string, bool, error) {
 	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(d.cfg.GetTableName("AdminConfigs")),
 		Key: map[string]types.AttributeValue{
-			"info_key": &types.AttributeValueMemberS{Value: rulesetInfoKey},
+			"info_key": &types.AttributeValueMemberS{Value: ruleset.InfoKey},
 		},
 	})
 	if err != nil {
@@ -151,42 +135,11 @@ func (d *Database) GetRulesetRaw(ctx context.Context) (string, bool, error) {
 	return v.Value, true, nil
 }
 
-// isAbsentOrNull：鍵缺席（RawMessage 為 nil）或值為 JSON null。
-// 🔴 `[]`／`{}` 都不算 —— 「空」與「沒有」在這支裡是兩件事。
-func isAbsentOrNull(raw json.RawMessage) bool {
-	return raw == nil || string(raw) == "null"
-}
-
-// parseRuleset 把 info_value 解析成回應；純函式，不碰網路。
-// 任何一種缺損都回 error（上層一律 502），不會回半份表。
+// parseRuleset 委派給契約那一份（cmd/lambdas/ruleset）。
+// 🔴 保留這層薄包裝而不是全檔改名，是為了讓既有測試**逐字不動**地繼續跑 ——
+// 重構的驗收是「同一批測試在改動前後都綠」，改了測試就驗不到這件事。
 func parseRuleset(raw string) (RulesetResponse, error) {
-	var p rulesetPayload
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return RulesetResponse{}, err
-	}
-	if p.Version == nil || *p.Version == "" {
-		return RulesetResponse{}, errors.New("ruleset version missing or empty")
-	}
-	if isAbsentOrNull(p.Fans) {
-		return RulesetResponse{}, errors.New("ruleset fans missing")
-	}
-	if isAbsentOrNull(p.Combos) {
-		return RulesetResponse{}, errors.New("ruleset combos missing")
-	}
-	if isAbsentOrNull(p.Ignores) {
-		return RulesetResponse{}, errors.New("ruleset ignores missing")
-	}
-	if isAbsentOrNull(p.Config) {
-		return RulesetResponse{}, errors.New("ruleset config missing")
-	}
-	return RulesetResponse{
-		Success: true,
-		Version: *p.Version,
-		Fans:    p.Fans,
-		Combos:  p.Combos,
-		Ignores: p.Ignores,
-		Config:  p.Config,
-	}, nil
+	return ruleset.Parse(raw)
 }
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
