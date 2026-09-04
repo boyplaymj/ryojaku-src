@@ -23,6 +23,20 @@
 # 🔴 **A7 量不到 handler 的 405。** 模板只佈了 `Method: get`（02-app.generated.yaml），
 #    POST 在 Gateway 就被擋掉、根本到不了 handler ⇒ 線上讀數是 403 不是 405。
 #    handler 那個 405（紀律 1：唯一寫入入口是 seed_ruleset.py）只在 go test 量得到。
+#
+# 🔴 **A3 攔在哪一層 —— 2026-09-04 部署後實測訂正。**
+#    v1 寫「A3 role=moderator → 403（handler 的 adminrole.Allows 守衛）」，實測是 **401**。
+#    原因：`cmd/lambdas/apis/mahjongclub_admin_authorizer/main.go:50` **authorizer 自己**
+#    就跑 `adminrole.Allows(claims, Admin, SuperAdmin)`，不過就回 error
+#    ⇒ Gateway 給 401 `UnauthorizedException`，moderator **根本到不了 handler**。
+#    handler 那道同名守衛是第二層縱深，線上量不到它；它的證據在 go test。
+#    ⚠️ 這不是「守衛沒生效」——moderator 確實被拒。錯的是 v1 對**哪一層**的宣稱。
+#
+#    ⚠️ **代價要一起寫下來：A2 與 A3 的線上讀數逐字相同**（都是 401 ＋
+#    `{"message":"Unauthorized"}`，連 CloudWatch 那行 `[ADMIN_AUTHZ] 拒絕` 也同一句）
+#    ⇒ 本支**分不出「金鑰錯」與「角色不夠」**。A3 之所以還有鑑別力，靠的是 **A5**：
+#    同一把金鑰、只有 role 不同而 A5 得 200 ⇒ 被拒的原因只可能是 role。
+#    **A5 紅掉時 A3 就退化成 A2 的複製品**，不要單獨引用 A3。
 #    ⚠️ 這個區別要寫出來：把 A7 標成「405 已驗」會是假的。
 #
 # 🔴 **本探針零寫入。** admin token 用 ADMIN_JWT_SECRET 自簽，authorizer 不查 Users
@@ -206,7 +220,9 @@ def main():
     check("A2 user 金鑰簽的 admin 形狀 token → 401（§5a 金鑰分離）", code, 401, fp=True)
 
     code, _ = req(PATH, token=tok_mod)
-    check("A3 role=moderator → 403（handler 的 adminrole.Allows 守衛）", code, 403, fp=True)
+    # 🔴 期望是 401 不是 403，而且擋它的**不是 handler**。見檔頭那條「A3 攔在哪一層」。
+    check("A3 role=moderator → 401（authorizer 就擋掉了；handler 的守衛線上到不了）",
+          code, 401, fp=True)
 
     code, body_super = req(PATH, token=tok_super)
     A4_OK = check("A4【正控】role=super_admin → 200（端點真的活著，"
