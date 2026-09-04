@@ -16,6 +16,24 @@
 // 🔴 這四種在「頁面上什麼都沒有」這個外觀上**逐字相同**。E1 為此刻意把
 //    「不存在」做成 `200 + state:"not-seeded"`、把 404 留給「端點不在」——
 //    ⇒ **那個區別必須一路活到畫面上**，否則後端那個設計等於沒做。
+//
+// 🔴🔴 **而「端點不在」在這條產線上不是 404，是 403。**（2026-09-04 實測，
+//    infra/verify_admin_ruleset_live.py 部署前那一輪量到的）
+//    REST API Gateway 對**沒佈上的路由**回 403：不帶 token 是
+//    `MissingAuthenticationTokenException`、帶了 `Authorization: Bearer …`
+//    是 `IncompleteSignatureException`（它把 Bearer 當 SigV4 去解）。
+//    ⇒ v1 把 403 一律判成「角色不足」，於是**今天這個狀態**（stack 還沒部署）
+//    會在畫面上顯示「換一個有權限的帳號登入」—— 指示是錯的，而且錯得很有說服力。
+//    這正是本檔要防的那件事，發生在本檔自己身上。
+//
+// 🔴 **只能靠 body 形狀分，不能靠 header。** `x-amzn-errortype` 在回應裡（實測有），
+//    但 Gateway 沒有給 `Access-Control-Expose-Headers` ⇒ 瀏覽器的 JS **讀不到它**。
+//    handler 的 403 是 `{success:false, error:"forbidden"}`，Gateway 的是
+//    `{message:"…"}`（沒有 success 這一鍵）。判準用**有沒有 handler 的形狀**，
+//    不用訊息字串比對（那句英文是 AWS 的，會改）。
+//    ⚠️ 第三種：Gateway 形狀但訊息不是「路由不在」那兩句（例如維護模式的
+//    explicit deny）⇒ 走 `gateway-denied`，**不併進上面任何一種** ——
+//    它的處置是「去看 Gateway／authorizer」，跟另外兩種都不同。
 //    這也是本檔不能用 `api.ts` 的共用 `request()` 的原因（它把所有非 2xx
 //    壓成同一種 Error，狀態碼在呼叫端就消失了）。
 //
@@ -48,12 +66,21 @@ export type RulesetOutcome =
   | { kind: 'not-seeded'; view: RulesetView }
   /** 那一列在，但解不開。`reason` 指名哪一鍵。 */
   | { kind: 'malformed'; view: RulesetView }
-  /** 404：這條路由不在。E1 把 404 保留給這一種，見檔頭。 */
-  | { kind: 'not-deployed' }
+  /**
+   * 這條路由不在。E1 把 404 保留給這一種 —— 但實測 Gateway 給的是 403（見檔頭），
+   * 所以兩個碼都會落到這裡。`status` 記下**實際量到的那個碼**，不抹平。
+   */
+  | { kind: 'not-deployed'; status: number; detail: string }
   /** 502：DDB 讀不到。**設備問題，讀數作廢。** */
   | { kind: 'store-unavailable' }
-  /** 403：token 有效但角色不夠。 */
+  /** 403 且帶著 handler 的形狀：token 有效但角色不夠。 */
   | { kind: 'forbidden' }
+  /**
+   * 403，Gateway 形狀，但訊息不是「路由不在」那一類。
+   * 例如 authorizer 的 explicit deny（維護模式 kill switch）。
+   * ⛔ 不併進 forbidden：那會叫人去換帳號，而該做的是去看 Gateway。
+   */
+  | { kind: 'gateway-denied'; detail: string }
   /** 200，但 `state` 是本頁不認得的值。⛔ fail-closed，絕不當成 seeded。 */
   | { kind: 'unknown-state'; state: string; view: RulesetView }
   /** 200，但形狀說不清楚（不是物件／缺 state／自相矛盾）。 */
@@ -70,6 +97,23 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 /**
+ * Gateway 的錯誤 body 是 `{message: "…"}`，而 explicit deny 那條是大寫的
+ * `{Message: "…"}`。⚠️ 兩種都收 —— 只認一種的話，另一種會變成空字串，
+ * 而空字串在畫面上與「沒有原因」逐字相同。
+ */
+const gatewayMessage = (body: unknown): string => {
+  if (!isObject(body)) return '';
+  return str(body.message) || str(body.Message) || str(body.error);
+};
+
+/**
+ * 「這條路由沒佈上」的兩句指紋（2026-09-04 對 stg 實測）。
+ * ⚠️ 這是 AWS 的英文訊息，**會改**。所以它只用來從 Gateway 形狀裡再分一層，
+ *    不用來判斷「是不是 handler 回的」（那一層看的是 success 這一鍵）。
+ */
+const ROUTE_ABSENT = ['Missing Authentication Token', 'Invalid key=value pair'];
+
+/**
  * 把一次 HTTP 回應判讀成處置。**純函式**：不碰網路、不碰時鐘、不碰 localStorage。
  *
  * @param status HTTP 狀態碼；fetch 本身炸掉時傳 `null`。
@@ -81,9 +125,21 @@ export function interpret(status: number | null, body: unknown): RulesetOutcome 
   if (status === null) {
     return { kind: 'error', status: null, detail: '連線失敗（fetch 沒有回應）' };
   }
-  if (status === 404) return { kind: 'not-deployed' };
+  if (status === 404) {
+    return { kind: 'not-deployed', status: 404, detail: gatewayMessage(body) };
+  }
   if (status === 502) return { kind: 'store-unavailable' };
-  if (status === 403) return { kind: 'forbidden' };
+  if (status === 403) {
+    // 🔴 三種 403，處置全不一樣（檔頭）。判準是「這是不是 handler 回的」——
+    //    handler 一律帶 success:false；Gateway 的錯誤回應沒有這一鍵。
+    if (isObject(body) && body.success === false) return { kind: 'forbidden' };
+    const msg = gatewayMessage(body);
+    if (ROUTE_ABSENT.some((m) => msg.includes(m))) {
+      return { kind: 'not-deployed', status: 403, detail: msg };
+    }
+    // ⛔ 認不出來時**不猜**。落到 forbidden 會給出一個很有說服力的錯指示。
+    return { kind: 'gateway-denied', detail: msg };
+  }
   if (status !== 200) {
     const detail = isObject(body) ? str(body.error) : '';
     return { kind: 'error', status, detail: detail || `未預期的狀態碼 ${status}` };
@@ -176,9 +232,16 @@ export function present(outcome: RulesetOutcome): Presentation {
     case 'not-deployed':
       return {
         tone: 'bad',
-        title: '這條路由不在（404）',
-        body: '不是「還沒播種」—— 是後端這支端點還沒上線。E1 刻意把 404 留給這一種，就是為了讓它跟「那一列不存在」在畫面上分得開。',
+        title: `這條路由不在（${outcome.status}）`,
+        body: `不是「還沒播種」—— 是後端這支端點還沒上線。E1 刻意把 404 留給這一種，好讓它跟「那一列不存在」分得開；而 REST API Gateway 對沒佈上的路由實際回的是 403（Gateway 原文：${outcome.detail || '（無）'}）。`,
         action: '部署 app stack（infra/deploy_app.sh）。⚠️ 那是整包部署，不是單支函式。',
+      };
+    case 'gateway-denied':
+      return {
+        tone: 'bad',
+        title: '被 Gateway 擋下（403）',
+        body: `擋下這一次的不是這支 lambda，是它前面那一層（authorizer／resource policy）。Gateway 原文：${outcome.detail || '（無）'}。`,
+        action: '看 API Gateway 那一層：是不是維護模式 kill switch、或 authorizer 設定變了。⛔ 換帳號沒有用。',
       };
     case 'store-unavailable':
       return {

@@ -70,6 +70,7 @@ test('S1 🔴 404 是「端點沒部署」，不是「那一列不存在」', ()
   const a = interpret(404, { message: 'Not Found' });
   const b = interpret(200, { state: 'not-seeded' });
   assert.equal(a.kind, 'not-deployed');
+  assert.equal(a.kind === 'not-deployed' && a.status, 404);
   assert.equal(b.kind, 'not-seeded');
   assert.notEqual(present(a).action, present(b).action);
 });
@@ -81,8 +82,49 @@ test('S2 🔴 502 是設備問題，⛔ 不可以判成 not-seeded', () => {
   assert.match(present(out).action, /作廢/);
 });
 
-test('S3 403 是角色不足', () => {
+test('S3 403 有三種來源，而 v1 把它們全判成「角色不足」', () => {
+  // 🔴 判準是「有沒有 handler 的形狀（success:false）」，不是訊息字串。
   assert.equal(interpret(403, { success: false, error: 'forbidden' }).kind, 'forbidden');
+});
+
+test('S3b 🔴 沒佈上的路由：Gateway 回 403，⛔ 不可以判成角色不足', () => {
+  // 2026-09-04 對 stg 實測到的兩句原文（部署前跑 verify_admin_ruleset_live.py）。
+  // 不帶 token → MissingAuthenticationToken；帶了 Bearer → IncompleteSignature
+  //（Gateway 把它當 SigV4 去解）。後台一定帶 token ⇒ 真正會撞到的是後者。
+  for (const msg of [
+    'Missing Authentication Token',
+    'Invalid key=value pair (missing equal-sign) in Authorization header',
+  ]) {
+    const out = interpret(403, { message: msg });
+    assert.equal(out.kind, 'not-deployed', msg);
+    assert.equal(out.kind === 'not-deployed' && out.status, 403);
+    assert.match(out.kind === 'not-deployed' ? out.detail : '', /Authorization|Authentication/);
+  }
+  // 方向：讀成 forbidden 會叫人「換一個有權限的帳號」，而該做的是部署 stack。
+  assert.notEqual(
+    present(interpret(403, { message: 'Missing Authentication Token' })).action,
+    present(interpret(403, { success: false, error: 'forbidden' })).action,
+  );
+});
+
+test('S3c 🔴 認不出來的 Gateway 403 ⇒ gateway-denied，⛔ 不猜成上面任何一種', () => {
+  // explicit deny（維護模式 kill switch）的 body 是大寫的 Message。
+  const out = interpret(403, {
+    Message: 'User is not authorized to access this resource with an explicit deny',
+  });
+  assert.equal(out.kind, 'gateway-denied');
+  assert.match(out.kind === 'gateway-denied' ? out.detail : '', /explicit deny/);
+  assert.match(present(out).action, /Gateway/);
+});
+
+test('S3d 正控：判準真的是「有沒有 success 這一鍵」，不是訊息字串', () => {
+  // 同一句訊息、多一個 success:false ⇒ 必須翻成 forbidden。
+  // 少了這一條，把判準寫成「訊息比對」也會讓 S3／S3b 全綠。
+  assert.equal(interpret(403, { message: 'Missing Authentication Token' }).kind, 'not-deployed');
+  assert.equal(
+    interpret(403, { success: false, message: 'Missing Authentication Token' }).kind,
+    'forbidden',
+  );
 });
 
 test('S4 沒列舉到的狀態碼 ⇒ error，並帶出後端給的訊息', () => {
@@ -154,19 +196,23 @@ test('P1 🔴 九種 kind 的 action 兩兩不同', () => {
     { kind: 'seeded', view: seededView },
     { kind: 'not-seeded', view: {} },
     { kind: 'malformed', view: { reason: 'x' } },
-    { kind: 'not-deployed' },
+    { kind: 'not-deployed', status: 403, detail: 'x' },
     { kind: 'store-unavailable' },
     { kind: 'forbidden' },
+    { kind: 'gateway-denied', detail: 'x' },
     { kind: 'unknown-state', state: 'zzz', view: {} },
     { kind: 'unreadable', detail: 'x' },
     { kind: 'error', status: 500, detail: 'x' },
   ];
-  assert.equal(all.length, 9, 'kind 增減時這一條要跟著改 —— 漏掉的那個不會有人發現');
+  assert.equal(all.length, 10, 'kind 增減時這一條要跟著改 —— 漏掉的那個不會有人發現');
   assert.ok(presentationsAreDistinct(all));
 });
 
 test('P2 正控：presentationsAreDistinct 真的會回 false（否則 P1 是同義反覆）', () => {
-  const dup: RulesetOutcome[] = [{ kind: 'not-deployed' }, { kind: 'not-deployed' }];
+  const dup: RulesetOutcome[] = [
+    { kind: 'not-deployed', status: 404, detail: 'x' },
+    { kind: 'not-deployed', status: 403, detail: 'y' },
+  ];
   assert.equal(presentationsAreDistinct(dup), false);
 });
 
@@ -175,8 +221,9 @@ test('P3 只有 seeded 是 ok 語氣', () => {
   assert.equal(present({ kind: 'not-seeded', view: {} }).tone, 'warn');
   for (const o of [
     { kind: 'malformed', view: {} },
-    { kind: 'not-deployed' },
+    { kind: 'not-deployed', status: 403, detail: 'x' },
     { kind: 'store-unavailable' },
+    { kind: 'gateway-denied', detail: 'x' },
   ] as RulesetOutcome[]) {
     assert.equal(present(o).tone, 'bad');
   }
