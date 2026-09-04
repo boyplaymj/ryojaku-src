@@ -6,6 +6,7 @@ import { Capacitor } from '@capacitor/core';
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
 import { clientPlatformHeader } from '../utils/clientPlatform';
+import { authParamFor } from '../utils/authParam';
 import type { CorrectionPayload } from '../utils/voiceCorrection';
 import type { MetricEventPayload } from '../utils/voiceTaiMetrics';
 import {
@@ -141,14 +142,6 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
   }
 }
 
-// Helper to determine auth param
-function getAuthParam(userIdentifier: string): string {
-  // If it starts with APP_, it's an APP user ID. Otherwise assume it's an encrypted LINE ID.
-  // You might need to adjust this logic based on actual ID formats.
-  const isAppUser = userIdentifier.startsWith('APP_') || userIdentifier.startsWith('U'); // 'U' is often used for UUIDs too, adjust if needed
-  const paramName = isAppUser ? 'userId' : 'lineID';
-  return `${paramName}=${encodeURIComponent(userIdentifier)}`;
-}
 
 // ============ System Configuration APIs ============
 
@@ -271,7 +264,7 @@ export async function unbindProvider(provider: string) {
 
 // Verify user and get user info (for LINE Bot users)
 export async function verifyUser(userIdentifier: string) {
-  return apiRequest(`/verify-user?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/verify-user?${authParamFor(userIdentifier)}`, {
     method: 'POST',
   });
 }
@@ -422,7 +415,7 @@ export interface CreateGameRequest {
 }
 
 export async function createGame(userIdentifier: string, gameData: CreateGameRequest) {
-  return apiRequest(`/create-game?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/create-game?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(gameData),
   });
@@ -431,7 +424,7 @@ export async function createGame(userIdentifier: string, gameData: CreateGameReq
 // Get my games
 export async function getMyGames(userIdentifier: string) {
   // Always try to call real API first
-  const response = await apiRequest(`/my-games?${getAuthParam(userIdentifier)}`, {
+  const response = await apiRequest(`/my-games?${authParamFor(userIdentifier)}`, {
     method: 'POST',
   });
 
@@ -464,7 +457,7 @@ export interface RegisterGameRequest {
 }
 
 export async function registerGame(userIdentifier: string, gameData: RegisterGameRequest) {
-  return apiRequest(`/game-register?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/game-register?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(gameData),
   });
@@ -473,7 +466,7 @@ export async function registerGame(userIdentifier: string, gameData: RegisterGam
 // Get user profile
 export async function getUserProfile(userIdentifier: string) {
   // Use GET for fetching profile, which is supported by the backend
-  return apiRequest(`/user-profile?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/user-profile?${authParamFor(userIdentifier)}`, {
     method: 'GET',
   });
 }
@@ -490,7 +483,7 @@ export interface UpdateUserProfileRequest {
 }
 
 export async function updateUserProfile(userIdentifier: string, profileData: UpdateUserProfileRequest) {
-  return apiRequest(`/user-profile?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/user-profile?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(profileData),
   });
@@ -534,7 +527,7 @@ export interface AcceptRegistrationRequest {
 }
 
 export async function acceptRegistration(userIdentifier: string, registrationData: AcceptRegistrationRequest) {
-  return apiRequest(`/accept-registration?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/accept-registration?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(registrationData),
   });
@@ -547,7 +540,7 @@ export interface RejectRegistrationRequest {
 }
 
 export async function rejectRegistration(userIdentifier: string, registrationData: RejectRegistrationRequest) {
-  return apiRequest(`/reject-registration?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/reject-registration?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(registrationData),
   });
@@ -560,7 +553,7 @@ export interface CancelGameRequest {
 }
 
 export async function cancelGame(userIdentifier: string, gameData: CancelGameRequest) {
-  return apiRequest(`/cancel-game?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/cancel-game?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(gameData),
   });
@@ -573,7 +566,7 @@ export interface CancelRegistrationRequest {
 }
 
 export async function cancelRegistration(userIdentifier: string, registrationData: CancelRegistrationRequest) {
-  return apiRequest(`/cancel-registration?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/cancel-registration?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(registrationData),
   });
@@ -582,7 +575,7 @@ export async function cancelRegistration(userIdentifier: string, registrationDat
 // Ratings
 export async function getRatings(userIdentifier: string, gameId?: string) {
   // 修正為 GET 方法 (符合文件規格)
-  let url = `/ratings?${getAuthParam(userIdentifier)}`;
+  let url = `/ratings?${authParamFor(userIdentifier)}`;
 
   // 如果提供了 gameId，則添加到查詢參數中
   if (gameId) {
@@ -648,7 +641,7 @@ export interface RedeemCodeRequest {
 }
 
 export async function redeemCode(userIdentifier: string, code: string) {
-  return apiRequest(`/redeem-code?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/redeem-code?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify({ code }),
   });
@@ -783,7 +776,7 @@ export async function likeComment(postId: string, commentId: string, userId: str
 // ============ Chat System APIs ============
 
 export async function getChatRooms(userIdentifier: string) {
-  return apiRequest(`/chat/rooms?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/chat/rooms?${authParamFor(userIdentifier)}`, {
     method: 'GET',
   });
 }
@@ -841,33 +834,33 @@ export interface LedgerEntry {
 }
 
 export async function getLedger(userIdentifier: string) {
-  return apiRequest(`/ledger?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/ledger?${authParamFor(userIdentifier)}`, {
     method: 'GET',
   });
 }
 
 export async function createLedgerAccount(userIdentifier: string, ledgerData: Partial<LedgerEntry>) {
-  return apiRequest(`/ledger?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/ledger?${authParamFor(userIdentifier)}`, {
     method: 'POST',
     body: JSON.stringify(ledgerData),
   });
 }
 
 export async function getLedgerSummary(userIdentifier: string) {
-  return apiRequest(`/ledger/summary?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/ledger/summary?${authParamFor(userIdentifier)}`, {
     method: 'GET',
   });
 }
 
 export async function updateLedger(userIdentifier: string, ledgerData: Partial<LedgerEntry>) {
-  return apiRequest(`/ledger?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/ledger?${authParamFor(userIdentifier)}`, {
     method: 'PUT',
     body: JSON.stringify(ledgerData),
   });
 }
 
 export async function deleteLedger(userIdentifier: string, ledgerId: string, createdAt: number) {
-  return apiRequest(`/ledger?${getAuthParam(userIdentifier)}&ledgerId=${encodeURIComponent(ledgerId)}&createdAt=${createdAt}`, {
+  return apiRequest(`/ledger?${authParamFor(userIdentifier)}&ledgerId=${encodeURIComponent(ledgerId)}&createdAt=${createdAt}`, {
     method: 'DELETE',
   });
 }
@@ -876,7 +869,7 @@ export async function deleteLedger(userIdentifier: string, ledgerId: string, cre
 // ============ Daily Bonus APIs ============
 
 export async function claimDailyBonus(userIdentifier: string) {
-  return apiRequest(`/daily-bonus?${getAuthParam(userIdentifier)}`, {
+  return apiRequest(`/daily-bonus?${authParamFor(userIdentifier)}`, {
     method: 'POST',
   });
 }
