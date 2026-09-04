@@ -155,6 +155,108 @@ func (d *Database) DecryptLineID(encryptedData string) (string, error) {
 	return string(plaintext), nil
 }
 
+// resolveTargetUserID decides which user this request is allowed to look up,
+// and is the only place in this endpoint that makes that decision.
+//
+// It returns (userID, nil) when the lookup may proceed, or ("", response) when
+// the request must be rejected. It deliberately does NOT touch DynamoDB — the
+// whole point is that the auth reasoning is testable on its own, and this
+// package had no tests at all when finding 2 was written.
+//
+// The two entries are not symmetric, and that asymmetry is the fix:
+//   - userId= : must be a VERIFIED identity, and the token's identity is what
+//     gets used. A caller can only ever look up themselves.
+//   - lineID= : left as-is. It is the LINE login fallback, so there is no token
+//     yet at that point; the ciphertext itself is the credential (it must
+//     decrypt with the server key, which an enumerator cannot forge).
+func (d *Database) resolveTargetUserID(request events.APIGatewayProxyRequest, headers map[string]string) (string, *events.APIGatewayProxyResponse) {
+	// Get user ID - support both lineID (encrypted) and userId (APP_xxx) parameters
+	var userID string
+	var err error
+
+	// Try to get userId parameter first (for APP users)
+	userID = request.QueryStringParameters["userId"]
+
+	// 🔴 2026-09-04：`userId=` 這條入口改為「必須是驗證過的身分」（finding 2，稽核報告 §3／§3b）。
+	//
+	// 07-30 這裡放的是一段「刻意只記錄、不改行為」的探針，保留理由是一句**推測**：
+	// 「Android bundle 內含 loginWithLineId／verifyUser，線上跑的是工程師較舊的版本，
+	//   外部舊 App／LINE bot 是否在用只能向工程師確認。」
+	// 那句話撐著整個決定，而它從沒被量過。2026-09-04 量了（報告 §3b）：
+	//
+	//   - 本端點 log group 最後一筆事件停在 2026-07-30 20:43，而同環境的
+	//     search-games／game-detail／app-login／user-info 在 09-02~09-03 都有流量（正控）
+	//   - 而那唯一一筆就是我們自己的探針（userId="APP_zzz_not_real_zzz" ua="curl/8.17.0"）
+	//   - 該 log group retentionInDays=None ⇒「沒有事件」是真的沒有，不是被清掉
+	//   - 上架 App 打的就是這個環境（iOS bundle／android-debug.yml → ryojaku-api.boyplaymj.com
+	//     → base-path mapping → 9mu0vajn38 stg，即上面那些 log group）
+	//   - Users 表全表 7 人，100% APP_*／accountType=app，**零個 LINE Bot 帳號**
+	//     ⇒ 07-30 擔心的「關掉會鎖死 LINE Bot 登入」，在這個環境上沒有對象
+	//
+	// ⚠️ 仍然量不到的那一塊：frontend/QUICK_START.md:15 另一個 base URL
+	// （00pox0hvv4/prod）不在本 AWS 帳號，那邊的流量看不到。但它同樣**改不到** ——
+	// 那個環境跑它自己的舊 binary，本次改動不會讓它變好或變壞 ⇒ 它不構成不修的理由。
+	//
+	// 手法與 user_info 相同：**不採信 query 的 userId，改用 token claims 裡的身分**。
+	// 對合法呼叫（查自己）行為不變 —— 「查他人」從來就不是有效用法，只是 IDOR。
+	//
+	// 🔴 `lineID=` 那條入口一行不動：它是 authService.loginWithLineId 的 fallback
+	// 登入路徑，呼叫當下還沒有 token，對它掛驗證會鎖死 LINE Bot 登入。
+	// 收緊的只有「明文 userId 直查」這一條。
+	if userID != "" {
+		verifiedID, verified := shared.GetUserIdentifierWithTracking(request, "web_verify_user")
+		if !verified {
+			// 觀測用：留下來源特徵，用來判斷是否真的有舊客戶端在打這條。
+			log.Printf("[AUTH][verify-user] 拒絕未驗證的 userId= 查詢 queryUserId=%q sourceIp=%s ua=%q",
+				userID, request.RequestContext.Identity.SourceIP, request.Headers["User-Agent"])
+			response := Response{Success: false, Error: "需要登入"}
+			body, _ := json.Marshal(response)
+			return "", &events.APIGatewayProxyResponse{
+				StatusCode: http.StatusUnauthorized,
+				Headers:    headers,
+				Body:       string(body),
+			}
+		}
+		// 一律改用 token 裡的身分，query 的 ?userId= 不再被採用。
+		userID = verifiedID
+	}
+
+	// If userId is not provided, try lineID (for LINE Bot users)
+	if userID == "" {
+		encryptedLineID := request.QueryStringParameters["lineID"]
+		if encryptedLineID == "" {
+			response := Response{
+				Success: false,
+				Error:   "Missing userId or lineID parameter",
+			}
+			body, _ := json.Marshal(response)
+			return "", &events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    headers,
+				Body:       string(body),
+			}
+		}
+
+		// Decrypt LINE ID
+		userID, err = d.DecryptLineID(encryptedLineID)
+		if err != nil {
+			log.Printf("Failed to decrypt LINE ID: %v", err)
+			response := Response{
+				Success: false,
+				Error:   "Failed to decrypt LINE ID",
+			}
+			body, _ := json.Marshal(response)
+			return "", &events.APIGatewayProxyResponse{
+				StatusCode: http.StatusUnauthorized,
+				Headers:    headers,
+				Body:       string(body),
+			}
+		}
+	}
+
+	return userID, nil
+}
+
 // GetUser retrieves a user from DynamoDB
 func (d *Database) GetUser(ctx context.Context, userID string) (*User, error) {
 	result, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -227,64 +329,11 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
-	// Get user ID - support both lineID (encrypted) and userId (APP_xxx) parameters
-	var userID string
-	var err error
-
-	// Try to get userId parameter first (for APP users)
-	userID = request.QueryStringParameters["userId"]
-
-	// 🔴 觀測（2026-07-30，SECURITY_AUTH_BYPASS.md §5d-1）—— 這裡**刻意只記錄、不改行為**。
-	//
-	// 本端點兩條入口的安全性並不對等：
-	//   lineID= 走 db.DecryptLineID()，解密失敗回 401 → 密文本身即憑證
-	//   userId= 明文 APP_xxx 直查，零驗證           → 可枚舉他人，回應含 lineId／points／gender
-	//
-	// 不能直接關掉 userId= 這條，也不能對本端點掛 authorizer：
-	// verify-user 是 authService.loginWithLineId 的 fallback 登入路徑，呼叫當下還沒有 token，
-	// 掛 authorizer 會直接鎖死 LINE Bot 用戶登入。
-	//
-	// 而「我方 repo 前端不走 userId= 這條」不足以證明沒有呼叫者 —— Android bundle 內含
-	// loginWithLineId／verifyUser，且線上跑的是工程師較舊的版本，外部舊 App／LINE bot
-	// 是否在用只能向工程師確認。所以先觀測真實流量，再據以決定收緊方式，
-	// 不從「grep 不到」反推「沒人用」。
-	if userID != "" {
-		hasAuthHeader := request.Headers["Authorization"] != "" || request.Headers["authorization"] != ""
-		log.Printf("[AUTH-PROBE][verify-user] 走明文 userId= 入口 userId=%q hasAuthHeader=%t sourceIp=%s ua=%q",
-			userID, hasAuthHeader, request.RequestContext.Identity.SourceIP, request.Headers["User-Agent"])
-	}
-
-	// If userId is not provided, try lineID (for LINE Bot users)
-	if userID == "" {
-		encryptedLineID := request.QueryStringParameters["lineID"]
-		if encryptedLineID == "" {
-			response := Response{
-				Success: false,
-				Error:   "Missing userId or lineID parameter",
-			}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayProxyResponse{
-				StatusCode: http.StatusBadRequest,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
-
-		// Decrypt LINE ID
-		userID, err = db.DecryptLineID(encryptedLineID)
-		if err != nil {
-			log.Printf("Failed to decrypt LINE ID: %v", err)
-			response := Response{
-				Success: false,
-				Error:   "Failed to decrypt LINE ID",
-			}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayProxyResponse{
-				StatusCode: http.StatusUnauthorized,
-				Headers:    headers,
-				Body:       string(body),
-			}, nil
-		}
+	// Decide WHICH user this request is allowed to look up. All of the auth
+	// reasoning lives in resolveTargetUserID so it can be tested without DynamoDB.
+	userID, deny := db.resolveTargetUserID(request, headers)
+	if deny != nil {
+		return *deny, nil
 	}
 
 	// Get user from database
