@@ -1,0 +1,48 @@
+[Unit]
+Description=両雀 安全回歸守衛（每日，真打 stg；儀器跑乾淨 worktree 裡的 master）
+Documentation=file:///opt/sml/ryojaku-src/infra/security_regression_daily.sh
+After=network-online.target
+Wants=network-online.target
+# 外殼自己會把「紅燈」「沒測到」「跑不起來」發到 Discord；這條是**外殼自己死掉**時
+# 的最後一道（被 OOM 殺、bash 語法錯、python 不在）—— 不能只靠會說話的那支報自己的喪。
+OnFailure=sml-alert@%n.service
+
+[Service]
+Type=oneshot
+User=smlbot
+# 🔴 直接指工作樹內的檔案 —— 唯一正本，沒有第二份會漂移的複本（同 sml-geo-verify）。
+#    代價是既有的：本**外殼**未提交的編輯下一次排程就生效。
+#    ⚠️ 但**受測的儀器不是這棵樹**：外殼會另外開一棵乾淨 worktree 釘住 master HEAD，
+#    在那裡跑 security_regression.sh。外殼在共用樹、儀器在乾淨樹，這個不對稱是刻意的
+#    （理由見 security_regression_daily.sh 檔頭）。
+WorkingDirectory=/opt/sml/ryojaku-src
+# 🔴 HOME 不可省：security_regression.sh 要 import cryptography（LINE 密文正控），
+#    而它裝在 /home/smlbot/.local/lib/python3.9/site-packages。沒有 HOME 的話
+#    CIPHER 會是空字串，那條斷言會紅成「finding 7 的值那層未受覆蓋」——
+#    看起來像安全問題，其實是環境問題。同 sml-geo-verify 檔頭那句。
+Environment=HOME=/home/smlbot
+Environment=AWS_REGION=ap-southeast-1
+Environment=AWS_DEFAULT_REGION=ap-southeast-1
+# AWS 憑證走 EC2 instance role（arn:…:role/sml-claude-ec2），不需要任何 key。
+StateDirectory=sml-ryojaku-secreg
+ExecStart=/opt/sml/ryojaku-src/infra/security_regression_daily.sh
+# 外殼自己 timeout 900s（含 worktree 準備與清理）；這裡再留一層餘裕。
+TimeoutStartSec=1200
+Nice=10
+# rc=2 是「有事、而且已經講出去了」—— 守衛照它該有的樣子運作了，不該讓 list-timers
+# 長期掛紅（紅燈變常態就沒有人看，同 sml-geo-verify 的理由）。
+# rc=1（講不出去）與 rc=3（設備問題）留給 OnFailure。
+SuccessExitStatus=0 2
+
+# 🔴 **刻意不設 MemoryMax**，理由同 sml-geo-verify：
+#    `sml-proc-ceiling-watch` 掃的是 /sys/fs/cgroup/system.slice/**sml-\*.service**，
+#    門檻 = max(0.20 × 該籠 memory.high, 256 MiB)。本 unit 的名字正好在那個 glob 裡。
+#    沒設上限 ⇒ cage_high_mib() 回 None ⇒ scan() 直接 continue，不在射程內。
+#    設了的話等於替它買一張「某天 aws cli 多吃幾十 MiB 就被 SIGKILL」的彩券，
+#    而那一槍打出來的紅燈，跟「stg 真的回歸了」在告警上長得一模一樣。
+# 🔴 MemoryAccounting 只開**計量**、不設上限 —— 沒有它 `systemctl show -p MemoryPeak`
+#    一律回 0，而 0 跟「真的沒吃記憶體」長得一樣；有它才有得量，且不會把自己送進射程。
+MemoryAccounting=yes
+
+[Install]
+WantedBy=multi-user.target

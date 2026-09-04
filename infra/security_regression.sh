@@ -214,6 +214,33 @@ for i in d.get('Items',[]):
   [ "$FAIL" != "0" ] && exit 1
   exit 0
 }
+# ── 併發鎖 ─────────────────────────────────────────────────────────────
+# 🔴 鎖在**這支**不在外殼，因為最可能相撞的是「排程」與「有人手動 bash 這支」——
+#    鎖如果只寫在每日外殼裡，直接跑本檔的那條路完全不受保護，
+#    而那正是人最常走的路。（2026-09-04 掛上 sml-ryojaku-secreg.timer 時發現：
+#    外殼原本的鎖檔路徑跟著 STATE_DIRECTORY 走 ⇒ 排程用 /var/lib/…、手動用
+#    /opt/sml/.buildtmp/… ⇒ 兩把不同的鎖，等於沒鎖。）
+#
+# 🔴 為什麼非鎖不可：`MARK` 是**常數**。兩次併行執行的 cleanup 會在全表掃描裡
+#    把對方正在用的列刪掉 ⇒ 兩邊都紅，而且紅得像安全回歸。
+#
+# ⚠️ 界線：這是**本機**的鎖。從別台機器同時跑仍然會撞（腳本自己的檔頭就寫了
+#    「從別的 IP 跑」是限流的解法之一）—— 那種情況本鎖看不到，也擋不住。
+#
+# 🔴 一定要在 `trap cleanup EXIT` **之前**取得。裝了 trap 之後才失敗退出的話，
+#    cleanup 會帶著空的 HOST/GID 跑一次全表掃描，而 mine() 只靠常數 MARK 就會命中
+#    ——「因為搶不到鎖而退出」會順手刪掉**正在跑的那一輪**的資料。
+SECREG_LOCK=${SECREG_LOCK:-/tmp/ryojaku-secreg.lock}
+SECREG_LOCK_WAIT=${SECREG_LOCK_WAIT:-600}
+exec 8>"$SECREG_LOCK" || { echo "  ❌ 開不了鎖檔 $SECREG_LOCK"; exit 1; }
+if ! flock -w "$SECREG_LOCK_WAIT" 8; then
+  # 走前置失敗那條路（rc=1、沒有 summary 行）⇒ 每日外殼會判成「沒測到」而不是
+  # 「安全回歸」。這正是它該被歸的類。
+  echo "  ❌ 等了 ${SECREG_LOCK_WAIT}s 仍拿不到併發鎖（$SECREG_LOCK）——"
+  echo "     另一輪安全回歸測試正在跑。本次**一條斷言都沒跑**，不是安全問題。"
+  exit 1
+fi
+
 trap cleanup EXIT
 
 lineid(){ python3 -c "
