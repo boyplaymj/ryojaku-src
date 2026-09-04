@@ -24,6 +24,39 @@ esac
 
 echo "▶ 環境=$ENV  API=$API_BASE"
 
+# 🔴 D5-c2 家規台數表：**出貨前先問「DDB 那一列跟得上嗎」**
+#    （正典 /opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §5c 紀律 4）。
+#    允許的狀態是 DDB.version >= 這包 bundle 的 version（播種比發版快）；
+#    反過來代表**忘了播種** —— App 會抓到 DDB 那份舊表，而玩家看到的台數就是錯的。
+#
+# 🔴 接在**這裡**的理由：「bundle 比 DDB 新」這件事在 s3 sync 那一刻才成真，
+#    而這支是它必然經過的路。放在 npm ci 之前是為了 fail fast
+#    （也讓「被擋下」那條路可以端到端實測而不會真的動到線上）。
+#
+# 🔴 量的是 src/engine/mahjong-tai/fan_table.json（後台） —— **build 的輸入**，不是 dist 裡那份。
+#    兩者之間隔著 vite。這個界線是真的，不要讀成「dist 已經驗過」。
+#
+# ⚠️ preview 與 stg 共用同一套後端（見上面 case 那段）⇒ 都對 stg 那張表。
+# ⚠️ 守衛在另一個 repo。找不到就**中止**，不是跳過 —— 靜默跳過的守衛
+#    與從沒裝過長得一模一樣。臨時豁免：SKIP_RULESET_SEED_CHECK=1（顯式）。
+RULESET_GUARD="${RULESET_GUARD:-/opt/sml/repo/tools/mahjong-tai/check_ruleset_seeded.py}"
+if [ "${SKIP_RULESET_SEED_CHECK:-0}" = "1" ]; then
+  echo "⚠️  SKIP_RULESET_SEED_CHECK=1 ⇒ 跳過家規表播種檢查（顯式豁免）"
+elif [ ! -f "$RULESET_GUARD" ]; then
+  echo "❌ 找不到家規表守衛 $RULESET_GUARD" >&2
+  echo "   它在另一個 repo（sml/tools/mahjong-tai）。要換路徑用 RULESET_GUARD=..." >&2
+  echo "   確定要跳過：SKIP_RULESET_SEED_CHECK=1 $0 $*" >&2
+  exit 1
+else
+  rgrc=0
+  python3 "$RULESET_GUARD" --stage stg --table-json "$(pwd)/src/engine/mahjong-tai/fan_table.json" || rgrc=$?
+  case "$rgrc" in
+    0) ;;
+    1|3) echo "❌ 家規台數表：DDB 那一列跟不上這包 bundle（判定與修法見上方），中止部署" >&2; exit 1 ;;
+    *)   echo "❌ 家規台數表守衛**沒量到**（rc=$rgrc，設備問題）—— 讀數作廢，不是「沒問題」，一樣中止" >&2; exit 1 ;;
+  esac
+fi
+
 [ -d node_modules ] || npm ci
 VITE_API_BASE_URL="$API_BASE" npm run build
 
