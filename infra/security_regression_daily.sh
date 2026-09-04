@@ -176,52 +176,124 @@ STAMP=$(date -Iseconds)
 #    因為那條路人可以繞過本外殼直接走。兩把鎖**必須是不同的檔**，
 #    同一個檔的話本外殼持著它、子行程再去 flock 就自己鎖死自己。
 WRAPPER_LOCK=${SECREG_WRAPPER_LOCK:-/tmp/ryojaku-secreg-wrapper.lock}
-exec 9>"$WRAPPER_LOCK"
-if ! flock -n 9; then
-    echo "[secreg] 另一次執行正在跑，本次跳過（$STAMP）"
-    exit 0
+# 🔴 re-exec 過來的那一趟**不可以重開 fd 9**。`exec` 換掉的是程式映像不是行程，
+#    fd 9 上的 flock 原封帶過去（沒有 CLOEXEC）；重開一次會先關掉舊 fd ⇒
+#    鎖在那個瞬間掉了，而重新 flock 又會成功 ⇒ 看起來完全正常。
+if [ "${SECREG_PINNED:-0}" != 1 ]; then
+    exec 9>"$WRAPPER_LOCK"
+    if ! flock -n 9; then
+        echo "[secreg] 另一次執行正在跑，本次跳過（$STAMP）"
+        exit 0
+    fi
 fi
 
-read_state() {   # read_state <key> <預設>
-    python3 - "$STATE" "$1" "$2" <<'PY' 2>/dev/null || echo "$2"
-import json, sys
+# ── 狀態檔 ────────────────────────────────────────────────────────────
+# 🔴 「檔案不存在（首次執行）」與「檔案在但讀不出來（毀損）」必須分開。
+#    2026-09-04 覆驗抓到：舊版 read_state 對**任何**例外都靜默回退預設值 ⇒
+#    state 被寫壞的話 best_total 會被當成 0，於是下一輪接受一個比較小的斷言數，
+#    **並把它寫成新基準** —— 縮水偵測就此永久失效，而過程中一聲不響。
+#    這正是本機記過的形狀：fail-open 不可以退回 0（0 是最寬鬆的那個極值）。
+load_state() {   # 印 ST_* 給 eval；python 掛掉時輸出為空 ⇒ 呼叫端當毀損（fail-closed）
+    python3 - "$STATE" <<'PYST'
+import json, os, sys
+p = sys.argv[1]
+if not os.path.exists(p):
+    print("ST_STATUS=missing"); print("ST_STREAK=0"); print("ST_POST=0")
+    print("ST_BEST=0"); print("ST_DRIFT=-")
+    raise SystemExit(0)
 try:
-    print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3]))
-except Exception:
-    print(sys.argv[3])
-PY
+    d = json.load(open(p))
+    if not isinstance(d, dict):
+        raise ValueError("state 不是 JSON 物件")
+    print("ST_STATUS=ok")
+    print("ST_STREAK=%d" % int(d.get("red_streak", 0)))
+    print("ST_POST=%d"   % int(d.get("last_post_epoch", 0)))
+    print("ST_BEST=%d"   % int(d.get("best_total", 0)))
+    print("ST_DRIFT=%s"  % (d.get("drift_sha") or "-"))
+except Exception as e:
+    print("ST_STATUS=corrupt")
+    print("ST_ERR=%s" % type(e).__name__)
+PYST
 }
 write_state() {  # write_state <rc> <sha> <red_streak> <last_post_epoch> <best_total>
-    python3 - "$STATE" "$1" "$2" "$3" "$4" "$5" "${DRIFT_SHA:--}" "$STAMP" <<'PY'
-import json, sys
+    python3 - "$STATE" "$1" "$2" "$3" "$4" "$5" "${DRIFT_SHA:--}" "$STAMP" <<'PYST'
+import json, os, sys, tempfile
 p, rc, sha, streak, last_post, best, drift, stamp = sys.argv[1:9]
-json.dump({"last_rc": int(rc), "last_sha": sha, "red_streak": int(streak),
-           "last_post_epoch": int(last_post), "best_total": int(best),
-           "drift_sha": drift, "last_run": stamp},
-          open(p, "w"), ensure_ascii=False, indent=1)
-PY
+d = {"last_rc": int(rc), "last_sha": sha, "red_streak": int(streak),
+     "last_post_epoch": int(last_post), "best_total": int(best),
+     "drift_sha": drift, "last_run": stamp}
+# 🔴 先寫暫存檔再 os.replace。舊版直接 open(p,"w") ⇒ 寫到一半被中斷就留下半截
+#    JSON，而半截 JSON 正是上面那個「毀損 ⇒ 退回 0」的入口。
+# ⚠️ 界線：這裡的「原子」只涵蓋**換上去那一瞬間**。它不是併發保護 ——
+#    多行程同時 read-merge-write 仍會 lost update。本支不需要，因為整段執行
+#    由 WRAPPER_LOCK 序列化；換成別的用法這句話就不成立了。
+dirn = os.path.dirname(p) or "."
+fd, tmp = tempfile.mkstemp(dir=dirn, prefix=".state.", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, ensure_ascii=False, indent=1)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, p)
+except Exception:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+PYST
 }
 post() { printf '%s' "$1" | python3 "$POSTER" "$CHANNEL" >/dev/null 2>&1; }
 
-PREV_STREAK=$(read_state red_streak 0)
-LAST_POST=$(read_state last_post_epoch 0)
-BEST_TOTAL=$(read_state best_total 0)
-
-fail_equipment() {   # 設備問題：講出去，然後 rc=3
-    local why="$1"
+# 🔴 設備問題**發文成功之後回 2，不是 3**。unit 的 SuccessExitStatus=0 2，
+#    回 3 會再觸發 OnFailure ⇒ 同一件事在 Discord 上叫兩次。重複告警＝雜訊＝
+#    把人訓練成忽略，而那不可逆。只有「講不出去」才交給 OnFailure 當最後一道。
+fail_equipment() {   # 設備問題：講出去；講得出去 rc=2，講不出去 rc=3
+    local why="$1" rc=2
     echo "[secreg] 🔴 設備問題：$why"
     if ! post "🛡️🔴 **両雀 安全回歸守衛：跑不起來**
 $why
 
 （這不是「守衛紅了」，是**守衛根本沒跑**。放著不管的症狀是：以後每天都靜靜地什麼都沒驗。）
-排程：\`sml-ryojaku-secreg.timer\`　外殼：\`$REL 的姊妹檔 security_regression_daily.sh\`"; then
+排程：\`sml-ryojaku-secreg.timer\`　外殼：\`infra/security_regression_daily.sh\`"; then
         echo "[secreg] 🔴 而且**通知也沒送出去** —— 只剩 OnFailure 那條路"
+        rc=3
     fi
     write_state 3 "-" "$PREV_STREAK" "$NOW" "$BEST_TOTAL"
-    exit 3
+    exit "$rc"
 }
 
+eval "$(load_state)"
+if [ "${ST_STATUS:-corrupt}" != ok ] && [ "${ST_STATUS:-corrupt}" != missing ]; then
+    # 🔴 這條**刻意不寫 state** —— 覆寫等於把毀損的證據換成一份 best_total=0 的
+    #    乾淨檔案，那正是要防的那件事，只是延後一輪。留著讓人看，並且每天再叫：
+    #    一支基準已經失效的守衛，值得天天吵到有人修。
+    echo "[secreg] 🔴 state 讀不出來（${ST_ERR:-無輸出}）：$STATE"
+    if post "🛡️🔴 **両雀 安全回歸守衛：state 檔讀不出來**
+\`$STATE\`（${ST_ERR:-python 沒有輸出}）
+
+**本次沒有跑任何斷言。** 這不是安全問題，但它讓 \`shrunk\`（斷言數縮水偵測）的
+基準失效 —— 若照舊當成「首次執行」，下一輪會把一個較小的斷言數寫成新基準，
+從此再也偵測不到縮水，而且一聲不響。
+處置：看一眼那個檔，確認上一次的 \`best_total\` 後刪掉它（或修好 JSON）。"; then
+        exit 2
+    fi
+    exit 3
+fi
+PREV_STREAK=$ST_STREAK
+LAST_POST=$ST_POST
+BEST_TOTAL=$ST_BEST
+PREV_DRIFT=$ST_DRIFT
+
+
 # ── ① 準備乾淨 worktree（釘在 master 的當前 commit）─────────────────────
+# 兩趟：bootstrap 那一趟（跑共用工作樹的這支）負責準備樹並 re-exec；
+# pinned 那一趟（跑乾淨樹裡的那支）**只驗證不動樹** ——
+# 🔴 它正在執行的檔案就在那棵樹裡，而 bash 是邊讀邊執行的：
+#    在自己腳下 checkout 一個不同的 commit 會把後半段換掉。
+if [ "${SECREG_PINNED:-0}" = 1 ]; then
+    SHA=${SECREG_SHA:-}
+    [ -n "$SHA" ] || fail_equipment "SECREG_PINNED=1 卻沒有 SECREG_SHA"
+    SHORT=${SHA:0:8}
+    SUBJECT=$(git -C "$REPO" log -1 --format=%s "$SHA" 2>/dev/null)
+else
 SHA=$(git -C "$REPO" rev-parse "refs/heads/$BRANCH" 2>/dev/null) \
     || fail_equipment "讀不到 $REPO 的 refs/heads/$BRANCH"
 SHORT=${SHA:0:8}
@@ -242,6 +314,7 @@ if [ $prep_ok = 0 ]; then
     git -C "$REPO" worktree add --detach -f "$WT" "$SHA" >>"$LOG.prep" 2>&1 \
         || fail_equipment "建不出 worktree $WT（詳見 $LOG.prep）"
 fi
+fi
 
 # 🔴 這幾行是本設計唯一的支點，不可省：**「我跑的是乾淨的 master」這句話本身要有讀數**。
 #    少了它，樹被誰弄髒、或 checkout 悄悄失敗時，跑出來的紅／綠都不知道是誰的。
@@ -254,9 +327,27 @@ $DIRT
 \`\`\`"
 [ -f "$WT/$REL" ] || fail_equipment "$WT/$REL 不存在"
 
+# ── ①b 外殼自己也釘在乾淨 master（2026-09-04 覆驗補上）───────────────────
+# 🔴 原本只有內層 security_regression.sh 跑乾淨樹，**這支外殼本身**還是跑共用
+#    工作樹的版本。而它決定了：釘哪個 commit、怎麼分類、state 寫什麼、通報什麼 ——
+#    共用樹上一個未提交的編輯就能改掉或跳過整個量測，而輸出跟正常的一模一樣。
+#    ⇒ 準備好乾淨樹之後，把自己 exec 成那棵樹裡的同一支。
+# ⚠️ 誠實界線：這**縮小**了受污染面，沒有消滅它。剩下的是 bootstrap 那一段
+#    （讀 refs/heads/master、準備 worktree、決定 exec 誰）—— 那段仍然來自共用樹。
+#    要完全關掉得有一個不在共用樹裡的 bootstrap，那是另一個決定。
+SELF_CLEAN="$WT/infra/security_regression_daily.sh"
+if [ "${SECREG_PINNED:-0}" != 1 ]; then
+    [ -f "$SELF_CLEAN" ] || fail_equipment "$SELF_CLEAN 不存在（乾淨樹裡沒有這支外殼）"
+    if ! cmp -s "$0" "$SELF_CLEAN"; then
+        echo "[secreg] ⚠️ 共用樹的外殼與 $SHORT 不一致 ⇒ 以乾淨樹那份為準"
+    fi
+    export SECREG_PINNED=1 SECREG_SHA="$SHA" STATE_DIRECTORY="$STATE_DIR"
+    exec bash "$SELF_CLEAN" "$@"
+    fail_equipment "exec $SELF_CLEAN 失敗"
+fi
+
 DRIFT=$(check_install "$WT")
 DRIFT_SHA=$(printf '%s' "$DRIFT" | sha256sum | cut -c1-12)
-PREV_DRIFT=$(read_state drift_sha "-")
 [ -n "$DRIFT" ] && echo "[secreg] 🟠 unit 檔漂移：$DRIFT"
 
 if [ "$DRY" = 1 ]; then
