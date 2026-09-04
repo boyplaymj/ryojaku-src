@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -47,6 +48,12 @@ var (
 	fakeCalls  []ddbCall
 	fakeCounts map[string]int  // rlKey 前綴 → GetItem 要回的 count
 	fakeUser   json.RawMessage // Users 表 Query 要回的 item；nil ⇒ 查無此人
+
+	// 有狀態模式：假件真的累加 UpdateItem、GetItem 回真實累計值。
+	// 併發測試非用它不可 —— 固定回應的假件對「兩個請求之間看不看得到彼此」
+	// 零鑑別力，那正是 TOCTOU 的所在。
+	fakeStateful bool
+	fakeAdds     map[string]int64 // **完整** rlKey（含桶號）→ 實際被加了幾次
 )
 
 // 桶號後綴：rlKey 是 "<key>#<now/window>"。測試與 handler 取 now 的時刻可能
@@ -61,6 +68,15 @@ func fakeReset() {
 	fakeCalls = nil
 	fakeCounts = map[string]int{}
 	fakeUser = nil
+	fakeStateful = false
+	fakeAdds = map[string]int64{}
+}
+
+// setStateful：切到有狀態模式（見 fakeStateful 註解）。
+func setStateful() {
+	fakeMu.Lock()
+	defer fakeMu.Unlock()
+	fakeStateful = true
 }
 
 func calls() []ddbCall {
@@ -105,7 +121,32 @@ func fakeDDBHandler(w http.ResponseWriter, r *http.Request) {
 	fakeCalls = append(fakeCalls, ddbCall{Target: target, Table: req.TableName, RLKey: rl})
 	count, hasCount := fakeCounts[rl]
 	user := fakeUser
+	stateful := fakeStateful
+	var liveN int64
+	if stateful && strings.HasSuffix(req.TableName, "AuthRateLimit") {
+		full := req.Key.RLKey.S
+		if target == "UpdateItem" {
+			fakeAdds[full]++
+		}
+		liveN = fakeAdds[full]
+	}
 	fakeMu.Unlock()
+
+	if stateful && strings.HasSuffix(req.TableName, "AuthRateLimit") {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+		switch target {
+		case "GetItem":
+			if liveN == 0 {
+				io.WriteString(w, `{}`)
+				return
+			}
+			fmt.Fprintf(w, `{"Item":{"rlKey":{"S":%q},"count":{"N":"%d"}}}`, req.Key.RLKey.S, liveN)
+			return
+		case "UpdateItem":
+			fmt.Fprintf(w, `{"Attributes":{"count":{"N":"%d"}}}`, liveN)
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 	switch {
@@ -247,6 +288,8 @@ func TestLoginFailLimits_Pinned(t *testing.T) {
 		{"loginFailEmailWindow", loginFailEmailWindow, 3600},
 		{"loginFailLineIPLimit", loginFailLineIPLimit, 50},
 		{"loginFailLineIPWindow", loginFailLineIPWindow, 3600},
+		{"loginBurstLimit", loginBurstLimit, 30},
+		{"loginBurstWindow", loginBurstWindow, 30},
 		{"loginLegacyComboLimit", loginLegacyComboLimit, 10},
 		{"loginLegacyComboWindow", loginLegacyComboWindow, 900},
 	} {
@@ -314,8 +357,12 @@ func TestLogin_IPBucketOverLimit_BlocksBeforeAuthWork(t *testing.T) {
 	if n := countTarget("Query"); n != 0 {
 		t.Errorf("超限後仍查了使用者（Query %d 次）⇒ 閘門沒擋在認證工作之前", n)
 	}
-	if up := updatedRLKeys(); len(up) != 0 {
-		t.Errorf("超限後仍寫入了限流桶 %v ⇒ 被擋的請求會自己把額度續命", up)
+	// ⚠️ 突發閘是**原子**的（先加一再判），所以被擋的請求會吃掉一個突發額度 ——
+	// 那是它的設計不是缺陷。這裡要驗的是「不得寫入**失敗桶**」。
+	for _, k := range updatedRLKeys() {
+		if k != loginBurstKey(testIP) {
+			t.Errorf("超限後寫入了失敗桶 %q ⇒ 被擋的請求會自己把額度續命", k)
+		}
 	}
 }
 
@@ -407,8 +454,10 @@ func TestLogin_LineBranch_OverLimitBlocks(t *testing.T) {
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("狀態碼 = %d, want 429；body=%s", resp.StatusCode, resp.Body)
 	}
-	if up := updatedRLKeys(); len(up) != 0 {
-		t.Errorf("超限後仍寫入限流桶 %v", up)
+	for _, k := range updatedRLKeys() {
+		if k != loginLineBurstKey(testIP) {
+			t.Errorf("超限後寫入了失敗桶 %q", k)
+		}
 	}
 }
 
@@ -433,5 +482,112 @@ func TestLogin_AllRateLimitRejectionsLookIdentical(t *testing.T) {
 	}
 	if byLegacy.StatusCode != http.StatusTooManyRequests || byLegacy.Body != byIP.Body {
 		t.Errorf("既有複合 key 的 429 與新的兩道不同：%d %s", byLegacy.StatusCode, byLegacy.Body)
+	}
+}
+
+// ── 併發：TOCTOU 與它的界線（2026-09-04，Codex 覆驗後補）────────────────
+
+// 🔴 這條測的是本批最容易被誤述的性質。
+// 「peek → 認證 → 失敗才加一」**不是硬上限**：peek 與加一之間隔著 DB 查詢與 bcrypt，
+// 同一瞬間湧入的請求全都在 count=0 時通過 peek。實測（加突發閘之前）300 併發有
+// 239 次通過，而宣稱上限是 50。既有的複合桶攔不住 —— 每個 email 都是不同 key。
+//
+// 突發閘（原子 CheckRateLimit，成敗都計）把「同時能有多少請求在飛」壓住，
+// 於是超出量有界。可證明的界線：≤ loginFailIPLimit + loginBurstLimit。
+//
+// ⚠️ 這條**不是**在斷言「上限是 50」——那句話是假的。它斷言的是那個更弱、
+// 但真的成立的界線。把斷言寫成 50 會逼出一個做不到的實作。
+func TestLogin_ConcurrentBurst_BoundedByBurstGate(t *testing.T) {
+	fakeReset()
+	setStateful()
+
+	const N = 300
+	const ip = "198.51.100.77"
+	bound := loginFailIPLimit + loginBurstLimit
+
+	var passed, blocked int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // barrier：盡量同時起跑，把 TOCTOU 窗口撐開
+			req := events.APIGatewayProxyRequest{
+				HTTPMethod: "POST", Path: "/login",
+				Body: fmt.Sprintf(`{"email":"stuff%d@example.com","password":"x"}`, i),
+			}
+			req.RequestContext.Identity.SourceIP = ip
+			resp, err := Handler(context.Background(), req)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			switch resp.StatusCode {
+			case http.StatusTooManyRequests:
+				atomic.AddInt64(&blocked, 1)
+			case http.StatusUnauthorized:
+				atomic.AddInt64(&passed, 1) // 通過閘門、真的做了認證工作
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	t.Logf("併發 %d（同 IP、每次不同 email）：通過 %d／被擋 %d；界線 %d（=%d+%d）",
+		N, passed, blocked, bound, loginFailIPLimit, loginBurstLimit)
+
+	if passed > int64(bound) {
+		t.Errorf("❌ 超出可證明的界線：%d 次通過 > %d —— 突發閘沒有把 TOCTOU 的超出量壓住",
+			passed, bound)
+	}
+	// 🔴 光數 401 有盲區：閘門若被移到 bcrypt **之後**，認證工作照做、只是最後回 429，
+	// 「通過數」會漂亮而成本一點沒省。所以要直接數「真的去查了幾次使用者」。
+	if q := int64(countTarget("Query")); q > int64(bound) {
+		t.Errorf("❌ 實際執行了 %d 次使用者查詢 > 界線 %d ⇒ 閘門沒擋在認證工作之前", q, bound)
+	}
+	// 🔴 正控：少了這一半，「閘門整個壞掉、全部擋光」也會讓上面那條變綠。
+	if passed == 0 {
+		t.Errorf("一個都沒通過 ⇒ 不是限流生效，是登入整條路壞了（或閘門把正常流量也擋死）")
+	}
+	if blocked == 0 {
+		t.Errorf("一個都沒被擋 ⇒ 突發閘根本沒有作用")
+	}
+}
+
+// 突發閘必須**成敗都計**（那是它能當硬界線的原因）。
+// 只計失敗的話，成功的請求就不佔在飛額度，界線的證明立刻不成立。
+func TestLogin_BurstGate_CountsEvenOnSuccess(t *testing.T) {
+	fakeReset()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-horse"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	setUser(fmt.Sprintf(`{"userId":{"S":"APP_test"},"email":{"S":%q},"passwordHash":{"S":%q}}`,
+		testEmail, string(hash)))
+
+	resp := loginReq(t, `{"email":"`+testEmail+`","password":"correct-horse"}`, testIP)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("狀態碼 = %d, want 200；body=%s", resp.StatusCode, resp.Body)
+	}
+	if !has(updatedRLKeys(), loginBurstKey(testIP)) {
+		t.Errorf("成功登入沒有計入突發閘 %q；實得 %v", loginBurstKey(testIP), updatedRLKeys())
+	}
+}
+
+// 突發閘也要分兩條路：共用的話，一個重送過期密文的壞掉 client
+// 會把同 IP 的密碼登入一起擋掉（同 recordLineLoginFailure 的理由）。
+func TestLogin_LineBranch_UsesSeparateBurstBucket(t *testing.T) {
+	fakeReset()
+	resp := loginReq(t, `{"encryptedLineId":"bm90LXZhbGlk"}`, testIP)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("狀態碼 = %d, want 401", resp.StatusCode)
+	}
+	up := updatedRLKeys()
+	if !has(up, loginLineBurstKey(testIP)) {
+		t.Errorf("LINE 分支沒有計入自己的突發閘 %q；實得 %v", loginLineBurstKey(testIP), up)
+	}
+	if has(up, loginBurstKey(testIP)) {
+		t.Errorf("LINE 分支計進了密碼登入的突發閘 %v ⇒ 兩條路會互相擋", up)
 	}
 }

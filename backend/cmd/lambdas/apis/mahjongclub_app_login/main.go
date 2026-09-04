@@ -309,6 +309,19 @@ const (
 	loginFailLineIPLimit  = 50 // LINE 密文登入分支：同 IP 的失敗總量
 	loginFailLineIPWindow = 3600
 
+	// 🔴 併發突發閘（2026-09-04 補，Codex 覆驗 TOCTOU）。
+	// 上面那三個桶是「peek → 認證 → 失敗才加一」，peek 與加一之間隔著 DB 查詢與
+	// bcrypt ⇒ **它們不是硬上限**：同一瞬間湧入的請求全都在 count=0 時通過 peek，
+	// 之後才一起把計數加上去。實測 300 併發（同 IP、每次不同 email）有 239 次
+	// 通過閘門，而宣稱上限是 50。既有的複合桶攔不住它（每個 email 都是不同 key）。
+	// ⇒ 這個桶用**原子**的 CheckRateLimit（先加一再判），成敗都計、窗口很短，
+	//    作用是把「一瞬間能有多少請求同時在飛」壓住 ⇒ 上面那層的超出量因此有界。
+	// 可證明的界線：每小時每 IP 的失敗嘗試 ≤ loginFailIPLimit + loginBurstLimit。
+	// 短窗口是刻意的：它成敗都計，萬一誤傷（同 IP 大量真人同時登入）30 秒自己復原，
+	// 不像小時級的桶會把人鎖一小時。
+	loginBurstLimit  = 30
+	loginBurstWindow = 30
+
 	// 既有的複合 key（成敗都計）。抽成常數只為了讓下面那條命名空間分析可以被測試釘住，
 	// 數值與行為一字未改。
 	loginLegacyComboLimit  = 10
@@ -326,6 +339,11 @@ const (
 func loginFailIPKey(ip string) string       { return "login#ip#" + ip }
 func loginFailEmailKey(email string) string { return "login#email#" + email }
 func loginFailLineIPKey(ip string) string   { return "login#lineip#" + ip }
+
+// 突發閘的 key。密碼登入與 LINE 登入**各自一個**，理由同 recordLineLoginFailure：
+// 共用的話，一個重送過期密文的壞掉 client 會把同 IP 的密碼登入一起擋掉。
+func loginBurstKey(ip string) string     { return "login#burst#" + ip }
+func loginLineBurstKey(ip string) string { return "login#lineburst#" + ip }
 
 // legacyComboKey：既有那把複合 key 的組法（原本是內嵌字串串接，抽出來讓上面那段
 // 分析可以被測試實際求值，而不是只寫在註解裡）。
@@ -411,6 +429,14 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		// ⚠️ 不可改動 req.Email 本身——登入查詢的 email-index fallback 需保留「原輸入精確比對」語意，
 		//    否則 mixed-case 且未 backfill AuthIdentities 的 13k legacy 帳號會查不到(Codex P6 回歸)。
 		normEmail := strings.ToLower(strings.TrimSpace(req.Email))
+		// ⓪ 併發突發閘：**原子**（先加一再判），成敗都計，30 秒窗口。
+		//    一定要排在最前面 —— 它的職責是限制「同時有多少請求走到下面那兩道 peek」，
+		//    排在後面就限制不到已經在飛的那些。
+		if ip != "" {
+			if allowed, _ := shared.CheckRateLimit(ctx, loginBurstKey(ip), loginBurstLimit, loginBurstWindow); !allowed {
+				return tooManyLoginAttempts(headers), nil
+			}
+		}
 		// ① 只計失敗的兩道閘（finding 5）：認證前只 peek，不加一 ⇒ 成功登入不扣額度。
 		//    一定要排在 DB 查詢與 bcrypt 之前，否則閘門擋不到它要擋的那份成本。
 		//    IP 為空時跳過 per-IP 桶 —— 不跳的話所有無 IP 請求會共用 "login#ip#" 一個桶。
@@ -454,6 +480,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		// 方式 2: 使用加密的 LINE ID 登入（備援方式）
 		// finding 5：這條路原本完全沒有限流。用**獨立**的桶（見 recordLineLoginFailure）。
 		if ip != "" {
+			if allowed, _ := shared.CheckRateLimit(ctx, loginLineBurstKey(ip), loginBurstLimit, loginBurstWindow); !allowed {
+				return tooManyLoginAttempts(headers), nil
+			}
 			if allowed, _ := shared.PeekRateLimit(ctx, loginFailLineIPKey(ip), loginFailLineIPLimit, loginFailLineIPWindow); !allowed {
 				return tooManyLoginAttempts(headers), nil
 			}
