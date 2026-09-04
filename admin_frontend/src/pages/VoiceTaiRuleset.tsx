@@ -160,7 +160,7 @@ const VoiceTaiRuleset: React.FC = () => {
                             icon={<Hash size={18} />}
                             label="DDB 自稱版本"
                             value={view.version || '—'}
-                            hint="那一列的 meta.version。壞掉的那一份仍然說得出自稱幾版（VersionOf 是另一把尺）—— 少了它，「壞掉」與「不存在」就沒有線索可分。"
+                            hint="那一列「頂層」的 version 欄。⚠️ 不是 meta 底下那一層 —— repo 正典那份才有 meta，DDB 這一列是 seed_ruleset.py 序列化出來的五鍵（version／fans／combos／ignores／config）。壞掉的那一份仍然說得出自稱幾版（VersionOf 是另一把尺）—— 少了它，「壞掉」與「不存在」就沒有線索可分。"
                         />
                         <Fact
                             icon={<Fingerprint size={18} />}

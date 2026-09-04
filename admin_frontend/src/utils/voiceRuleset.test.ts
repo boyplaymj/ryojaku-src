@@ -306,6 +306,20 @@ test('W2 🔴 getRuleset 不走共用 request()（它會把狀態碼壓掉）', 
   assert.match(m![0], /res\.status/, 'getRuleset 沒有把狀態碼交出去');
 });
 
+test('W4 🔴 頁面不可以說版本住在 `meta` 底下 —— DDB 那一列的 version 在頂層', () => {
+  // 🔴 這是同一個錯誤宣稱的第三個載體。第一個在 E3 探針（跑一次就印出 None
+  //    而被抓到），第二個是我寫的設計冊（寫對了），第三個是**只有人看得到**
+  //    的這一句 hint —— 它沒有任何東西會去求值它，所以錯了不會有人知道。
+  // ⚠️ 方向：照它去 DDB 找 `meta.version` 會找不到，而那讀起來像「那一列壞了」
+  //    或「這一頁在說謊」。兩個結論都是錯的，而且都會叫人去查沒壞的東西。
+  // ⚠️ 界線：repo 正典那份 fan_table.json **確實**有 meta.version（seed_ruleset.py
+  //    就是從那裡讀出來、寫成 DDB 那一列的頂層 version）。所以錯的不是這個字，
+  //    是「拿它描述 DDB 這一側」。這一條只管這一頁。
+  const page = read('pages/VoiceTaiRuleset.tsx');
+  assert.doesNotMatch(page, /meta\.version/, '頁面把 DDB 那一列的版本說成 meta.version');
+  assert.match(page, /頂層/, '頁面沒有講出版本住在頂層 ⇒ 拿掉錯的那句不等於補上對的那句');
+});
+
 test('W3 路由與導覽項都註冊了（少任何一邊，這一頁都等於不存在）', () => {
   // 只有路由 ⇒ 沒人找得到；只有導覽 ⇒ 點了是白頁。兩種都不會有錯誤訊息。
   assert.match(read('App.tsx'), /analysis\/voice-tai-ruleset/);
