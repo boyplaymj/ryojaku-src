@@ -287,6 +287,80 @@ func VerifyPassword(password, hash string) bool {
 	return err == nil
 }
 
+// ── 登入限流（稽核 finding 5，2026-09-04）──────────────────────────────
+// SECURITY_AUDIT_2026-09-03.md §6：login 是 auth 家族裡唯一「per-IP 與 per-帳號
+// 上限都沒有」的端點。既有那把 login#<email>#<IP> 是**複合** key，兩邊都不是：
+//   - 不是 per-帳號：攻擊者有 N 個 IP ⇒ 對同一帳號可試 10×N 次。
+//   - 不是 per-IP：同一 IP 對**每個**帳號各有 10 次額度
+//     ⇒ 單一 IP 的憑證填充（credential stuffing）總量完全沒有上限。
+//
+// 下面補的三個桶**只計失敗**：認證前 PeekRateLimit（只讀不加一），認證失敗才
+// CheckRateLimit 加一 ⇒ 正常使用者的成功登入不扣額度。既有那把是成敗都計
+// （15 分鐘內同 IP 登入 10 次也會被擋），那個毛病刻意不複製過來。
+//
+// ⚠️ 已接受的取捨：loginFailEmail 這桶帶帳號鎖定 DoS —— 攻擊者可故意打錯密碼
+// 燒光受害者的登入額度，上限一小時（窗口結束自動恢復）。20/hr 是在「擋得住
+// 暴力破解」與「真人打錯密碼不會被鎖」之間挑的。
+const (
+	loginFailIPLimit      = 50 // 同 IP 的失敗總量：擋單一 IP 的憑證填充
+	loginFailIPWindow     = 3600
+	loginFailEmailLimit   = 20 // 同帳號跨 IP 的失敗總量：擋分散式暴力破解
+	loginFailEmailWindow  = 3600
+	loginFailLineIPLimit  = 50 // LINE 密文登入分支：同 IP 的失敗總量
+	loginFailLineIPWindow = 3600
+
+	// 既有的複合 key（成敗都計）。抽成常數只為了讓下面那條命名空間分析可以被測試釘住，
+	// 數值與行為一字未改。
+	loginLegacyComboLimit  = 10
+	loginLegacyComboWindow = 900
+)
+
+// 三個桶的 key，與 auth 家族其它端點對齊（forgot#ip# / resend#ip# / register#ip# …）。
+//
+// 🔴 命名空間重疊分析（不要刪這段）：normEmail 若字面上等於 "ip"，既有複合 key
+// 會長成 login#ip#<IP>，與 loginFailIPKey 產出**同形**。兩者不會真的撞在一起，
+// 靠的是 shared 那層併上的桶號不同（桶號＝now/window，既有 900 vs 這裡 3600）。
+// ⇒ 這個保護**依賴兩個窗口值不相等**，不是靠 key 本身不同。哪天有人把既有那把
+// 也調成 3600，兩個桶就會共用計數。TestLoginFailKeys_LegacyCollisionOnlyBlockedByWindow
+// 釘住這件事。
+func loginFailIPKey(ip string) string       { return "login#ip#" + ip }
+func loginFailEmailKey(email string) string { return "login#email#" + email }
+func loginFailLineIPKey(ip string) string   { return "login#lineip#" + ip }
+
+// legacyComboKey：既有那把複合 key 的組法（原本是內嵌字串串接，抽出來讓上面那段
+// 分析可以被測試實際求值，而不是只寫在註解裡）。
+func legacyComboKey(normEmail, ip string) string { return "login#" + normEmail + "#" + ip }
+
+// tooManyLoginAttempts：三道閘共用**同一個** 429 回應。
+// 刻意讓「IP 超限」「帳號超限」「既有複合 key 超限」回完全相同的訊息與狀態碼 ——
+// 有差別的話，429 的形狀本身就變成「這個帳號存不存在／正在被打」的側信道。
+func tooManyLoginAttempts(headers map[string]string) events.APIGatewayProxyResponse {
+	response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
+	body, _ := json.Marshal(response)
+	return events.APIGatewayProxyResponse{StatusCode: http.StatusTooManyRequests, Headers: headers, Body: string(body)}
+}
+
+// recordEmailLoginFailure：Email 登入**失敗**才加一。
+// 🔴 user-not-found 與密碼錯誤**都要計**。只計密碼錯誤的話，額度消耗速度會隨
+// 「帳號存不存在」而不同 ⇒ 429 出現的時機變成帳號枚舉的差別訊號。
+// 回傳值刻意丟棄：這裡只負責記帳，擋不擋由下一次請求的 Peek 決定。
+func recordEmailLoginFailure(ctx context.Context, ip, normEmail string) {
+	if ip != "" {
+		_, _ = shared.CheckRateLimit(ctx, loginFailIPKey(ip), loginFailIPLimit, loginFailIPWindow)
+	}
+	_, _ = shared.CheckRateLimit(ctx, loginFailEmailKey(normEmail), loginFailEmailLimit, loginFailEmailWindow)
+}
+
+// recordLineLoginFailure：LINE 密文登入失敗才加一。
+// 刻意用**獨立**的桶，不與密碼登入共用：共用的話，一個重送過期密文的壞掉 client
+// 會把同 IP 的密碼登入一起鎖死。
+func recordLineLoginFailure(ctx context.Context, ip string) {
+	if ip == "" {
+		return
+	}
+	_, _ = shared.CheckRateLimit(ctx, loginFailLineIPKey(ip), loginFailLineIPLimit, loginFailLineIPWindow)
+}
+
 // Handler is the main Lambda handler
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Record traffic
@@ -328,21 +402,34 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	var user *User
 
+	// SourceIP 提前取出：三個限流桶與既有複合 key 都用它，避免兩處各取一次而漂開。
+	ip := request.RequestContext.Identity.SourceIP
+
 	// 方式 1: 使用 Email + Password 登入（P2: AuthIdentities 優先 + email-index fallback）
 	if req.Email != "" && req.Password != "" {
 		// normEmail 只給限流 key：避免大小寫/空白變體落不同 bucket 繞過限流(Codex P6 High)。
 		// ⚠️ 不可改動 req.Email 本身——登入查詢的 email-index fallback 需保留「原輸入精確比對」語意，
 		//    否則 mixed-case 且未 backfill AuthIdentities 的 13k legacy 帳號會查不到(Codex P6 回歸)。
 		normEmail := strings.ToLower(strings.TrimSpace(req.Email))
-		// rate limit：防暴力破解（同信箱+IP，15 分鐘 10 次）。超限回 429。
-		if allowed, _ := shared.CheckRateLimit(ctx, "login#"+normEmail+"#"+request.RequestContext.Identity.SourceIP, 10, 900); !allowed {
-			response := Response{Success: false, Error: "嘗試次數過多，請稍後再試"}
-			body, _ := json.Marshal(response)
-			return events.APIGatewayProxyResponse{StatusCode: http.StatusTooManyRequests, Headers: headers, Body: string(body)}, nil
+		// ① 只計失敗的兩道閘（finding 5）：認證前只 peek，不加一 ⇒ 成功登入不扣額度。
+		//    一定要排在 DB 查詢與 bcrypt 之前，否則閘門擋不到它要擋的那份成本。
+		//    IP 為空時跳過 per-IP 桶 —— 不跳的話所有無 IP 請求會共用 "login#ip#" 一個桶。
+		if ip != "" {
+			if allowed, _ := shared.PeekRateLimit(ctx, loginFailIPKey(ip), loginFailIPLimit, loginFailIPWindow); !allowed {
+				return tooManyLoginAttempts(headers), nil
+			}
+		}
+		if allowed, _ := shared.PeekRateLimit(ctx, loginFailEmailKey(normEmail), loginFailEmailLimit, loginFailEmailWindow); !allowed {
+			return tooManyLoginAttempts(headers), nil
+		}
+		// ② 既有的複合 key：同信箱+IP，15 分鐘 10 次，**成敗都計**（本次刻意不動）。
+		if allowed, _ := shared.CheckRateLimit(ctx, legacyComboKey(normEmail, ip), loginLegacyComboLimit, loginLegacyComboWindow); !allowed {
+			return tooManyLoginAttempts(headers), nil
 		}
 		user, err = db.getUserForEmailLogin(ctx, req.Email)
 		if err != nil {
 			log.Printf("User not found: %v", err)
+			recordEmailLoginFailure(ctx, ip, normEmail)
 			response := Response{Success: false, Error: "Invalid email or password"}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{
@@ -354,6 +441,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 		// Verify password
 		if !VerifyPassword(req.Password, user.PasswordHash) {
+			recordEmailLoginFailure(ctx, ip, normEmail)
 			response := Response{Success: false, Error: "Invalid email or password"}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{
@@ -364,9 +452,16 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	} else if req.EncryptedLineID != "" {
 		// 方式 2: 使用加密的 LINE ID 登入（備援方式）
+		// finding 5：這條路原本完全沒有限流。用**獨立**的桶（見 recordLineLoginFailure）。
+		if ip != "" {
+			if allowed, _ := shared.PeekRateLimit(ctx, loginFailLineIPKey(ip), loginFailLineIPLimit, loginFailLineIPWindow); !allowed {
+				return tooManyLoginAttempts(headers), nil
+			}
+		}
 		lineID, err := db.DecryptLineID(req.EncryptedLineID)
 		if err != nil {
 			log.Printf("Failed to decrypt LINE ID: %v", err)
+			recordLineLoginFailure(ctx, ip)
 			response := Response{Success: false, Error: "Invalid LINE ID"}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{
@@ -379,6 +474,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		user, err = db.GetUserByLineID(ctx, lineID)
 		if err != nil {
 			log.Printf("User not found by LINE ID: %v", err)
+			recordLineLoginFailure(ctx, ip)
 			response := Response{Success: false, Error: "User not found"}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{
