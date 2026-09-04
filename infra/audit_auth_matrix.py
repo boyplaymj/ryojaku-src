@@ -35,6 +35,12 @@ PATS = [
  ("RAW_QUERY",  r'QueryStringParameters\[\s*"(?:userId|lineID)"\s*\]'),
  ("RAW_BODY",   r'(?i)\buserId\b"\s*:\s*|UserID\s+string\s+`json:"userId'),
  ("ROLE",       r'"(?:super_admin|admin)"'),
+ # 🔴 角色守衛有**兩個載體**，只掃字面字串等於只看見一半：
+ # 值住在共用套件 adminrole 裡（adminrole.Allows(claims, adminrole.Admin, …)），
+ # 那條路上「admin」三個字**不會出現在 handler 原始碼裡**。
+ # 實測 14 支用 adminrole 的端點在補這條之前全部讀成「N·未取身分」——
+ # 與「真的沒查角色」逐字相同。用**值的來源**定址，不用外觀。
+ ("ADMINROLE",  r"adminrole\.(?:Allows|Of|SubjectOf|Admin|SuperAdmin|Moderator)\b"),
 ]
 # 🔴 剝註解後再掃。初版直接對原始碼跑正則，命中了 chat-ws-connect 註解裡
 # 「原本這裡直接吃 request.QueryStringParameters["userId"]」這句描述性文字，
@@ -81,7 +87,14 @@ for f in MAN:
             verdict = "🔴D·直接讀query param"
         else:
             verdict = "N·未取身分"
-        detail = f"gui_ok={len(gui_checked)} gui_ign={len(gui_ignored)} raw={len(hits['RAW_QUERY'])}"
+        # 🔴 ROLE 這條樣式在初版是**算出來就丟掉的** —— hits 有它，判定鏈一次也沒讀。
+        # ⇒ 「有查角色」與「沒查角色」在這一欄上讀數相同，這一欄對 admin 端點零鑑別力。
+        # 角色與身分是兩個正交的問題，所以接成後綴而不是插進上面那條 if 鏈。
+        role = len(hits["ROLE"]) + len(hits["ADMINROLE"])
+        if role:
+            verdict += " +查角色"
+        detail = (f"gui_ok={len(gui_checked)} gui_ign={len(gui_ignored)} "
+                  f"raw={len(hits['RAW_QUERY'])} role={role}")
     rows.append(dict(name=name, auth=f.get("auth"), api=f.get("apiType"),
                      method=f.get("method"), path=f.get("path"),
                      gw=gw_authorizer(name, f), handler=verdict, detail=detail))
@@ -91,3 +104,13 @@ print(f"{'函式':<26}{'宣稱':<7}{'Gateway':<20}{'Handler 取身分'}")
 print("-"*96)
 for r in sorted(rows, key=lambda r:(r["auth"] or "", r["name"])):
     print(f"{r['name']:<26}{r['auth'] or '-':<7}{r['gw']:<20}{r['handler']}")
+
+# ---- 分母一起印：「0 支沒有角色守衛」與「這一欄根本沒鑑別力」在版面上長得一樣 ----
+adm = [r for r in rows if r["auth"] == "admin"]
+norole = [r for r in adm if "+查角色" not in r["handler"]]
+print("-"*96)
+print(f"宣稱 admin 的端點：{len(adm)} 支，其中 handler 內查得到角色守衛 {len(adm)-len(norole)} 支")
+for r in norole:
+    print(f"  ⚠️ {r['name']}：handler 沒有角色守衛，全靠 Gateway 的 {r['gw']}")
+print("ⓘ 本支是**報表不是閘門**（沒有 sys.exit）。「⚠️」不等於有洞 ——")
+print("   Gateway authorizer 擋得住的話那是縱深不足、不是缺守衛；要下判定得人去看。")
