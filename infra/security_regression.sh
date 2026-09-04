@@ -292,6 +292,42 @@ ct=AESGCM(key).encrypt(nonce, os.environ['PLAIN'].encode(), None)
 print(base64.urlsafe_b64encode(nonce+ct).decode())
 " 2>/dev/null)
 
+# ── 2026-09-04 稽核 findings 1／1b／2／3／7 的真環境播種 ─────────────────
+#
+# 🔴 遮蔽類斷言一定要先讓「被遮蔽的東西真的存在」。
+#    對一個從不填值的欄位斷言「它是空的」永遠會綠 —— 那正是 shared/redact_test.go
+#    的反控在單元層擋的東西，在真環境同樣成立（而且這裡更容易漏：
+#    create-game 的 payload 根本沒有 contactInfo，所以不播種的話 phone/note 天生是空的）。
+SEED_PHONE="0900-${MARK}"
+SEED_NOTE="note-${MARK}-free-text"
+aws dynamodb update-item --region "$REGION" --table-name "${PREFIX}Games" \
+  --key "{\"gameId\":{\"S\":\"$GID\"}}" \
+  --update-expression "SET contactInfo = :c" \
+  --expression-attribute-values "{\":c\":{\"M\":{\"phone\":{\"S\":\"$SEED_PHONE\"},\"lineId\":{\"S\":\"$TEST_LINE_ID\"},\"note\":{\"S\":\"$SEED_NOTE\"}}}}" >/dev/null \
+  || { echo "  ❌ 播種 contactInfo 失敗 —— G-3／G-4 會失去鑑別力，直接中止"; exit 1; }
+
+# 憑證欄位：passwordHash 是註冊時自然產生的，encryptedLineId 不是（要 LINE 綁定）。
+# 不播的話 finding 7 那條斷言對「這個帳號本來就沒有這欄」與「修好了」分不出來。
+if [ -n "$CIPHER" ]; then
+  aws dynamodb update-item --region "$REGION" --table-name "${PREFIX}Users" \
+    --key "{\"userId\":{\"S\":\"$HOST\"}}" \
+    --update-expression "SET encryptedLineId = :e" \
+    --expression-attribute-values "{\":e\":{\"S\":\"$CIPHER\"}}" >/dev/null \
+    || { echo "  ❌ 播種 encryptedLineId 失敗"; exit 1; }
+fi
+
+# LINE Bot 帳號：後端對這種帳號是拿**明文 LINE id 當 Users 表主鍵**
+# （verify-user 的 lineID= 路徑：DecryptLineID → GetUser(明文)）。
+# 這一列存在，G-1 的反控才驗得到「LINE 登入 fallback 沒有被關錯」——
+# 而那正是 §3b 說「單元測試結構上進不去、只能靠 stg 補」的那一塊。
+# userId 內含 MARK ⇒ cleanup 的全表掃描認得出來，不會變孤兒。
+aws dynamodb put-item --region "$REGION" --table-name "${PREFIX}Users" --item "{
+  \"userId\":{\"S\":\"$TEST_LINE_ID\"},\"displayName\":{\"S\":\"$MARK\"},
+  \"accountType\":{\"S\":\"line\"},\"points\":{\"N\":\"0\"},
+  \"rating\":{\"N\":\"0\"},\"isVerified\":{\"BOOL\":false},
+  \"createdAt\":{\"S\":\"2026-09-04T00:00:00Z\"}}" >/dev/null \
+  || { echo "  ❌ 播種 LINE Bot 測試帳號失敗 —— G-1 的反控會失去鑑別力，直接中止"; exit 1; }
+
 echo
 echo "══ F-1 game-detail：授權不得採信自稱身分 ══"
 check "① 匿名不帶身分 → 遮蔽" \
@@ -378,6 +414,139 @@ if [ -f "$PROBE" ]; then
 else
   fail "⑰ 找不到 ws_room_authz_probe.sh —— F-2 回歸未被覆蓋"
 fi
+
+# ══════════════════════════════════════════════════════════════════════
+#  2026-09-04 稽核（SECURITY_AUDIT_2026-09-03）四個 findings 的真環境守衛
+#
+#  🔴 為什麼要補：這四個 findings 修好、單元測試綠、突變也殺得掉，但
+#     **這支腳本是唯一會打真 stg 的安全套件，而它一節都沒碰到它們**。
+#     「有測試」與「線上真的是修好的那一版」是兩件事（部署夾在中間）。
+#  🔴 順序也是刻意的：這四組要在**部署之前**先跑一次並且是紅的。
+#     部署後才補守衛的話，全綠與「守衛根本沒涵蓋到」長得一模一樣。
+# ══════════════════════════════════════════════════════════════════════
+
+# ─── PARSERS-BEGIN ───────────────────────────────────────────────────
+# 🔴 這段之間的解析函式由 `security_regression_parsers_selftest.sh` 用**標記**抽出來
+#    單獨自測（不寫死行號 —— 行號會隨這支腳本增刪而漂掉，而漂掉之後
+#    抽到半段仍然可能「跑得起來」）。改動這段請一併跑那支。
+#    理由：這一層正是假綠最容易長出來的地方 —— 例如 sg_ci 若把「找不到那一局」
+#    印成 MASKED，所有遮蔽斷言都會通過，而那是搜尋壞掉不是遮蔽有效。
+#    真環境每小時只能跑 5 次（註冊限流），不能拿真跑當語法檢查。
+
+# 取 verify-user／user-info 回應裡的 data.userId。
+# 解析不了印 ERR（不印空字串 —— 空字串會跟「回了一個空 userId」撞在一起）。
+data_uid(){ python3 -c "
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: print('ERR'); raise SystemExit
+v=(d.get('data') or {}).get('userId')
+print(v if v else 'EMPTY')
+" 2>/dev/null || echo ERR; }
+
+# game-detail 回應裡某個 contactInfo 欄位是 VISIBLE 還是 MASKED。
+gd_ci(){ CIF="$1" python3 -c "
+import sys,json,os
+f=os.environ['CIF']
+try: d=json.load(sys.stdin)
+except Exception: print('ERR'); raise SystemExit
+g=(d.get('data') or {}).get('game') or {}
+print('VISIBLE' if (g.get('contactInfo') or {}).get(f) else 'MASKED')
+" 2>/dev/null || echo ERR; }
+
+# search-games 結果裡「本次那一局」的某個 contactInfo 欄位。
+# 找不到那一局時印 NOTFOUND —— 這很重要：搜不到東西時所有遮蔽斷言都會「通過」，
+# 那是假綠。NOTFOUND 與 MASKED 必須分得出來。
+sg_ci(){ CIF="$1" SGID="$GID" python3 -c "
+import sys,json,os
+f=os.environ['CIF']; gid=os.environ['SGID']
+try: d=json.load(sys.stdin)
+except Exception: print('ERR'); raise SystemExit
+for g in ((d.get('data') or {}).get('games') or []):
+    if g.get('gameId')==gid:
+        print('VISIBLE' if (g.get('contactInfo') or {}).get(f) else 'MASKED'); raise SystemExit
+print('NOTFOUND')
+" 2>/dev/null || echo ERR; }
+
+# 從 DDB 直接讀一個屬性，用來當「遮蔽前確實有值」的前置自檢。
+ddb_attr(){ # $1=表名尾巴 $2=key json $3=屬性名
+  aws_json dynamodb get-item --region "$REGION" --table-name "${PREFIX}$1" \
+    --key "$2" --output json 2>/dev/null \
+  | ATTR="$3" python3 -c "
+import sys,json,os
+try: d=json.load(sys.stdin)
+except Exception: print('ERR'); raise SystemExit
+v=(d.get('Item') or {}).get(os.environ['ATTR'])
+print('PRESENT' if (v and list(v.values())[0]) else 'ABSENT')
+" 2>/dev/null || echo ERR; }
+
+# ─── PARSERS-END ─────────────────────────────────────────────────────
+
+echo
+echo "══ G-1 verify-user：userId= 入口必須是驗證過的身分（finding 2）══"
+check "⓵ 匿名 ?userId=<主辦人>【原 IDOR 攻擊鏈】→ 401" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/verify-user?userId=$HOST")" 401
+# 🔴 這條不是「回 401」而是「回**自己**」。修法是「不採信 query 的 userId，改用 token 身分」，
+#    所以合法登入者查他人不會被拒絕，是被**靜靜換成自己** —— 只斷言狀態碼分不出來。
+check "⓶ 登入者帶自己的 token 打 ?userId=<別人> → 回自己的 userId" \
+  "$(curl -s -X POST "$API/verify-user?userId=$HOST" -H "Authorization: Bearer $OUTSIDER_T" | data_uid)" "$OUTSIDER"
+check "⓷【正控】主辦人帶自己的 token 查自己 → 200 且回自己" \
+  "$(curl -s -X POST "$API/verify-user?userId=$HOST" -H "Authorization: Bearer $HT" | data_uid)" "$HOST"
+if [ -n "$CIPHER" ]; then
+  # 這是「沒關錯」的那一半。少了它，把整支端點改成永遠 401 也會讓上面三條全綠。
+  check "⓸【反控】匿名 ?lineID=<合法密文> → 仍走得通（LINE 登入 fallback 不可被關掉）" \
+    "$(curl -s -X POST "$API/verify-user?lineID=$(printf '%s' "$CIPHER" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')" | data_uid)" "$TEST_LINE_ID"
+else
+  fail "⓸【反控】無法產生 LINE 密文 —— verify-user 的登入 fallback 未受覆蓋"
+fi
+
+echo
+echo "══ G-2 user-info：不得回傳伺服器端憑證（findings 3 & 7）══"
+UI_BODY=$(curl -s "$API/user-info?userId=$HOST" -H "Authorization: Bearer $HT")
+# 前置自檢：DDB 裡這兩欄必須真的有值，否則下面四條對「本來就沒這欄」也會綠。
+check "⓪a【前置】DDB 的 passwordHash 有值（否則遮蔽斷言零鑑別力）" \
+  "$(ddb_attr Users "{\"userId\":{\"S\":\"$HOST\"}}" passwordHash)" PRESENT
+check "⓪b【前置】DDB 的 encryptedLineId 有值" \
+  "$(ddb_attr Users "{\"userId\":{\"S\":\"$HOST\"}}" encryptedLineId)" PRESENT
+check "⓵ 回應不含 passwordHash 這個 key" \
+  "$(printf '%s' "$UI_BODY" | grep -c '"passwordHash"')" 0
+check "⓶ 回應不含 encryptedLineId 這個 key" \
+  "$(printf '%s' "$UI_BODY" | grep -c '"encryptedLineId"')" 0
+# 🔴 key 名與「值」是兩層 needle，不是重複寫法：改掉 json tag 而不清空的話，
+#    key 那層命中 0 次（看起來通過），只有值那層殺得掉它。
+# ⚠️ CIPHER 為空時 `grep -cF ""` 會命中每一行 ⇒ 這條會紅得像「密文外洩」，
+#    但真相是「沒有樣本可比」。兩者處置完全不同，所以分開講。
+if [ -n "$CIPHER" ]; then
+  check "⓷ 回應不含那串密文本身（值那層）" \
+    "$(printf '%s' "$UI_BODY" | grep -cF "$CIPHER")" 0
+else
+  fail "⓷ 無法產生 LINE 密文 —— finding 7 的「值」那層未受覆蓋"
+fi
+check "⓸【正控】同一次回應仍含自己的 userId（否則 data 整個消失也會綠）" \
+  "$(printf '%s' "$UI_BODY" | data_uid)" "$HOST"
+check "⓹ 匿名 ?userId=<任意人> → 401（不得 fallback 到 query 身分）" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/user-info?userId=$HOST")" 401
+
+echo
+echo "══ G-3 search-games：匿名列表不得回傳聯絡 PII（finding 1）══"
+SG_BODY=$(curl -s "$API/search-games")
+check "⓪【正控】匿名搜尋結果找得到本次的團（找不到的話下面三條全是假綠）" \
+  "$(printf '%s' "$SG_BODY" | sg_ci lineId | sed 's/^\(VISIBLE\|MASKED\)$/FOUND/')" FOUND
+check "⓵ 該團的 contactInfo.lineId → 遮蔽" "$(printf '%s' "$SG_BODY" | sg_ci lineId)" MASKED
+check "⓶ 該團的 contactInfo.phone → 遮蔽" "$(printf '%s' "$SG_BODY" | sg_ci phone)" MASKED
+check "⓷ 該團的 contactInfo.note（自由文字欄）→ 遮蔽" "$(printf '%s' "$SG_BODY" | sg_ci note)" MASKED
+
+echo
+echo "══ G-4 game-detail：Phone 與 Note 也要遮（finding 1b）══"
+# 既有的 F-1 只釘 lineId。舊的 inline 遮蔽版本清了 lineId 卻漏了 phone ——
+# 也就是說 F-1 全綠與「phone 正在外洩」可以同時成立。這一節補的就是那個差額。
+GD_ANON=$(curl -s -X POST "$API/game-detail" -H 'Content-Type: application/json' -d "{\"gameId\":\"$GID\"}")
+GD_AUTH=$(curl -s -X POST "$API/game-detail" -H "Authorization: Bearer $HT" -H 'Content-Type: application/json' -d "{\"gameId\":\"$GID\"}")
+check "⓵ 匿名 → contactInfo.phone 遮蔽" "$(printf '%s' "$GD_ANON" | gd_ci phone)" MASKED
+check "⓶ 匿名 → contactInfo.note 遮蔽"  "$(printf '%s' "$GD_ANON" | gd_ci note)"  MASKED
+check "⓷【正控】主辦人帶 JWT → phone 可見（證明播種有效、且沒有遮過頭）" \
+  "$(printf '%s' "$GD_AUTH" | gd_ci phone)" VISIBLE
+check "⓸【正控】主辦人帶 JWT → note 可見" \
+  "$(printf '%s' "$GD_AUTH" | gd_ci note)" VISIBLE
 
 echo
 echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL）══"
