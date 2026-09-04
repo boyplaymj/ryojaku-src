@@ -595,7 +595,15 @@ export interface SubmitRatingRequest {
 }
 
 export async function submitRating(userIdentifier: string, ratingData: SubmitRatingRequest) {
-  // 根據文件規格，APP 用戶使用 Query Parameter，LINE 用戶使用 Body
+  // ⚠️ 這裡刻意**不用** utils/authParam.ts —— 它是同一個判斷的第二份載體，
+  //    但兩邊今天已經沒有共同的消費端：後端 submit-rating 的身分
+  //    **一律取自 authorizer**（`mahjongclub_web_submit_rating/main.go:174`
+  //    `shared.AuthorizerUserID(request)`，缺 context 就 401 fail-closed），
+  //    query 的 `userId` 與 body 的 `lineID` 兩個它**都不讀**。
+  //    ⇒ 下面這個分支對後端沒有任何影響，是 S5-C 之前的殘骸。
+  //    留著不動的理由是「改請求形狀＝動到線上端點，換不到任何東西」；
+  //    但**不要**把它跟 authParamFor 統一 —— 那會讓人以為判準只有一份，
+  //    而真正決定身分的地方根本不在前端。（2026-09-04 稽核 §3c 順帶查證）
   const isAppUser = userIdentifier.startsWith('APP_');
 
   if (isAppUser) {
