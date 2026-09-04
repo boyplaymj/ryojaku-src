@@ -66,12 +66,22 @@ import {
   type Selection,
 } from '../utils/voiceTai';
 import { recognize, type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
+import { useRuleset } from '../hooks/useRuleset';
 import { buildCorrection, nowTs, shouldUpload } from '../utils/voiceCorrection';
 import { buildEvent, type MetricEventKind } from '../utils/voiceTaiMetrics';
 import type { AsrSettle } from '../hooks/useVoiceAsr';
 import { postVoiceCorrection, postVoiceTaiEvent } from '../services/apiService';
 
-const TABLE = fanTable as unknown as AsrFanTable;
+/**
+ * 隨 App 出貨的那一份（D5-d 的保底）。
+ *
+ * 🔴 這裡刻意改名叫 BUNDLE 而不是 TABLE：這一頁**實際用的**表由 useRuleset 決定，
+ *    可能是這一份、可能是後台下發的那一份。留著舊名字的話，
+ *    下一個人很容易在某一處又寫回 `TABLE.meta?.version` ——
+ *    而那個版本號會與畫面上真正在用的表不同，`rulesetVersion` 就再度變成假的
+ *    （§12 那格正是這個失效模式）。改名讓那種寫法在編譯期就不存在。
+ */
+const BUNDLE = fanTable as unknown as AsrFanTable;
 
 const TrainingVoiceTai: React.FC = () => {
   const navigate = useNavigate();
@@ -81,7 +91,19 @@ const TrainingVoiceTai: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  const pad = useMemo(() => buildPad(TABLE), []);
+  /**
+   * 這一局用哪一份台數表（D5-d）。正典 DESIGN_APP.md §5c。
+   *
+   * 🔴 `frozen`：手上已經有選取或辨識結果時**不換表**。
+   *    換掉的話，合計台數會在使用者沒碰任何東西的情況下改變 ——
+   *    而這一頁存在的整個理由就是「讓他確認那個數字」。
+   *    抓到的新表不會丟掉，按重置或下一次進頁就會生效。
+   */
+  const frozen = heard !== null || Object.keys(sel).length > 0;
+  const ruleset = useRuleset(BUNDLE, frozen);
+  const table = ruleset.table;
+
+  const pad = useMemo(() => buildPad(table), [table]);
 
   /**
    * 漏斗事件（D4-g）。正典 DESIGN_APP.md §📈。
@@ -100,7 +122,7 @@ const TrainingVoiceTai: React.FC = () => {
       const payload = buildEvent({
         kind,
         ts: nowTs(Date.now()),
-        rulesetVersion: TABLE.meta?.version ?? 'unknown',
+        rulesetVersion: ruleset.version,
         asr: asr ? { ok: asr.ok, track: asr.track, errorCode: asr.errorCode } : undefined,
       });
       void postVoiceTaiEvent(payload).catch((err) => {
@@ -111,7 +133,10 @@ const TrainingVoiceTai: React.FC = () => {
       // 不是網路問題 —— 一樣不擋使用者，但要留痕。
       console.warn('[voice-tai] 漏斗事件組不出來:', kind, err);
     }
-  }, []);
+    // 🔴 deps 要帶 ruleset.version。空 deps 的話這支會永遠回報**開頁那一刻**
+    //    那份表的版本，而表在頁面存活期間換得掉 —— 那正是 rulesetVersion 變成
+    //    「我打算用的」而不是「我實際用的」的路徑（紀律 4）。
+  }, [ruleset.version]);
 
   /**
    * 進到這一頁就記一筆。
@@ -137,13 +162,13 @@ const TrainingVoiceTai: React.FC = () => {
   //    ⚠️ 它壞得很安靜 —— 空白狀態那個「1 台」看起來像「已經選了什麼」而不像算錯，
   //    而有選的時候整排一起差 1，沒有任何一格看起來突兀。
   //    ⚠️ 這個錯**沒有污染飛輪資料**：送出的 payload 只帶 heard/sel，不帶台數。
-  const total = totalTai(TABLE, sel);
+  const total = totalTai(table, sel);
   const picked = Object.keys(sel);
 
   /** 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。 */
   const analyze = useCallback((text: string) => {
     try {
-      const h = recognize(TABLE, text);
+      const h = recognize(table, text);
       setHeard(h);
       // 新的一次辨識＝新的一局，上一局的「已送出」不算數
       // （否則講第二局時按鈕還停在「已送出」，那一局永遠送不出去）。
@@ -161,7 +186,10 @@ const TrainingVoiceTai: React.FC = () => {
       // 那代表詞庫壞了，不是使用者講錯 ⇒ 照實講，別說「請再試一次」。
       setNotice(`判台失敗：${err instanceof Error ? err.message : String(err)}`);
     }
-  }, []);
+    // 🔴 deps 要帶 table。空 deps 的話換了表之後，判台仍然走**舊表**，
+    //    而畫面上的格子與台數已經是新表的 —— 兩邊不一致且完全沒有徵兆。
+    //    （useVoiceAsr 把 onFinal 收在 ref 裡，identity 變動不會重掛監聽器。）
+  }, [table]);
 
   // 🔴 兩軌（原生 Capacitor ／ Web Speech）的差異全部關在 useVoiceAsr 裡，
   //    本頁只看得到一個統一介面。會判錯而且錯了不會有東西轉紅的那些判斷
@@ -188,10 +216,10 @@ const TrainingVoiceTai: React.FC = () => {
   // 使用者要確認的是台數對不對，看得到組成才有辦法確認。
   const breakdown = picked
     .map((id) => {
-      const fan = fanById(TABLE, id);
+      const fan = fanById(table, id);
       const units = sel[id];
       const label = fan?.per_unit && units > 1 ? `${fan?.name} ×${units}` : fan?.name;
-      return `${label} ${taiOf(TABLE, id, units)}`;
+      return `${label} ${taiOf(table, id, units)}`;
     })
     .join(' ＋ ');
 
@@ -227,7 +255,7 @@ const TrainingVoiceTai: React.FC = () => {
         heard: heard ?? { raw: '', normalized: '', leftover: '', ignored: [], sel: {}, ids: [] },
         sel,
         ts: nowTs(Date.now()),
-        rulesetVersion: TABLE.meta?.version ?? 'unknown',
+        rulesetVersion: ruleset.version,
       });
       if (shouldUpload(payload)) await postVoiceCorrection(payload);
       setSubmitted(true);
@@ -363,7 +391,7 @@ const TrainingVoiceTai: React.FC = () => {
                   >
                     <button
                       type="button"
-                      onClick={() => updateSel((s) => toggle(TABLE, s, fan.id))}
+                      onClick={() => updateSel((s) => toggle(table, s, fan.id))}
                       aria-pressed={on}
                       className="w-full px-1 py-2 active:scale-[0.97] transition-transform"
                     >
@@ -380,7 +408,7 @@ const TrainingVoiceTai: React.FC = () => {
                           on ? 'text-white/80' : 'text-[#c5a059]'
                         }`}
                       >
-                        {taiOf(TABLE, fan.id, units || 1)} 台
+                        {taiOf(table, fan.id, units || 1)} 台
                       </span>
                     </button>
 
@@ -393,7 +421,7 @@ const TrainingVoiceTai: React.FC = () => {
                         <button
                           type="button"
                           aria-label={`${fan.name} 減一份`}
-                          onClick={() => updateSel((s) => step(TABLE, s, fan.id, -1))}
+                          onClick={() => updateSel((s) => step(table, s, fan.id, -1))}
                           className="flex-1 flex justify-center py-1 text-white/90 active:bg-black/10"
                         >
                           <Minus size="0.875rem" strokeWidth={3} />
@@ -402,7 +430,7 @@ const TrainingVoiceTai: React.FC = () => {
                         <button
                           type="button"
                           aria-label={`${fan.name} 加一份`}
-                          onClick={() => updateSel((s) => step(TABLE, s, fan.id, 1))}
+                          onClick={() => updateSel((s) => step(table, s, fan.id, 1))}
                           className="flex-1 flex justify-center py-1 text-white/90 active:bg-black/10"
                         >
                           <Plus size="0.875rem" strokeWidth={3} />

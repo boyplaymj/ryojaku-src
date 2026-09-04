@@ -125,7 +125,12 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
         return { success: false, error: '服務維護中，請稍後再試' };
       }
 
-      return { success: false, error: data.error || `HTTP error! status: ${response.status}` };
+      // 🔴 帶上 status。少了它，呼叫端只剩 error 字串可以看，而「404＝後端說沒有」
+      //    與「502＝這次沒問到」的處置是相反的（見 utils/rulesetSource.ts 的
+      //    classifyRulesetResponse）。靠 parse 錯誤字串去分辨，是把一個協定層的事實
+      //    寄生在一句人話上 —— 那句話改個字就會靜靜失效。
+      //    ⚠️ 只加不減：既有呼叫端全部只讀 success/error/data，多一個欄位不影響它們。
+      return { success: false, status: response.status, error: data.error || `HTTP error! status: ${response.status}` };
     }
 
     // 曾被 403 擋過的那條路自己通了 ⇒ 維護結束。
@@ -936,3 +941,19 @@ export async function postVoiceTaiEvent(payload: MetricEventPayload) {
   });
 }
 
+
+// ============ 語音判台：家規台數表下發（D5-d）============
+// 正典 /opt/sml/repo/tools/mahjong-tai/DESIGN_APP.md §5c。後端 auth: user
+// ⇒ apiRequest 會自動帶 Authorization。
+//
+// 🔴 回傳原封不動交給 utils/rulesetSource.ts 的 classifyRulesetResponse() 判讀，
+//    這裡不解釋任何一種失敗 —— 「404 該清快取、502 不該」那條判準只留一份，
+//    而且要留在測得到的那一層（services/ 不在 run-tests.mjs 的 glob 裡）。
+//
+// ⚠️ 未登入／token 過期時這支會走 apiRequest 既有的 401 分支（清 localStorage
+//    並重新載入）。這不是本功能新增的行為：同一頁的 open 事件（POST
+//    /voice-corrections）走的是同一組 auth，本頁本來就只在登入後才到得了。
+
+export async function getRuleset(): Promise<ApiResponse> {
+  return apiRequest('/ruleset', { method: 'GET' });
+}
