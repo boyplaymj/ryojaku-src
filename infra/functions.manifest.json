@@ -939,6 +939,17 @@
       "tables": [
         "AdminConfigs"
       ]
+    },
+    {
+      "name": "admin-voice-tai-ruleset",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_admin_ruleset",
+      "apiType": "REST_V1",
+      "method": "GET",
+      "path": "/admin/voice-tai/ruleset",
+      "auth": "admin",
+      "tables": [
+        "AdminConfigs"
+      ]
     }
   ]
 }
