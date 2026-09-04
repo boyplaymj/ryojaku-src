@@ -36,7 +36,15 @@ import type { Heard } from './voiceTaiAsr.ts';
  *    「這筆訂正是哪一版引擎判的」—— 一個不變的版本號比沒有更糟，
  *    因為它宣稱了資訊卻沒有承載資訊。
  */
-export const ENGINE_VERSION = 'sync:73fbb2c3a69f';
+/*
+ * ⚠️ 2026-09-04 訂正：這裡曾經停在 `sync:73fbb2c3a69f` 一整天。
+ *    起因是 2026-09-03 的 `fa9d816`（sync_to_app.sh 把 fan_table 0.1.0→0.2.0
+ *    同步進 engine/），引擎副本變了而這個常數沒跟上 ⇒ 那段期間送出去的每一筆
+ *    訂正都宣稱是舊引擎判的。D4c-7 從那一刻起就是紅的、守衛完全正常 ——
+ *    缺的是「有東西會去觸發它」：`sync_to_app.sh` 複製完不會跑 npm test，
+ *    而複製這個動作本身不會提醒任何人回來 bump 這一行。
+ */
+export const ENGINE_VERSION = 'sync:a2f58fc7bcc2';
 
 export interface CorrectionInput {
   /** 語音辨識與判台的結果（系統原判）。 */
