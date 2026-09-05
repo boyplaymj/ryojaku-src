@@ -66,6 +66,64 @@ export function reduceNativePartial(prev: string, matches?: string[]): string {
 }
 
 /**
+ * 最多留幾條候選（N-best）。
+ *
+ * 🔴 這個 5 **不是我挑的偏好值**，是兩軌原生實作自己的預設：
+ *    iOS `Plugin.swift:8 defaultMatches = 5`、Android `Constants.java:14 MAX_RESULTS = 5`。
+ *    web 軌的 `maxAlternatives` 預設是 1，要自己設成這個值兩軌才對得起來。
+ * ⚠️ 這是唯一一份。`voiceTaiNbest.ts` 從這裡 import ——
+ *    兩邊各寫一個 5 的話，改一邊時另一邊會靜靜地繼續用舊值。
+ */
+export const MAX_CANDIDATES = 5;
+
+/**
+ * 原生 `partialResults` 事件的**候選清單**版本（N-best，§3.5）。
+ *
+ * 兩軌的 `matches` 都是 N-best 陣列，而不是「一條結果的分段」：
+ *   · iOS   `result.transcriptions` 逐條 `formattedString`（Plugin.swift:90-96）
+ *   · Android `SpeechRecognizer.RESULTS_RECOGNITION`（同一個 key，onResults 與
+ *     onPartialResults 都送這個 key）
+ * ⇒ 語意與 `reduceNativePartial` 一樣是**取代**，只是留下整條清單而不是 `[0]`。
+ *
+ * 🔴 空事件要保留上一次的清單，理由與 `reduceNativePartial` 逐字相同 ——
+ *    而且這裡更嚴重：清空的話「使用者講完了」會退化成「一條候選都沒有」，
+ *    N-best 整層變成 no-op，**而畫面完全正常**（仍會用到 `textRef` 那條）。
+ */
+export function reduceNativeCandidates(prev: string[], matches?: string[]): string[] {
+  if (!matches || matches.length === 0) return prev;
+  const cleaned = matches.map((m) => (m || '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return prev;
+  return cleaned.slice(0, MAX_CANDIDATES);
+}
+
+/**
+ * Web Speech `onresult` 的**候選清單**版本：與 `reduceWebFinal` 一樣是**累加**。
+ *
+ * Web Speech 的形狀與原生不同：`e.results[i]` 是一個**片段**，它底下才是那個片段的
+ * `maxAlternatives` 條候選。整句的第 k 條候選 ＝ 逐片段取第 k 條接起來。
+ *
+ * 🔴 這是一個**近似**，不是真的 N-best 路徑重組：真正的第 k 名整句可能是
+ *    「片段1的第0條 ＋ 片段2的第1條」，那條路徑瀏覽器不會給我們。
+ *    寫在這裡是因為 `continuous = false`（useVoiceAsr.ts）之下實務上只有一個
+ *    final 片段 ⇒ 近似與真值重合；哪天改成 continuous 就不再重合，而它**不會報錯**。
+ *
+ * ⚠️ 片段的候選數比現有清單少時，補的是**那個片段的第 0 條**（不是空字串）：
+ *    補空字串會讓第 k 條候選少掉一整段話，變成一條「比較短所以看起來比較乾淨」的
+ *    假候選 —— 而 N-best 的判準正好會偏好解釋得完整的那條。
+ */
+export function reduceWebCandidates(prev: string[], alternatives: string[]): string[] {
+  const alts = (alternatives || []).map((a) => a || '').filter((a, i) => i === 0 || a.trim());
+  if (alts.length === 0) return prev;
+  const width = Math.min(Math.max(prev.length || 1, alts.length), MAX_CANDIDATES);
+  const out: string[] = [];
+  for (let k = 0; k < width; k++) {
+    const base = prev.length === 0 ? '' : (prev[k] ?? prev[0]);
+    out.push(base + (alts[k] ?? alts[0]));
+  }
+  return out;
+}
+
+/**
  * Web Speech `onresult` 的累積語意：**累加**（與上面相反）。
  * 放在同一支檔案裡是刻意的 —— 兩者的差異就是這一層存在的理由，
  * 拆開放兩個地方的話，下一個人只會讀到其中一邊。

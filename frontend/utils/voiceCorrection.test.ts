@@ -26,6 +26,10 @@ const heardOf = (over: Partial<Heard> = {}): Heard => ({
   ignored: [],
   sel: { dasanyuan: 1 },
   ids: ['dasanyuan'],
+  // 音節覆蓋（§3.5）：本檔不讀它們，但 Heard 是完整型別 —— 補上是為了讓
+  // 「payload 少帶一個欄位」這種事由 typecheck 抓，不是由假件的形狀決定。
+  syllables: 3,
+  covered: 3,
   ...over,
 });
 

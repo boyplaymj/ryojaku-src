@@ -57,6 +57,24 @@ export interface Heard {
   sel: Selection;
   /** 系統原判的台種 id（排序後）。D4-c 拿它跟使用者確認後的比對，不同才上傳。 */
   ids: string[];
+  /**
+   * 這段話一共幾個音節（`rawPinyin` 的長度）。
+   * 🔴 只給 N-best 挑選用（`voiceTaiNbest.ts`），**不參與判台**。
+   */
+  syllables: number;
+  /**
+   * 被詞面吃掉的音節數 ＝ `syllables` − leftover 的音節數。
+   *
+   * 🔴 兩個數都從**同一個** `rawPinyin` 陣列來，所以 `covered + leftover 音節數`
+   *    恆等於 `syllables` —— 不是兩個各自算的估計值。N-best 拿它當判準的前提就是這個恆等式；
+   *    改成分別去數 `normalizedText` 的字，兩邊就會各自漂移而沒有東西轉紅。
+   */
+  covered: number;
+}
+
+/** 空白分隔的拼音串 → 音節數。空字串是 0，不是 1（`''.split(' ')` 會給你 `['']`）。 */
+function countSyllables(pinyin: string): number {
+  return (pinyin || '').split(' ').filter(Boolean).length;
 }
 
 /**
@@ -117,7 +135,9 @@ export function currentIndexSize(): number {
  */
 export function recognize(table: AsrFanTable, rawText: string): Heard {
   const raw = (rawText || '').trim();
-  const empty: Heard = { raw, normalized: '', leftover: '', ignored: [], sel: {}, ids: [] };
+  const empty: Heard = {
+    raw, normalized: '', leftover: '', ignored: [], sel: {}, ids: [], syllables: 0, covered: 0,
+  };
   if (!raw) return empty;
 
   ensureIndex(table);
@@ -127,13 +147,18 @@ export function recognize(table: AsrFanTable, rawText: string): Heard {
   const res = MahjongTai.parse(text, table);
   const sel = fromHits(res.hits || []);
 
+  const syllables = countSyllables(norm.rawPinyin || '');
+  const leftover = norm.leftover || '';
+
   return {
     raw,
     normalized: norm.normalizedText || '',
-    leftover: norm.leftover || '',
+    leftover,
     ignored: norm.ignored || [],
     sel,
     ids: Object.keys(sel).sort(),
+    syllables,
+    covered: syllables - countSyllables(leftover),
   };
 }
 

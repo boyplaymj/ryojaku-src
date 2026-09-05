@@ -11,10 +11,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MAX_CANDIDATES,
   nativeErrorMessage,
   nativeMatchesToText,
   pickAsrTrack,
+  reduceNativeCandidates,
   reduceNativePartial,
+  reduceWebCandidates,
   reduceWebFinal,
 } from './asrTrack.ts';
 
@@ -91,4 +94,67 @@ test('D4d-11 🔴 認不得的原生錯誤回 null，不可以硬給一句訊息
   // 未知的原生錯誤會被講成 Web Speech 的錯誤，方向完全相反。
   assert.equal(nativeErrorMessage('some-brand-new-native-error'), null);
   assert.equal(nativeErrorMessage(''), null);
+});
+
+// ── N-best 候選採集（§3.5）────────────────────────────────────────────
+//
+// 🔴 這一組測的全都是「錯了不會有東西轉紅」的判斷：候選採集壞掉時，
+//    N-best 整層退化成「只看第 0 條」——也就是**改這支之前的行為**，
+//    畫面、台數、飛輪送出的欄位全部正常。除了這裡沒有別的地方看得出來。
+
+test('N3-1 原生候選是**取代**語意，且保留整條清單（不是只留第 0 條）', () => {
+  assert.deepEqual(reduceNativeCandidates([], ['大三元', '大聲援']), ['大三元', '大聲援']);
+  // 取代：第二次事件來的是「當前完整結果」，不可以接在前一次後面
+  assert.deepEqual(
+    reduceNativeCandidates(['大三'], ['大三元', '打三元']),
+    ['大三元', '打三元'],
+  );
+});
+
+test('N3-2 🔴 空事件保留上一次的候選（清空＝N-best 靜靜變成 no-op）', () => {
+  const prev = ['大三元', '大聲援'];
+  assert.deepEqual(reduceNativeCandidates(prev, []), prev);
+  assert.deepEqual(reduceNativeCandidates(prev, undefined), prev);
+  assert.deepEqual(reduceNativeCandidates(prev, ['', '  ']), prev, '全是空白等於沒聽到');
+});
+
+test('N3-3 原生候選截到 MAX_CANDIDATES，且去掉空白條目', () => {
+  const many = ['a', ' ', 'b', 'c', 'd', 'e', 'f'];
+  assert.deepEqual(reduceNativeCandidates([], many), ['a', 'b', 'c', 'd', 'e']);
+  assert.equal(MAX_CANDIDATES, 5, '上限只有一份，改了這裡等於改了 web 軌那邊');
+});
+
+test('N3-4 原生候選的第 0 條必須與 reduceNativePartial 取的那條一致', () => {
+  // 🔴 兩支各自取「首選」的話，畫面上顯示的即時文字與 N-best 的第 0 條
+  //    可能是不同的字串，而它們本來就該是同一條。
+  const matches = ['大三元', '打三元'];
+  assert.equal(reduceNativeCandidates([], matches)[0], reduceNativePartial('', matches));
+});
+
+test('N3-5 web 候選是**累加**語意（與原生相反），逐片段接第 k 條', () => {
+  const a = reduceWebCandidates([], ['大三元', '大聲援']);
+  assert.deepEqual(a, ['大三元', '大聲援']);
+  const b = reduceWebCandidates(a, ['門清自摸', '門前清字母']);
+  assert.deepEqual(b, ['大三元門清自摸', '大聲援門前清字母']);
+});
+
+test('N3-6 🔴 片段候選數不足時補「該片段的第 0 條」，不是補空字串', () => {
+  // 補空字串的話，第 1 條候選會少掉一整段話 ⇒ 變成一條「比較短、leftover 比較少」
+  // 的假候選，而 N-best 的判準正好偏好解釋得完整的那條 ⇒ 它會被系統性地誤選。
+  const a = reduceWebCandidates([], ['大三元', '大聲援']);
+  const b = reduceWebCandidates(a, ['自摸']); // 這個片段只有一條候選
+  assert.deepEqual(b, ['大三元自摸', '大聲援自摸']);
+});
+
+test('N3-7 web：第一個片段只有一條、第二個片段有多條 ⇒ 從共同前綴分岔', () => {
+  const a = reduceWebCandidates([], ['大三元']);
+  const b = reduceWebCandidates(a, ['自摸', '字母', '子母']);
+  assert.deepEqual(b, ['大三元自摸', '大三元字母', '大三元子母']);
+});
+
+test('N3-8 web：空的候選陣列不動既有清單，且結果不超過上限', () => {
+  const prev = ['大三元'];
+  assert.deepEqual(reduceWebCandidates(prev, []), prev);
+  const wide = reduceWebCandidates([], ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+  assert.equal(wide.length, MAX_CANDIDATES);
 });

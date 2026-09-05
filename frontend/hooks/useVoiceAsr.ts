@@ -21,9 +21,12 @@ import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 import type { PluginListenerHandle } from '@capacitor/core';
 import {
+  MAX_CANDIDATES,
   nativeErrorMessage,
   pickAsrTrack,
+  reduceNativeCandidates,
   reduceNativePartial,
+  reduceWebCandidates,
   reduceWebFinal,
   type AsrTrack,
 } from '../utils/asrTrack';
@@ -34,6 +37,11 @@ interface SpeechRecognitionLike {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
+  /**
+   * 一個片段要回幾條候選（N-best）。**預設是 1**，不設就永遠只拿得到一條 ——
+   * 而「只有一條候選」與「N-best 沒接上」在畫面上逐字相同（§3.5）。
+   */
+  maxAlternatives: number;
   start: () => void;
   stop: () => void;
   abort: () => void;
@@ -43,7 +51,8 @@ interface SpeechRecognitionLike {
   onresult:
     | ((e: {
         resultIndex: number;
-        results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>;
+        // 一個片段底下是**多條**候選（`length` ＝ 實際回了幾條，可能少於 maxAlternatives）
+        results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean; length: number }>;
       }) => void)
     | null;
 }
@@ -94,7 +103,10 @@ export interface VoiceAsr {
  *      那一類失敗就會從漏斗裡消失 —— 而它消失的樣子是「使用者沒有嘗試」，
  *      正好是本功能要分辨的兩件事之一。
  */
-export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrSettle) => void): VoiceAsr {
+export function useVoiceAsr(
+  onFinal: (text: string, candidates: string[]) => void,
+  onSettle?: (s: AsrSettle) => void,
+): VoiceAsr {
   const [track] = useState<AsrTrack>(() =>
     pickAsrTrack({
       isNative: Capacitor.isNativePlatform(),
@@ -109,6 +121,13 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
   //    closure 會永遠看到第一次 render 的值。累積中的文字若放 state，
   //    結束時讀到的會是空字串 —— 而那與「真的沒講話」在畫面上一模一樣。
   const textRef = useRef('');
+  /**
+   * 這一次按壓的 N-best 候選（§3.5）。ref 的理由與 textRef 逐字相同。
+   * 🔴 不變式：`candidatesRef.current[0]` 恆等於 `textRef.current`
+   *    （兩軌的 reduce 都保證這件事，asrTrack.test.ts N3-4／N3-5 守著）。
+   *    不成立的話，畫面上顯示的即時文字會與判台吃的第 0 條不是同一句。
+   */
+  const candidatesRef = useRef<string[]>([]);
   const pressedRef = useRef(false);
   const listeningRef = useRef(false);
   const webRecRef = useRef<SpeechRecognitionLike | null>(null);
@@ -142,7 +161,11 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
   const finish = useCallback(() => {
     const text = textRef.current.trim();
     if (text) {
-      onFinalRef.current(text);
+      // 🔴 候選為空時退回 `[text]`，不是傳空陣列：空陣列在 recognizeBest 那邊是
+      //    「一條候選都沒有」（chosen = -1），而這裡明明有一句話。
+      //    兩者混在一起的話，「N-best 沒採集到」會被記成「使用者沒講話」。
+      const cands = candidatesRef.current.length > 0 ? candidatesRef.current : [text];
+      onFinalRef.current(text, cands);
       settle(true);
       return;
     }
@@ -162,6 +185,9 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
     rec.lang = 'zh-TW';
     rec.interimResults = true;
     rec.continuous = false;
+    // 🔴 不設這一行，web 軌永遠只有一條候選 ⇒ N-best 在瀏覽器上是 no-op，
+    //    而它 no-op 的樣子就是「這台裝置的 ASR 剛好每次都只給一條」。
+    rec.maxAlternatives = MAX_CANDIDATES;
 
     rec.onstart = () => {
       listeningRef.current = true;
@@ -172,10 +198,16 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
     rec.onresult = (e) => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
+        const seg = e.results[i];
+        const t = seg[0].transcript;
         // 🔴 web 是**累加**語意（原生相反，見 asrTrack.ts 的兩支 reduce）
-        if (e.results[i].isFinal) textRef.current = reduceWebFinal(textRef.current, t);
-        else interim += t;
+        if (seg.isFinal) {
+          textRef.current = reduceWebFinal(textRef.current, t);
+          // 同一個片段的其餘候選（§3.5）。`seg` 是 ArrayLike，沒有 map。
+          const alts: string[] = [];
+          for (let j = 0; j < seg.length; j++) alts.push(seg[j].transcript);
+          candidatesRef.current = reduceWebCandidates(candidatesRef.current, alts);
+        } else interim += t;
       }
       setPartial(textRef.current + interim);
     };
@@ -208,6 +240,10 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
         const partialH = await SpeechRecognition.addListener('partialResults', (data) => {
           // 🔴 原生是**取代**語意：每次給的是當前完整結果。累加會得到「大 大三 大三元」。
           textRef.current = reduceNativePartial(textRef.current, data?.matches);
+          // 兩軌的 N-best 都藏在同一個 matches 陣列裡（§3.5）：
+          // iOS 是 SFTranscription 逐條、Android 是 RESULTS_RECOGNITION 逐條。
+          // 之前只取 [0]，其餘 4 條當場丟掉。
+          candidatesRef.current = reduceNativeCandidates(candidatesRef.current, data?.matches);
           setPartial(textRef.current);
         });
         const stateH = await SpeechRecognition.addListener('listeningState', (data) => {
@@ -266,6 +302,7 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
     if (listeningRef.current) return;
     pressedRef.current = true;
     textRef.current = '';
+    candidatesRef.current = []; // 上一次按壓的候選不可以留到這一次
     settledRef.current = false; // 新的一次按壓＝新的一次嘗試
     setPartial('');
     setError('');
@@ -302,6 +339,9 @@ export function useVoiceAsr(onFinal: (text: string) => void, onSettle?: (s: AsrS
             language: 'zh-TW',
             partialResults: true,
             popup: false,
+            // 兩軌原生預設本來就是 5（iOS defaultMatches／Android MAX_RESULTS），
+            // 顯式帶上是為了讓「我們要幾條」有一個看得見的位置，而不是靠對方的預設值。
+            maxResults: MAX_CANDIDATES,
           });
         } catch (err) {
           fail('start-failed', nativeErrorMessage(String(err)) ?? `辨識啟動失敗：${String(err)}`);

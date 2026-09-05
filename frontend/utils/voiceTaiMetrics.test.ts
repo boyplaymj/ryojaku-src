@@ -21,6 +21,8 @@ const heard: Heard = {
   ignored: [],
   sel: { dasanyuan: 1 },
   ids: ['dasanyuan'],
+  syllables: 3,
+  covered: 3,
 };
 
 test('D4g-1 open 事件的欄位集合被釘死 —— 不得出現任何辨識文字', () => {

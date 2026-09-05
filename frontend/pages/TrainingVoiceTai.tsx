@@ -65,7 +65,8 @@ import {
   toggle,
   type Selection,
 } from '../utils/voiceTai';
-import { recognize, type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
+import { type AsrFanTable, type Heard } from '../utils/voiceTaiAsr';
+import { recognizeBest } from '../utils/voiceTaiNbest';
 import { useRuleset } from '../hooks/useRuleset';
 import { buildCorrection, nowTs, shouldUpload } from '../utils/voiceCorrection';
 import { buildEvent, type MetricEventKind } from '../utils/voiceTaiMetrics';
@@ -165,10 +166,18 @@ const TrainingVoiceTai: React.FC = () => {
   const total = totalTai(table, sel);
   const picked = Object.keys(sel);
 
-  /** 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。 */
-  const analyze = useCallback((text: string) => {
+  /**
+   * 辨識完的字丟進判台管線。錯誤要顯示出來，不可以讓整頁白掉。
+   *
+   * 🔴 吃的是**候選清單**不是單一字串（§3.5）：系統 ASR 本來就回 5 條，
+   *    我們一直只用第 0 條。`recognizeBest` 對每條跑一次判台，挑解釋得最完整的那條，
+   *    完全平手時保留 ASR 的首選 ⇒ 這一層不會製造與準確度無關的變動。
+   * ⚠️ `text` 仍然是 ASR 的首選，只拿來當候選清單為空時的退路 —— 畫面上顯示的
+   *    「聽到：」要是**被選中**那條（`h.raw`），否則使用者會看到一句與判台結果不符的話。
+   */
+  const analyze = useCallback((text: string, candidates: string[]) => {
     try {
-      const h = recognize(table, text);
+      const { heard: h } = recognizeBest(table, candidates.length > 0 ? candidates : [text]);
       setHeard(h);
       // 新的一次辨識＝新的一局，上一局的「已送出」不算數
       // （否則講第二局時按鈕還停在「已送出」，那一局永遠送不出去）。
@@ -252,7 +261,11 @@ const TrainingVoiceTai: React.FC = () => {
     setNotice('');
     try {
       const payload = buildCorrection({
-        heard: heard ?? { raw: '', normalized: '', leftover: '', ignored: [], sel: {}, ids: [] },
+        heard:
+          heard ?? {
+            raw: '', normalized: '', leftover: '', ignored: [], sel: {}, ids: [],
+            syllables: 0, covered: 0,
+          },
         sel,
         ts: nowTs(Date.now()),
         rulesetVersion: ruleset.version,
