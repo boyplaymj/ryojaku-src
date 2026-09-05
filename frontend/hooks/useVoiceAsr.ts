@@ -30,6 +30,7 @@ import {
   reduceWebFinal,
   type AsrTrack,
 } from '../utils/asrTrack';
+import { nativeTailStep, tailIdle, type TailEvent, type TailState } from '../utils/asrTail';
 import { micErrorCode, micErrorMessage } from '../utils/voiceTaiAsr';
 
 /** Web Speech 的最小型別（這個環境沒有官方型別，只宣告我們真的用到的部分）。 */
@@ -166,6 +167,18 @@ export function useVoiceAsr(
   // 沒有這道旗標的話同一次失敗會被記成兩筆（而且第二筆的原因是 no-speech，
   // 把真正的原因稀釋掉）。
   const settledRef = useRef(false);
+  /**
+   * 原生軌的「尾巴」（§3.5c）。判斷邏輯在 utils/asrTail.ts（有測試），
+   * 這裡只剩計時器與呼叫 finish()。
+   * 🔴 不變式：`tailTimerRef.current !== null` ⟺ `tailRef.current.pending`。
+   */
+  const tailRef = useRef<TailState>(tailIdle());
+  const tailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 按壓世代。🔴 上一次按壓排的計時器**絕不可以**結束這一次按壓 ——
+   * 那個症狀是「才剛按下去就說沒聽到內容」，而它與真的沒講話逐字相同。
+   */
+  const pressIdRef = useRef(0);
 
   const settle = useCallback(
     (ok: boolean, errorCode?: string, nbest?: { candidateCount: number; chosenIndex?: number }) => {
@@ -211,6 +224,42 @@ export function useVoiceAsr(
     //    走到這裡而 settledRef 已經是 true，代表原因更早就記過了。
     settle(false, 'no-speech');
   }, [settle]);
+
+  const clearTailTimer = useCallback(() => {
+    if (tailTimerRef.current !== null) {
+      clearTimeout(tailTimerRef.current);
+      tailTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 把一個事件餵給尾巴狀態機，並執行它要的動作（§3.5c）。
+   *
+   * 🔴 這支自己會被計時器再叫一次（arm → timeout），所以要走 ref 而不是直接遞迴：
+   *    useCallback 在定義自己的時候拿不到自己。
+   */
+  const applyTailRef = useRef<(e: TailEvent) => void>(() => {});
+  const applyTail = useCallback(
+    (event: TailEvent) => {
+      const { state, action } = nativeTailStep(tailRef.current, event, Date.now());
+      tailRef.current = state;
+      // 🔴 一律先清：狀態機只在 pending 時回 arm/finish，而 pending ⟺ 計時器存在
+      //    ⇒ 清掉之後再依 action 決定要不要重設，不會有「兩個計時器同時活著」。
+      clearTailTimer();
+      if (action.type === 'arm') {
+        const press = pressIdRef.current;
+        tailTimerRef.current = setTimeout(() => {
+          tailTimerRef.current = null;
+          if (press !== pressIdRef.current) return; // 上一次按壓的殘骸，丟掉
+          applyTailRef.current('timeout');
+        }, action.delayMs);
+      } else if (action.type === 'finish') {
+        finish();
+      }
+    },
+    [clearTailTimer, finish],
+  );
+  applyTailRef.current = applyTail;
 
   // ── Web 軌 ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -281,12 +330,20 @@ export function useVoiceAsr(
           // 之前只取 [0]，其餘 4 條當場丟掉。
           candidatesRef.current = reduceNativeCandidates(candidatesRef.current, data?.matches);
           setPartial(textRef.current);
+          // 🔴 §3.5c：stopped 之後還會來的那一發，就是帶完整 N-best 的最終結果
+          //    （Android 的 onResults 在 partialResults:true 時改走這個事件）。
+          //    錄音中的 partial 在狀態機裡是 no-op，這裡不需要自己判斷是哪一種。
+          applyTail('partial');
         });
         const stateH = await SpeechRecognition.addListener('listeningState', (data) => {
           const on = data?.status === 'started';
           listeningRef.current = on;
           setListening(on);
-          if (!on) finish();
+          // 🔴 §3.5c：**不在這裡直接 finish()**。兩軌原生都把帶完整 N-best 的
+          //    最終結果排在 stopped 後面，當場收尾等於每次都丟掉它。
+          //    改由狀態機決定：等到又一個 stopped（iOS 的 isFinal）、
+          //    或尾巴安靜下來、或絕對上限到了 —— 三者先到的那個。
+          applyTail(on ? 'started' : 'stopped');
         });
         if (disposed) {
           partialH.remove();
@@ -301,13 +358,15 @@ export function useVoiceAsr(
 
     return () => {
       disposed = true;
+      clearTailTimer(); // 離開頁面之後不可以再有一個計時器把 finish() 叫起來
+      tailRef.current = tailIdle();
       handles.forEach((h) => h.remove());
       // 離開頁面時一定要停，否則原生辨識會繼續佔著麥克風。
       SpeechRecognition.stop().catch(() => {
         /* 本來就沒在聽 */
       });
     };
-  }, [track, finish, fail]);
+  }, [track, applyTail, fail, clearTailTimer]);
 
   /**
    * Web 軌用：iOS Safari 直接 rec.start() 會丟 not-allowed 且**不跳權限對話框**，
@@ -340,6 +399,9 @@ export function useVoiceAsr(
     textRef.current = '';
     candidatesRef.current = []; // 上一次按壓的候選不可以留到這一次
     settledRef.current = false; // 新的一次按壓＝新的一次嘗試
+    pressIdRef.current += 1; // §3.5c：上一次按壓排的尾巴計時器就此作廢
+    clearTailTimer();
+    tailRef.current = tailIdle();
     setPartial('');
     setError('');
 
@@ -386,7 +448,7 @@ export function useVoiceAsr(
         }
       })();
     }
-  }, [track, ensureWebMic, fail]);
+  }, [track, ensureWebMic, fail, clearTailTimer]);
 
   const stop = useCallback(() => {
     pressedRef.current = false;
