@@ -421,9 +421,69 @@ func TestAsrEventFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildItem failed: %v", err)
 	}
-	for _, name := range []string{"asrOk", "asrTrack", "asrError"} {
+	for _, name := range []string{"asrOk", "asrTrack", "asrError", "asrCandidates", "asrChosen"} {
 		if _, present := opened[name]; present {
 			t.Fatalf("kind=open 不該有 %q, got %#v", name, opened[name])
+		}
+	}
+}
+
+// 12b. N-best 的兩個數：0 是讀數、nil 是「沒送」，兩者不可以寫成同一筆（§3.5）。
+func TestAsrNbestFields(t *testing.T) {
+	n := func(v int) *int { return &v }
+
+	// ① 有多條候選、選了第 2 條
+	alt, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", AsrOk: true, AsrTrack: "native",
+		AsrCandidates: n(5), AsrChosen: n(2),
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	if v, isNum := alt["asrCandidates"].(*types.AttributeValueMemberN); !isNum || v.Value != "5" {
+		t.Fatalf("asrCandidates 應該是 5, got %#v", alt["asrCandidates"])
+	}
+	if v, isNum := alt["asrChosen"].(*types.AttributeValueMemberN); !isNum || v.Value != "2" {
+		t.Fatalf("asrChosen 應該是 2, got %#v", alt["asrChosen"])
+	}
+
+	// ② 🔴 chosen=0（選了 ASR 首選）必須寫進去 —— 這是這一層最可能的真實結果，
+	// 用 `if *p != 0` 或值型別零值判斷都會把它吞掉，而吞掉之後它看起來像「沒送」。
+	top, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", AsrOk: true, AsrTrack: "web",
+		AsrCandidates: n(3), AsrChosen: n(0),
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	if v, isNum := top["asrChosen"].(*types.AttributeValueMemberN); !isNum || v.Value != "0" {
+		t.Fatalf("asrChosen=0 必須存下來, got %#v", top["asrChosen"])
+	}
+
+	// ③ 舊版前端：兩個欄位都沒送 ⇒ 都不可以憑空長出來（0 是讀數，不是預設值）
+	legacy, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", AsrOk: true, AsrTrack: "native",
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	for _, name := range []string{"asrCandidates", "asrChosen"} {
+		if _, present := legacy[name]; present {
+			t.Fatalf("沒送的欄位不該出現 %q, got %#v", name, legacy[name])
+		}
+	}
+
+	// ④ 負數視同沒送（來源是 Array.length，負數代表有人直接打端點）
+	bad, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", AsrOk: true, AsrTrack: "web",
+		AsrCandidates: n(-1), AsrChosen: n(-1),
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	for _, name := range []string{"asrCandidates", "asrChosen"} {
+		if _, present := bad[name]; present {
+			t.Fatalf("負數不該寫進去 %q, got %#v", name, bad[name])
 		}
 	}
 }

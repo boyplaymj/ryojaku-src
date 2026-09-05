@@ -175,9 +175,9 @@ const TrainingVoiceTai: React.FC = () => {
    * ⚠️ `text` 仍然是 ASR 的首選，只拿來當候選清單為空時的退路 —— 畫面上顯示的
    *    「聽到：」要是**被選中**那條（`h.raw`），否則使用者會看到一句與判台結果不符的話。
    */
-  const analyze = useCallback((text: string, candidates: string[]) => {
+  const analyze = useCallback((text: string, candidates: string[]): number | undefined => {
     try {
-      const { heard: h } = recognizeBest(table, candidates.length > 0 ? candidates : [text]);
+      const { heard: h, chosen } = recognizeBest(table, candidates.length > 0 ? candidates : [text]);
       setHeard(h);
       // 新的一次辨識＝新的一局，上一局的「已送出」不算數
       // （否則講第二局時按鈕還停在「已送出」，那一局永遠送不出去）。
@@ -190,10 +190,16 @@ const TrainingVoiceTai: React.FC = () => {
         setNotice('');
         setSel(h.sel);
       }
+      // 🔴 回傳「選中第幾條」給 useVoiceAsr，由它併進同一次按壓的 asr 事件
+      //    （Codex P1）。存在自己的 ref 裡也做得到，但那個值在「ASR 失敗、
+      //    這支根本沒跑」的路徑上會是上一次按壓的殘值 —— 而假資料與真資料同形。
+      return chosen;
     } catch (err) {
       // recognize 的 fail-closed（音近索引建不起來）會走到這裡。
       // 那代表詞庫壞了，不是使用者講錯 ⇒ 照實講，別說「請再試一次」。
       setNotice(`判台失敗：${err instanceof Error ? err.message : String(err)}`);
+      // 判台整個失敗時不回名次：那一筆沒有「選中哪一條」這回事。
+      return undefined;
     }
     // 🔴 deps 要帶 table。空 deps 的話換了表之後，判台仍然走**舊表**，
     //    而畫面上的格子與台數已經是新表的 —— 兩邊不一致且完全沒有徵兆。
@@ -212,6 +218,9 @@ const TrainingVoiceTai: React.FC = () => {
    *    或者他講了但麥克風沒權限／沒聽到（技術問題）。混在一起會修錯東西。
    */
   const onAsrSettle = useCallback((s: AsrSettle) => sendEvent('asr', s), [sendEvent]);
+  // ⚠️ `AsrSettle` 的欄位名與 `AsrOutcome` 逐欄相同（ok／track／errorCode／
+  //    candidateCount／chosenIndex），所以這裡是整個物件往下傳。
+  //    改名的話兩邊都要動 —— 只改一邊時 TypeScript 會轉紅（兩者都是具名型別）。
 
   const asr = useVoiceAsr(analyze, onAsrSettle);
   const listening = asr.listening;

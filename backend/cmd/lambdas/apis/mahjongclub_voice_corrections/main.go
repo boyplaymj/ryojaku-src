@@ -72,6 +72,16 @@ type CorrectionRequest struct {
 	AsrOk    bool   `json:"asrOk"`
 	AsrTrack string `json:"asrTrack"`
 	AsrError string `json:"asrError"`
+
+	// N-best 的兩個數（DESIGN_APP.md §3.5）：這次按壓拿到幾條候選、選中第幾條。
+	//
+	// 🔴 **一定要是指標。** 兩個欄位的 0 都是有意義的值
+	// （candidates=0「一條都沒有」／chosen=0「選了 ASR 首選」），
+	// 而 `int` 的零值與「舊版前端根本沒送」逐字相同 ⇒ 用值型別的話，
+	// 「這台裝置只給一條」與「這條路徑沒接上」會被寫成同一筆資料，
+	// 而那正是這兩個欄位存在的唯一理由（Codex 覆驗 P1，2026-09-05）。
+	AsrCandidates *int `json:"asrCandidates"`
+	AsrChosen     *int `json:"asrChosen"`
 }
 
 // 允許的 kind。🔴 這份名單與前端 utils/voiceTaiMetrics.ts 的 EVENT_KINDS 是**同一份契約**，
@@ -201,6 +211,15 @@ func buildItem(userID string, req CorrectionRequest, nowUnix int64) (map[string]
 		}
 		if req.AsrError != "" {
 			item["asrError"] = &types.AttributeValueMemberS{Value: req.AsrError}
+		}
+		// 🔴 只判 nil，不判 0：0 是真實讀數（見上面欄位宣告）。
+		// ⚠️ 負數視同沒送 —— 前端那側來源是 `Array.length`，出現負數代表有人
+		// 直接打端點或前端壞了，寫進去會污染「有幾條」的分布，而且看不出是髒的。
+		if req.AsrCandidates != nil && *req.AsrCandidates >= 0 {
+			item["asrCandidates"] = &types.AttributeValueMemberN{Value: strconv.Itoa(*req.AsrCandidates)}
+		}
+		if req.AsrChosen != nil && *req.AsrChosen >= 0 {
+			item["asrChosen"] = &types.AttributeValueMemberN{Value: strconv.Itoa(*req.AsrChosen)}
 		}
 	}
 

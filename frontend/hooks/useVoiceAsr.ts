@@ -77,6 +77,23 @@ export interface AsrSettle {
   ok: boolean;
   track: AsrTrack;
   errorCode?: string;
+  /**
+   * 這次按壓拿到幾條 N-best 候選（§3.5）。**只有成功時才帶。**
+   *
+   * 🔴 這個數字是「原生軌到底給不給我們多條」的**唯一持續量測**。
+   *    拿一次真機印 `matches.length` 回答不了它：那是一台裝置、一個 Android 版本、
+   *    一次網路狀態下的一個樣本，而這個數字每台裝置都可能不同
+   *    （Codex 覆驗 P1，2026-09-05）。
+   * ⚠️ **缺欄 ≠ 1**。舊版前端與「這台只給一條」必須分得出來，
+   *    所以不帶時是 undefined，不是 0 也不是 1。
+   */
+  candidateCount?: number;
+  /**
+   * 選中的是第幾條（0 ＝ ASR 自己的首選）。**只有成功且有候選時才帶。**
+   * 它與 `candidateCount` 一起才回答得了「N-best 有沒有真的改變任何結果」：
+   * 只有 `candidateCount` 的話，「有 5 條但每次都選第 0 條」與「這一層有效」分不出來。
+   */
+  chosenIndex?: number;
 }
 
 export interface VoiceAsr {
@@ -104,7 +121,14 @@ export interface VoiceAsr {
  *      正好是本功能要分辨的兩件事之一。
  */
 export function useVoiceAsr(
-  onFinal: (text: string, candidates: string[]) => void,
+  /**
+   * 講完之後拿到的完整文字與候選清單。
+   * 🔴 **回傳值是「選中第幾條」**（沒有就回 undefined）。用回傳值而不是讓呼叫端
+   *    自己把它記在 ref 裡，是為了讓「這個 chosenIndex 屬於這一次按壓」變成
+   *    結構上的事實：ref 的寫法在「ASR 失敗、analyze 根本沒跑」那條路徑上
+   *    會讀到**上一次**按壓的值，而那筆假資料與真資料逐字相同。
+   */
+  onFinal: (text: string, candidates: string[]) => number | void,
   onSettle?: (s: AsrSettle) => void,
 ): VoiceAsr {
   const [track] = useState<AsrTrack>(() =>
@@ -143,11 +167,20 @@ export function useVoiceAsr(
   // 把真正的原因稀釋掉）。
   const settledRef = useRef(false);
 
-  const settle = useCallback((ok: boolean, errorCode?: string) => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    onSettleRef.current?.({ ok, track: trackRef.current, errorCode });
-  }, []);
+  const settle = useCallback(
+    (ok: boolean, errorCode?: string, nbest?: { candidateCount: number; chosenIndex?: number }) => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      onSettleRef.current?.({
+        ok,
+        track: trackRef.current,
+        errorCode,
+        candidateCount: nbest?.candidateCount,
+        chosenIndex: nbest?.chosenIndex,
+      });
+    },
+    [],
+  );
 
   /** 設錯誤訊息 ＋ 記一筆失敗。兩件事一定要一起做，分開寫就會漏掉其中一半。 */
   const fail = useCallback(
@@ -165,8 +198,11 @@ export function useVoiceAsr(
       //    「一條候選都沒有」（chosen = -1），而這裡明明有一句話。
       //    兩者混在一起的話，「N-best 沒採集到」會被記成「使用者沒講話」。
       const cands = candidatesRef.current.length > 0 ? candidatesRef.current : [text];
-      onFinalRef.current(text, cands);
-      settle(true);
+      const chosen = onFinalRef.current(text, cands);
+      settle(true, undefined, {
+        candidateCount: cands.length,
+        chosenIndex: typeof chosen === 'number' && chosen >= 0 ? chosen : undefined,
+      });
       return;
     }
     setError((e) => e || '沒聽到內容，再試一次。');

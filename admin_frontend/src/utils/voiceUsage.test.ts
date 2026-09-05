@@ -318,3 +318,61 @@ test('T22 cursor 沒有前進就停 —— 否則是打真實 API 的無窮迴�
   assert.equal(calls, 2);
   assert.equal(r.pages.length, 2);
 });
+
+// ── N-best 四格（§3.5，Codex 覆驗 P1）────────────────────────────────
+
+test('N-best：四格跨頁加總，換手率的分母只算「有儀器」的那些', () => {
+  const s = aggregate(
+    [
+      {
+        data: [],
+        pageEvents: {
+          open: 0, asrOk: 4, asrFailed: 0, asrErrors: {}, other: 0,
+          asrNoCandidateInfo: 1, asrSingleCandidate: 1, asrTopKept: 1, asrSwitched: 1,
+        },
+      },
+      {
+        data: [],
+        pageEvents: {
+          open: 0, asrOk: 2, asrFailed: 0, asrErrors: {}, other: 0,
+          asrNoCandidateInfo: 0, asrSingleCandidate: 0, asrTopKept: 1, asrSwitched: 1,
+        },
+      },
+    ],
+    { nowMs: NOW_MS },
+  );
+  assert.equal(s.asrNoCandidateInfo, 1);
+  assert.equal(s.asrSingleCandidate, 1);
+  assert.equal(s.asrTopKept, 2);
+  assert.equal(s.asrSwitched, 2);
+  // 🔴 分母是 5（single+topKept+switched），不是 6（asrOk）——
+  //    缺欄那一筆是「沒有儀器」，不是「量到了而且沒換手」。
+  assert.equal(s.asrWithCandidateInfo, 5);
+  assert.equal(s.asrSwitchRate, 2 / 5);
+});
+
+test('N-best：一筆候選資訊都沒有時，換手率是 null 不是 0', () => {
+  // 🔴 0 的意思是「量過了，從來沒換過」；null 的意思是「還沒有任何一次量到」。
+  //    這兩件事的處置相反（前者拆掉這一層，後者去把儀器接上）。
+  const s = aggregate(
+    [{
+      data: [],
+      pageEvents: {
+        open: 0, asrOk: 3, asrFailed: 0, asrErrors: {}, other: 0,
+        asrNoCandidateInfo: 3, asrSingleCandidate: 0, asrTopKept: 0, asrSwitched: 0,
+      },
+    }],
+    { nowMs: NOW_MS },
+  );
+  assert.equal(s.asrWithCandidateInfo, 0);
+  assert.equal(s.asrSwitchRate, null);
+});
+
+test('N-best：舊版後端完全沒回這四個欄位時不可以爆掉，四格都是 0', () => {
+  const s = aggregate(
+    [{ data: [], pageEvents: { open: 1, asrOk: 1, asrFailed: 0, asrErrors: {}, other: 0 } }],
+    { nowMs: NOW_MS },
+  );
+  assert.equal(s.asrNoCandidateInfo, 0);
+  assert.equal(s.asrSwitchRate, null);
+});

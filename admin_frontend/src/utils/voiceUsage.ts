@@ -35,6 +35,16 @@ export interface PageEvents {
   asrErrors: Record<string, number>;
   /** 認得出是事件、但 kind 不在已知清單裡。**不可併進其他格**，見後端註解。 */
   other: number;
+
+  // ── N-best 四格（§3.5）。互斥，加總 = asrOk。────────────────────────
+  /** 缺欄：舊版前端／這條路徑沒接上。**不是**「只有一條」。 */
+  asrNoCandidateInfo: number;
+  /** 拿到 ≤1 條候選 ⇒ N-best 在那台裝置上是 no-op。 */
+  asrSingleCandidate: number;
+  /** 有多條、選了首選 ⇒ 這一層存在但沒改變結果（預期中的多數）。 */
+  asrTopKept: number;
+  /** 有多條、換掉首選 ⇒ **只有這一格代表 N-best 真的做了事。** */
+  asrSwitched: number;
 }
 
 /** 一頁回應。欄位全部可缺 —— 舊版後端／半壞的回應不該讓整張卡爆掉。 */
@@ -128,6 +138,21 @@ export interface UsageSummary {
   /** ASR 失敗率 = `asrFailed ÷ (asrOk + asrFailed)`；沒有任何一次按壓時是 `null`。 */
   asrFailRate: number | null;
 
+  // ── N-best 四格（§3.5）──
+  asrNoCandidateInfo: number;
+  asrSingleCandidate: number;
+  asrTopKept: number;
+  asrSwitched: number;
+  /**
+   * 有拿到候選資訊的成功按壓數 ＝ single + topKept + switched。
+   * 🔴 這是 `asrSwitchRate` 的分母，**不是 `asrOk`** ——
+   *    缺欄那些是「沒有儀器」，不是「量到 0 次換手」。
+   *    （同一個坑在 funnel-report 上踩過：`0/91` 修成 `0/3`。）
+   */
+  asrWithCandidateInfo: number;
+  /** 換掉首選的比率 = `asrSwitched ÷ asrWithCandidateInfo`；沒有樣本時 `null`。 */
+  asrSwitchRate: number | null;
+
   /**
    * 🔴 **事件列的不重複人數結構上算不出來。**
    * 後端 `countEvent` 只累加計數，`userId` 停在 `toRecord` 那一層就沒有再往外傳
@@ -181,6 +206,11 @@ export function aggregate(pages: VoicePage[], opts: AggregateOptions): UsageSumm
   let asrFailed = 0;
   let otherEvents = 0;
   let skipped = 0;
+  // N-best 四格（§3.5）。互斥，加總 = asrOk。
+  let asrNoCandidateInfo = 0;
+  let asrSingleCandidate = 0;
+  let asrTopKept = 0;
+  let asrSwitched = 0;
 
   for (const page of pages) {
     for (const r of page.data ?? []) {
@@ -205,6 +235,10 @@ export function aggregate(pages: VoicePage[], opts: AggregateOptions): UsageSumm
       asrOk += ev.asrOk ?? 0;
       asrFailed += ev.asrFailed ?? 0;
       otherEvents += ev.other ?? 0;
+      asrNoCandidateInfo += ev.asrNoCandidateInfo ?? 0;
+      asrSingleCandidate += ev.asrSingleCandidate ?? 0;
+      asrTopKept += ev.asrTopKept ?? 0;
+      asrSwitched += ev.asrSwitched ?? 0;
       for (const [code, n] of Object.entries(ev.asrErrors ?? {})) {
         asrErrors[code] = (asrErrors[code] ?? 0) + n;
       }
@@ -219,6 +253,9 @@ export function aggregate(pages: VoicePage[], opts: AggregateOptions): UsageSumm
   const complete = pages.length > 0 && !last?.nextCursor;
 
   const asrTotal = asrOk + asrFailed;
+  // 🔴 分母只算「有儀器」的那些。用 asrOk 當分母的話，缺欄的按壓會被
+  //    算成「量到了、而且沒有換手」—— 那會把「還沒接上」講成「這一層沒用」。
+  const withInfo = asrSingleCandidate + asrTopKept + asrSwitched;
   const reasons: string[] = [];
   if (corrections < SAMPLE_GATE.minCorrections) {
     reasons.push(`訂正筆數 ${corrections} < ${SAMPLE_GATE.minCorrections}`);
@@ -245,6 +282,12 @@ export function aggregate(pages: VoicePage[], opts: AggregateOptions): UsageSumm
     asrErrors,
     otherEvents,
     asrFailRate: asrTotal > 0 ? asrFailed / asrTotal : null,
+    asrNoCandidateInfo,
+    asrSingleCandidate,
+    asrTopKept,
+    asrSwitched,
+    asrWithCandidateInfo: withInfo,
+    asrSwitchRate: withInfo > 0 ? asrSwitched / withInfo : null,
     openDistinctUsers: null,
     skipped,
     sampleSufficient: reasons.length === 0,

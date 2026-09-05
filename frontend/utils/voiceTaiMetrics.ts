@@ -52,6 +52,19 @@ export interface AsrOutcome {
    * 指標就靜靜地換一個分類，而沒有任何東西會轉紅。
    */
   errorCode?: string;
+  /**
+   * 這次按壓拿到幾條 N-best 候選（§3.5）。
+   *
+   * 🔴 **缺欄 ≠ 0 ≠ 1**，三種都是不同的事實：
+   *      缺欄 → 舊版前端（或這條路徑沒接上）
+   *      0    → 一條候選都沒有
+   *      1    → 這台裝置只給一條 ⇒ N-best 在它上面是 no-op
+   *    合併其中任何兩個，「原生軌到底給不給多條」就永遠答不出來 ——
+   *    而那正是 Codex P1 指出、也是這一層唯一還沒被驗證的前提。
+   */
+  candidateCount?: number;
+  /** 選中的是第幾條（0 ＝ ASR 首選）。與 candidateCount 一起才看得出這一層有沒有改變結果。 */
+  chosenIndex?: number;
 }
 
 export interface MetricEventInput {
@@ -82,6 +95,12 @@ export interface MetricEventPayload {
   asrOk?: boolean;
   asrTrack?: AsrTrack;
   asrError?: string;
+  /**
+   * N-best 的兩個數（§3.5）。**不帶候選原文** —— 要回答的問題是
+   * 「有幾條、選了第幾條」，不是「講了什麼」，隱私紀律（§4.5）不因此鬆動。
+   */
+  asrCandidates?: number;
+  asrChosen?: number;
 }
 
 /**
@@ -108,6 +127,21 @@ export function buildEvent(input: MetricEventInput): MetricEventPayload {
     // 成功時不帶 errorCode；失敗時沒有代碼也要留一個佔位，
     // 否則「失敗但不知道為什麼」與「成功」在欄位上又變成同一種形狀。
     if (!input.asr.ok) p.asrError = input.asr.errorCode || 'unknown';
+
+    // 🔴 兩個數各自獨立判斷，不可以寫成「有 chosen 才帶 candidates」：
+    //    「有 3 條但一次都沒換掉首選」是這一層最可能的真實結果，
+    //    而那筆資料的形狀正是 candidates=3、chosen=0。
+    const n = input.asr.candidateCount;
+    if (Number.isInteger(n) && (n as number) >= 0) {
+      p.asrCandidates = n;
+      const k = input.asr.chosenIndex;
+      // chosen 只有在真的有候選時才有意義；沒有候選時 chosen 缺欄，
+      // 而 candidates=0 已經把「沒東西可選」講完了。
+      if ((n as number) > 0 && Number.isInteger(k) && (k as number) >= 0) p.asrChosen = k;
+    }
+    // ⚠️ 不是整數就整個不帶（不 clamp、不補 0）：來源是 `Array.length`，
+    //    所以這條分支實務上走不到 —— 它是守衛不是政策。真的走到了，
+    //    「缺欄」會把它歸進「舊版前端」那一格，而那比一個編出來的 0 誠實。
   }
   return p;
 }

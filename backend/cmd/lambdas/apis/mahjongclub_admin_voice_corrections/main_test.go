@@ -424,3 +424,68 @@ func TestLegacyRowsWithoutKindCountAsCorrections(t *testing.T) {
 		t.Fatalf("舊列不該被算成任何事件: %#v", body.PageEvents)
 	}
 }
+
+// N-best 四格（§3.5，Codex 覆驗 P1）。
+//
+// 🔴 這條要守的核心是「缺欄 ≠ 只有一條」：前者是「這條路徑沒接上」，
+// 後者是「這台裝置就只給一條，N-best 對它是 no-op」。兩者合併的話，
+// 這個功能唯一還沒被驗證的前提就永遠量不出來。
+func TestNbestBuckets(t *testing.T) {
+	t.Setenv("ADMIN_JWT_SECRET", testSecret)
+	okAsr := func(over map[string]types.AttributeValue) map[string]types.AttributeValue {
+		m := map[string]types.AttributeValue{"asrOk": &types.AttributeValueMemberBOOL{Value: true}}
+		for k, v := range over {
+			m[k] = v
+		}
+		return eventItem("asr", m)
+	}
+	num := func(v string) types.AttributeValue { return &types.AttributeValueMemberN{Value: v} }
+
+	withFakeScanner(t, []map[string]types.AttributeValue{
+		// ① 舊版前端：兩個欄位都沒有
+		okAsr(nil),
+		// ② 只給一條（原生軌若真的是 no-op，資料會長這樣）
+		okAsr(map[string]types.AttributeValue{"asrCandidates": num("1"), "asrChosen": num("0")}),
+		// ③ 有多條，但選了首選 —— 這一層存在而沒改變結果
+		okAsr(map[string]types.AttributeValue{"asrCandidates": num("5"), "asrChosen": num("0")}),
+		// ④ 有多條，換掉了首選 —— 只有這一格代表 N-best 真的做了事
+		okAsr(map[string]types.AttributeValue{"asrCandidates": num("5"), "asrChosen": num("2")}),
+		// ⑤ 🔴 失敗的按壓不可以進這四格（它會灌大 Single，方向剛好是「確認推測」）
+		eventItem("asr", map[string]types.AttributeValue{
+			"asrOk":         &types.AttributeValueMemberBOOL{Value: false},
+			"asrError":      &types.AttributeValueMemberS{Value: "no-speech"},
+			"asrCandidates": num("0"),
+		}),
+	})
+
+	resp, err := handler(context.Background(), getRequest("Bearer "+tokenFor(t, adminrole.SuperAdmin)))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	var body struct {
+		PageEvents PageEvents `json:"pageEvents"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatalf("回應不是合法 JSON: %v", err)
+	}
+	e := body.PageEvents
+	if e.AsrNoCandidateInfo != 1 {
+		t.Fatalf("缺欄那筆要落在 noCandidateInfo, got %d", e.AsrNoCandidateInfo)
+	}
+	if e.AsrSingleCandidate != 1 {
+		t.Fatalf("只有一條那筆要落在 singleCandidate, got %d", e.AsrSingleCandidate)
+	}
+	if e.AsrTopKept != 1 {
+		t.Fatalf("多條但選首選要落在 topKept, got %d", e.AsrTopKept)
+	}
+	if e.AsrSwitched != 1 {
+		t.Fatalf("多條且換掉首選要落在 switched, got %d", e.AsrSwitched)
+	}
+	// 🔴 四格加總必須等於 AsrOk：少了這條，某一格漏算會表現成「那種情形沒發生過」。
+	if sum := e.AsrNoCandidateInfo + e.AsrSingleCandidate + e.AsrTopKept + e.AsrSwitched; sum != e.AsrOk {
+		t.Fatalf("四格加總 %d 應該等於 asrOk %d", sum, e.AsrOk)
+	}
+	if e.AsrOk != 4 || e.AsrFailed != 1 {
+		t.Fatalf("成敗算錯: ok=%d failed=%d", e.AsrOk, e.AsrFailed)
+	}
+}

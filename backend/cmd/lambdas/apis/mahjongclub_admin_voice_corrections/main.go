@@ -177,6 +177,20 @@ type PageEvents struct {
 	AsrOk     int            `json:"asrOk"`
 	AsrFailed int            `json:"asrFailed"`
 	AsrErrors map[string]int `json:"asrErrors"`
+
+	// ── N-best 的四格（DESIGN_APP.md §3.5，Codex 覆驗 P1）───────────────
+	//
+	// 🔴 四格互斥、加起來等於 AsrOk。**不可以少任何一格**，理由各不相同：
+	//   · NoInfo   缺欄。舊版前端、或這條路徑沒接上。**與「只有一條」不是同一件事**，
+	//              合併的話「原生軌到底給不給多條」永遠答不出來。
+	//   · Single   拿到 ≤1 條 ⇒ N-best 在這台裝置上是 no-op。這是目前最需要量的那格：
+	//              §3.5 讀原生碼推測原生軌可能就落在這裡，而推測不是量測。
+	//   · TopKept  有多條、選了首選。**這一層存在但沒改變結果**，是預期中的多數。
+	//   · Switched 有多條、換掉了首選。**只有這一格代表 N-best 真的做了事。**
+	AsrNoCandidateInfo int `json:"asrNoCandidateInfo"`
+	AsrSingleCandidate int `json:"asrSingleCandidate"`
+	AsrTopKept         int `json:"asrTopKept"`
+	AsrSwitched        int `json:"asrSwitched"`
 	// Other 是認得出是事件、但 kind 不在我們知道的清單裡的列。
 	// 🔴 不可以併進上面任何一格：寫入端加了新 kind 而這裡忘了跟上時，
 	// 「有一種新東西在寫入」與「沒有那種東西」必須分得出來。
@@ -365,6 +379,7 @@ func countEvent(acc *PageEvents, kind string, item map[string]types.AttributeVal
 	case "asr":
 		if boolAttr(item, "asrOk") {
 			acc.AsrOk++
+			countNbest(acc, item)
 			return
 		}
 		acc.AsrFailed++
@@ -378,6 +393,47 @@ func countEvent(acc *PageEvents, kind string, item map[string]types.AttributeVal
 	default:
 		acc.Other++
 	}
+}
+
+// countNbest 把一列成功的 asr 事件分進 N-best 四格（§3.5）。
+//
+// 🔴 前提：這四格只在 asrOk=true 的列上算。失敗的按壓沒有候選可言，
+// 混進來的話 Single 那格會被「使用者沒講話」灌大，而那格正是要拿來判斷
+// 「原生軌是不是根本沒給多條」的 —— 灌大的方向剛好是「確認我的推測」。
+func countNbest(acc *PageEvents, item map[string]types.AttributeValue) {
+	n, present := numAttrOK(item, "asrCandidates")
+	if !present {
+		acc.AsrNoCandidateInfo++
+		return
+	}
+	if n <= 1 {
+		acc.AsrSingleCandidate++
+		return
+	}
+	// 有多條候選。chosen 缺欄時算 TopKept 而不是另開一格：寫入端只有在
+	// candidates>0 時才會省略 chosen（不可能的組合），真的出現代表寫入端壞了，
+	// 而它會以「N-best 沒作用」的形態呈現 —— 保守的方向。
+	if k, ok := numAttrOK(item, "asrChosen"); ok && k > 0 {
+		acc.AsrSwitched++
+		return
+	}
+	acc.AsrTopKept++
+}
+
+// numAttrOK 與 numAttr 的差別只有一件事：它分得出「缺欄」與「值就是 0」。
+// 🔴 這兩個欄位的 0 都是真實讀數（candidates=0／chosen=0），所以這裡不能用 numAttr。
+func numAttrOK(item map[string]types.AttributeValue, name string) (int64, bool) {
+	v, ok := item[name].(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(v.Value, 10, 64)
+	if err != nil {
+		// 解析不了＝這一列的形狀壞了。當成「沒有這個資訊」而不是 0 ——
+		// 回 0 的話它會被算進 Single，偽裝成一個真實讀數。
+		return 0, false
+	}
+	return n, true
 }
 
 func respond(status int, body map[string]interface{}, headers map[string]string) (events.APIGatewayProxyResponse, error) {

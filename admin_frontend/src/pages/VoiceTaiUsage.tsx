@@ -253,6 +253,33 @@ const VoiceTaiUsage: React.FC = () => {
                         </div>
                     </div>
 
+                    {/* N-best 四格（§3.5）—— 這一層到底有沒有在做事 */}
+                    <div className={CARD}>
+                        <div className="flex items-center gap-3 mb-4 text-slate-400">
+                            <Mic size={20} />
+                            <span className="text-sm font-bold uppercase tracking-widest">N-best 候選</span>
+                        </div>
+                        <div className="text-4xl font-black text-white">{pctLabel(s.asrSwitchRate)}</div>
+                        <p className="text-slate-500 text-xs mt-2 leading-relaxed">
+                            換掉 ASR 首選的比率 = {n(s.asrSwitched)} / {n(s.asrWithCandidateInfo)} 次
+                            <strong className="text-slate-400">（分母只算量得到的那些，不是 {n(s.asrOk)} 次成功）</strong>。
+                        </p>
+                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                            <Health label="沒有候選資訊" n={s.asrNoCandidateInfo}
+                                why="缺欄＝舊版前端／這條路徑沒接上。這不是「只有一條」——它是「沒有儀器」。" />
+                            <Health label="只有 1 條" n={s.asrSingleCandidate}
+                                why="那台裝置只給一條候選 ⇒ N-best 對它是 no-op。原生軌是不是這樣，就看這一格。" />
+                            <Health label="有多條・選首選" n={s.asrTopKept}
+                                why="這一層存在但沒改變結果。預期中的多數，不是問題。" />
+                            <Health label="有多條・換掉了" n={s.asrSwitched}
+                                why="只有這一格代表 N-best 真的做了事。" />
+                        </div>
+                        <p className="text-amber-300/70 text-xs mt-3 leading-relaxed">
+                            ⚠️ <strong>「換掉了」不等於「換對了」</strong>：這裡量的是這一層有沒有動作，
+                            不是它動得對不對。要判斷對不對只能看訂正資料（使用者有沒有再改回來）。
+                        </p>
+                    </div>
+
                     {/* ④ 資料健康 —— 平常全是 0，不是零的時候要看得出來 */}
                     <div>
                         <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">

@@ -88,3 +88,71 @@ test('D4g-6 訂正列自己說自己是 correction，不靠後端預設值', () 
 test('D4g-7 三種 kind 是同一份名單 —— 後端 allowlist 與這裡不可以各寫一份', () => {
   assert.deepEqual([...EVENT_KINDS], ['open', 'asr', 'correction']);
 });
+
+// ── N-best 可觀測性（§3.5，Codex 覆驗 P1）──────────────────────────────
+//
+// 🔴 這一組全部在守同一件事：**缺欄、0、1 是三種不同的事實**。
+//    合併其中任何兩個，「原生軌到底給不給多條候選」就永遠答不出來，
+//    而那正是 N-best 這一層唯一還沒被驗證的前提。
+
+test('D4g-8 asr 成功且有多條候選：兩個數都要記下來', () => {
+  const p = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'native', candidateCount: 5, chosenIndex: 2 },
+  });
+  assert.equal(p.asrCandidates, 5);
+  assert.equal(p.asrChosen, 2);
+});
+
+test('D4g-9 🔴 「有候選但選了首選」必須是可記錄的狀態（chosen=0 不是缺欄）', () => {
+  // 這是這一層最可能的真實結果。若寫成「有 chosen 才帶 candidates」或
+  // 用真值判斷（`if (k)`），chosen=0 會被吞掉 ⇒ 後台看到的是「這台沒給候選」，
+  // 方向剛好相反。
+  const p = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'web', candidateCount: 3, chosenIndex: 0 },
+  });
+  assert.equal(p.asrCandidates, 3);
+  assert.equal(p.asrChosen, 0);
+  assert.equal('asrChosen' in p, true, 'chosen=0 是一個值，不是「沒有值」');
+});
+
+test('D4g-10 🔴 只有一條候選（原生軌 no-op 的形狀）要與缺欄分得出來', () => {
+  const one = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'native', candidateCount: 1, chosenIndex: 0 },
+  });
+  assert.equal(one.asrCandidates, 1);
+
+  // 沒帶 ⇒ 兩個欄位都不出現。這一格的意思是「舊版前端／這條路徑沒接上」，
+  // 與「這台只給一條」是完全不同的處置。
+  const legacy = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'native' },
+  });
+  assert.equal('asrCandidates' in legacy, false);
+  assert.equal('asrChosen' in legacy, false);
+});
+
+test('D4g-11 一條候選都沒有：candidates=0，而 chosen 缺欄', () => {
+  const p = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'web', candidateCount: 0 },
+  });
+  assert.equal(p.asrCandidates, 0, '0 要送出去，不可以當成「沒帶」');
+  assert.equal('asrChosen' in p, false, '沒東西可選時「選了第幾條」沒有意義');
+});
+
+test('D4g-12 壞掉的數字整個不帶，不 clamp 成 0（誠實地落進「舊版前端」那一格）', () => {
+  const p = buildEvent({
+    kind: 'asr', ts: 1756800000, rulesetVersion: '0.1.0',
+    asr: { ok: true, track: 'web', candidateCount: -1, chosenIndex: 1.5 },
+  });
+  assert.equal('asrCandidates' in p, false);
+  assert.equal('asrChosen' in p, false);
+});
+
+test('D4g-13 open 事件不得長出 N-best 欄位（它們是 asr 專屬）', () => {
+  const p = buildEvent({ kind: 'open', ts: 1756800000, rulesetVersion: '0.1.0' });
+  assert.deepEqual(Object.keys(p).sort(), ['engineVersion', 'kind', 'rulesetVersion', 'ts']);
+});
