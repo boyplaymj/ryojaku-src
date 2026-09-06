@@ -9,7 +9,7 @@ import CreateGroupStage1 from '../components/CreateGroupStage1';
 import CreateGroupStage2, { type ImageItem } from '../components/CreateGroupStage2';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
-import { buildCreateGamePayload, validateCreateGame } from '../utils/createGroupForm';
+import { buildCreateGamePayload, validateCreateGame, validateCreateGameStage1 } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
 import { createPortal } from 'react-dom';
@@ -39,6 +39,9 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
     const [isMapOpen, setIsMapOpen] = useState(false);
     const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
+    // [A3-c2] 兩步驟精靈：只控制哪一段掛在畫面上，API 仍只在第 2 步送出時呼叫一次。
+    // 刻意不存進草稿：重新進頁面一律從第 1 步開始（草稿可能只填了一半）。
+    const [step, setStep] = useState<1 | 2>(1);
 
     // 個人資料檢查相關狀態
     const [showProfileModal, setShowProfileModal] = useState(false);
@@ -347,6 +350,17 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (step === 1) {
+            // Stage1 卸載後原生 required 不再跑，這裡補上同一組檢核（含 stakes）
+            const stage1Error = validateCreateGameStage1({ formData, coordinates, now: Date.now() });
+            if (stage1Error) {
+                showToast(stage1Error, 'warning');
+                return;
+            }
+            setStep(2);
+            window.scrollTo({ top: 0, behavior: 'auto' });
+            return;
+        }
         setShowTermsAgreement(true);
     };
 
@@ -524,7 +538,16 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
 
             <div className="px-4 py-4 space-y-5">
                 <form onSubmit={handleSubmit} className="space-y-5">
-                    {/* Quick Action: Template Selection */}
+                    {/* 步驟指示（[A3-c2] 兩步驟精靈；class 全部沿用兩個 Stage 元件既有的標籤語彙） */}
+                    <div className="flex items-center gap-2 text-[0.6875rem] font-bold text-neutral-400 uppercase tracking-widest ml-1">
+                        <span className={step === 1 ? 'text-[#c5a059]' : undefined}>1</span>
+                        <span>─</span>
+                        <span className={step === 2 ? 'text-[#c5a059]' : undefined}>2</span>
+                        <span className="ml-auto">步驟 {step} / 2</span>
+                    </div>
+
+                    {/* Quick Action: Template Selection（只在第 1 步：它會覆蓋整張表單） */}
+                    {step === 1 && (
                     <div
                         onClick={() => setIsTemplateModalOpen(true)}
                         className="relative group cursor-pointer overflow-hidden rounded-lg bg-white border border-black/[0.03] p-4 shadow-sm transition-all hover:bg-neutral-50 active:scale-[0.98]"
@@ -542,8 +565,10 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                             </div>
                         </div>
                     </div>
+                    )}
 
                     {/* 第一段：團局種類／開始時間／缺幾人與籌碼／麻將規則／地點資訊（[A3-b2] 抽到 components/CreateGroupStage1.tsx） */}
+                    {step === 1 && (
                     <CreateGroupStage1
                         startTime={formData.startTime}
                         openDatePicker={() => setShowDatePicker(true)}
@@ -561,6 +586,7 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         coordinates={coordinates}
                         openMap={() => setIsMapOpen(true)}
                     />
+                    )}
 
                     <MapPicker
                         isOpen={isMapOpen}
@@ -571,6 +597,7 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                     />
 
                     {/* 第二段：環境設施／照片／場地特色／玩家限制（[A3-b1] 抽到 components/CreateGroupStage2.tsx） */}
+                    {step === 2 && (
                     <CreateGroupStage2
                         venueType={venueType} setVenueType={setVenueType}
                         skillLevel={skillLevel} setSkillLevel={setSkillLevel}
@@ -589,17 +616,38 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         handleListChange={handleListChange}
                         removeListItem={removeListItem}
                     />
+                    )}
 
                     {/* Submit Button */}
                     <div className="pt-6 pb-10 space-y-3">
-                        <AppButton
-                            type="submit"
-                            isLoading={isSubmitting}
-                            disabled={coordinates.latitude === 0 && coordinates.longitude === 0}
-                            className="w-full"
-                        >
-                            🎲 確認發起團局
-                        </AppButton>
+                        {step === 1 ? (
+                            <AppButton
+                                type="submit"
+                                disabled={coordinates.latitude === 0 && coordinates.longitude === 0}
+                                className="w-full"
+                            >
+                                下一步
+                            </AppButton>
+                        ) : (
+                            <>
+                                <AppButton
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={() => { setStep(1); window.scrollTo({ top: 0, behavior: 'auto' }); }}
+                                    className="w-full"
+                                >
+                                    上一步
+                                </AppButton>
+                                <AppButton
+                                    type="submit"
+                                    isLoading={isSubmitting}
+                                    disabled={coordinates.latitude === 0 && coordinates.longitude === 0}
+                                    className="w-full"
+                                >
+                                    🎲 確認發起團局
+                                </AppButton>
+                            </>
+                        )}
 
                         {isLocalhost && (
                             <div className="space-y-3">
