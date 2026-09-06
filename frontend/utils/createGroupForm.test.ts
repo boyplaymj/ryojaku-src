@@ -11,8 +11,10 @@ import assert from 'node:assert/strict';
 import {
     buildCreateGamePayload,
     validateCreateGame,
+    validateCreateGameStage1,
     type BuildCreateGamePayloadInput,
     type ValidateCreateGameInput,
+    type ValidateCreateGameStage1Input,
     type VenueOptions,
 } from './createGroupForm.ts';
 import type { CreateMahjongGamePayload } from '../types';
@@ -275,4 +277,83 @@ test('A3a-25 四條同時不成立 → 仍是 ①（整條鏈的第一個）', (
 test('A3a-26 搬出來時的行為：startTime 是壞字串 → NaN < now 為 false ⇒ 檢核①放行（不在本塊修）', () => {
     // 這條釘的是缺陷本身：datetime-local 不會給壞字串，但一給就會漏過 ①。
     assert.equal(validateCreateGame(validateInput({ formData: { ...validateInput().formData, startTime: 'not-a-date' } })), null);
+});
+
+// ───────────────────────── validateCreateGameStage1（[A3-c1]） ─────────────────────────
+//
+// 精靈第 1 步 → 第 2 步的閘門。它的四道檢核是**委派**給 validateCreateGame 的，
+// 所以下面 A3c-02..05 一律用「兩個函式的回傳相等」比對，不把訊息字串再抄一份 ——
+// 改了 validateCreateGame 的訊息時，這裡不會變成第二份會漂掉的真理。
+
+const stage1Input = (over: Partial<ValidateCreateGameStage1Input> = {}): ValidateCreateGameStage1Input => ({
+    formData: { ...validateInput().formData, stakes: baseForm().stakes },
+    coordinates: { latitude: 25.03, longitude: 121.56 },
+    now: NOW,
+    ...over,
+});
+
+test('A3c-01 全部合格（含 stakes 有值）→ null', () => {
+    assert.equal(validateCreateGameStage1(stage1Input()), null);
+});
+
+test('A3c-02 委派 ①：開局時間早於現在 → 與 validateCreateGame 回同一句（不另抄字串）', () => {
+    const x = stage1Input({ formData: { ...stage1Input().formData, startTime: new Date(NOW - MIN).toISOString() } });
+    assert.notEqual(validateCreateGame(x), null); // 正控：這份輸入確實會被 ① 擋
+    assert.equal(validateCreateGameStage1(x), validateCreateGame(x));
+});
+
+test('A3c-03 委派 ②：座標 (0,0) → 與 validateCreateGame 回同一句', () => {
+    const x = stage1Input({ coordinates: { latitude: 0, longitude: 0 } });
+    assert.notEqual(validateCreateGame(x), null);
+    assert.equal(validateCreateGameStage1(x), validateCreateGame(x));
+});
+
+test('A3c-04 委派 ③：placeName 空白 → 與 validateCreateGame 回同一句', () => {
+    const x = stage1Input({ formData: { ...stage1Input().formData, placeName: '  ' } });
+    assert.notEqual(validateCreateGame(x), null);
+    assert.equal(validateCreateGameStage1(x), validateCreateGame(x));
+});
+
+test('A3c-05 委派 ④：location 空白 → 與 validateCreateGame 回同一句', () => {
+    const x = stage1Input({ formData: { ...stage1Input().formData, location: '' } });
+    assert.notEqual(validateCreateGame(x), null);
+    assert.equal(validateCreateGameStage1(x), validateCreateGame(x));
+});
+
+test('A3c-06 ⑤ stakes 空字串 → 請輸入籌碼（這一道只有 Stage1 閘門在擋）', () => {
+    assert.equal(
+        validateCreateGameStage1(stage1Input({ formData: { ...stage1Input().formData, stakes: '' } })),
+        '請輸入籌碼',
+    );
+});
+
+test('A3c-07 ⑤ stakes 純空白 → 請輸入籌碼（釘 .trim()）', () => {
+    assert.equal(
+        validateCreateGameStage1(stage1Input({ formData: { ...stage1Input().formData, stakes: '   ' } })),
+        '請輸入籌碼',
+    );
+});
+
+test('A3c-08 順序 ③>⑤：stakes 空 且 placeName 空 → 回場地名稱那條（四道在前，stakes 不插隊）', () => {
+    assert.equal(
+        validateCreateGameStage1(stage1Input({ formData: { ...stage1Input().formData, stakes: '', placeName: '' } })),
+        '請輸入場地名稱',
+    );
+});
+
+test('A3c-09 順序 ①>⑤：stakes 空 且 startTime 在過去 → 回時間那條（整條鏈的第一個）', () => {
+    assert.equal(
+        validateCreateGameStage1(stage1Input({
+            formData: { ...stage1Input().formData, stakes: '', startTime: new Date(NOW - MIN).toISOString() },
+        })),
+        '開局時間不能早於目前時間',
+    );
+});
+
+test('A3c-10 邊界反控：validateCreateGame 自己**不**檢查 stakes —— 這個責任刻意留在 Stage1 閘門、不下放；有人把 stakes 搬進去時這條會紅，逼他做一次決定', () => {
+    // 同一份「stakes 空、其餘全合格」的輸入：validateCreateGame 放行、Stage1 閘門擋下。
+    // 兩個斷言缺一不可 —— 只有前者的話，「validateCreateGame 沒檢查」與「輸入其實合格」分不出來。
+    const x = stage1Input({ formData: { ...stage1Input().formData, stakes: '' } });
+    assert.equal(validateCreateGame(x), null);
+    assert.equal(validateCreateGameStage1(x), '請輸入籌碼');
 });

@@ -132,3 +132,41 @@ export function validateCreateGame(input: ValidateCreateGameInput): string | nul
 
     return null;
 }
+
+export interface ValidateCreateGameStage1Input {
+    formData: Pick<CreateMahjongGamePayload, 'startTime' | 'placeName' | 'location' | 'stakes'>;
+    coordinates: Coordinates;
+    /** 「現在」的毫秒數。與 validateCreateGame 同義，函式內不讀真時鐘。 */
+    now: number;
+}
+
+/**
+ * [A3-c1] 精靈第 1 步 → 第 2 步的閘門：Stage1 該擋的東西**全部**用程式擋起來。
+ *
+ * 為什麼需要它：整張表單只有兩個原生 `required`（`stakes` 與 `placeName`），都在 Stage1；
+ * 其中 `stakes` **從來沒有程式檢核**，只靠瀏覽器原生 `required`。畫面分成兩步之後，
+ * 最終送出時 Stage1 已經卸載 ⇒ 欄位不在 DOM 裡，原生驗證不會跑，那個 `required` 靜默失效，
+ * 而 `validateCreateGame` 也不檢查它。⇒ 這是行為保存，不是新功能。
+ *
+ * 順序不可換：
+ * ① 先把四道檢核**委派**給 `validateCreateGame`（不抄它的算術 —— 抄一份的話，
+ *    以後改 `validateCreateGame` 時這裡會靜靜過期），非 null 就直接回傳。
+ * ② 四道都過了，才檢查 `stakes` 空白 → '請輸入籌碼'。
+ *
+ * `stakes` 排最後的理由：既有四道的順序被 26 條測試釘死，不能插隊；而在真的瀏覽器裡，
+ * 原生 `required` 本來就會在 onSubmit 之前先跳氣泡，所以**使用者看到的順序不會因為
+ * 排最後而改變** —— 本函式是原生驗證的後備（原生驗證可被繞過、且欄位卸載後就不跑），
+ * 不是它的替代品。
+ */
+export function validateCreateGameStage1(input: ValidateCreateGameStage1Input): string | null {
+    const delegated = validateCreateGame(input);
+    if (delegated !== null) {
+        return delegated;
+    }
+
+    if (!input.formData.stakes.trim()) {
+        return '請輸入籌碼';
+    }
+
+    return null;
+}
