@@ -6,6 +6,15 @@ import { Geo } from '@aws-amplify/geo';
 import { createMap } from 'maplibre-gl-js-amplify';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import {
+    TAIWAN_MAX_BOUNDS,
+    MAP_MIN_ZOOM,
+    MAP_MAX_ZOOM,
+    MAP_DEFAULT_ZOOM,
+    isWithinMapBounds,
+    shouldReverseGeocode,
+    type LatLng,
+} from '../utils/mapCost';
 
 // Configure Amplify v6
 Amplify.configure({
@@ -62,6 +71,13 @@ const MapPicker: React.FC<MapPickerProps> = ({
     // Remove searchTimeout as we are moving to manual search
     const isProgrammaticMove = useRef(false);
 
+    /**
+     * 上一次**真的送出去問過**的座標（[C1]，§9）。
+     * 🔴 不可以拿 `coords` 代替 —— `coords` 每一幀 `move` 都在更新，
+     *    它是「現在指到哪」，而這裡要的是「上次花錢問的是哪一點」。
+     */
+    const lastGeocodedRef = useRef<LatLng | null>(null);
+
     useEffect(() => {
         let map: maplibregl.Map;
 
@@ -71,9 +87,15 @@ const MapPicker: React.FC<MapPickerProps> = ({
                     map = await createMap({
                         container: mapContainerRef.current,
                         center: [initialLng, initialLat],
-                        zoom: 16,
+                        zoom: MAP_DEFAULT_ZOOM,
                         bearing: 0,
                         pitch: 0,
+                        // [C1] 地圖成本止血（§9.2）。這三個選項由 createMap 原封不動
+                        // 轉交給 maplibregl.Map —— 實查 maplibre-gl-js-amplify 的
+                        // createMapLibreMap()：它只抽掉 region／mapConstructor，其餘展開。
+                        maxBounds: TAIWAN_MAX_BOUNDS,
+                        minZoom: MAP_MIN_ZOOM,
+                        maxZoom: MAP_MAX_ZOOM,
                     });
                     mapInstance.current = map;
 
@@ -98,6 +120,11 @@ const MapPicker: React.FC<MapPickerProps> = ({
                             return;
                         }
                         const center = map.getCenter();
+                        // [C1] 沒移動多少就不必再花一次 Places 請求（§9，shouldReverseGeocode）。
+                        // ⚠️ 它 fail-open：沒問過就一定問，所以第一次一定會進去。
+                        if (!shouldReverseGeocode(lastGeocodedRef.current, { lat: center.lat, lng: center.lng })) {
+                            return;
+                        }
                         reverseGeocode(center.lat, center.lng);
                     });
 
@@ -108,12 +135,22 @@ const MapPicker: React.FC<MapPickerProps> = ({
                     if (initialLat === 25.033976 && initialLng === 121.564421) {
                         navigator.geolocation?.getCurrentPosition((position) => {
                             const { latitude, longitude } = position.coords;
-                            if (mapInstance.current) {
-                                isProgrammaticMove.current = true;
-                                mapInstance.current.flyTo({ center: [longitude, latitude], zoom: 16 });
-                                reverseGeocode(latitude, longitude);
-                                isProgrammaticMove.current = false;
-                            }
+                            if (!mapInstance.current) return;
+
+                            // [C1] 框外不要飛過去（§9，isWithinMapBounds）。
+                            // maxBounds 會把 flyTo 的目標**默默夾到邊界**，而我們接著會對
+                            // 那個被夾過的座標問地址 ⇒ 畫面上出現一個他從沒去過的地點，
+                            // 沒有任何錯誤訊息。⇒ 寧可留在預設的台北。
+                            if (!isWithinMapBounds({ lat: latitude, lng: longitude })) return;
+
+                            // 🔴 旗標要**留著**讓 moveend 去消耗，不可以在這裡同步關掉。
+                            //    flyTo 是動畫，moveend 在動畫結束時才觸發；原本的寫法
+                            //    在同一個 tick 就把旗標設回 false ⇒ moveend 不會提早返回，
+                            //    於是**同一個座標被問了兩次地址**（一次這裡、一次 moveend）。
+                            //    對照組就在本檔裡：forwardGeocode() 設了 true 之後沒有關，那個是對的。
+                            isProgrammaticMove.current = true;
+                            mapInstance.current.flyTo({ center: [longitude, latitude], zoom: MAP_DEFAULT_ZOOM });
+                            reverseGeocode(latitude, longitude);
                         });
                     }
                 } catch (error) {
@@ -133,6 +170,8 @@ const MapPicker: React.FC<MapPickerProps> = ({
     }, [isOpen]);
 
     const reverseGeocode = async (lat: number, lng: number) => {
+        // [C1] 記在送出**之前**：失敗了也算問過這一點，否則同一點會一直重試重花錢。
+        lastGeocodedRef.current = { lat, lng };
         setIsReverseGeocoding(true);
         setAddressError('');
         try {
@@ -207,7 +246,7 @@ const MapPicker: React.FC<MapPickerProps> = ({
 
                 if (mapInstance.current) {
                     isProgrammaticMove.current = true;
-                    mapInstance.current.flyTo({ center: [longitude, latitude], zoom: 16 });
+                    mapInstance.current.flyTo({ center: [longitude, latitude], zoom: MAP_DEFAULT_ZOOM });
                     setCoords({ lat: latitude, lng: longitude });
                 }
 
@@ -242,9 +281,19 @@ const MapPicker: React.FC<MapPickerProps> = ({
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition((position) => {
                 const { latitude, longitude } = position.coords;
-                if (mapInstance.current) {
-                    mapInstance.current.flyTo({ center: [longitude, latitude], zoom: 16 });
+                if (!mapInstance.current) return;
+
+                // [C1] 同上的夾邊界問題。差別是**這一條路是使用者主動按的** ——
+                // 開圖時的自動定位不動作沒人會發現，按鈕不動作會被讀成「壞了」，
+                // 所以這裡要講話。
+                if (!isWithinMapBounds({ lat: latitude, lng: longitude })) {
+                    setAddressError('目前位置不在服務範圍內，請直接在地圖上選擇');
+                    return;
                 }
+
+                // ⚠️ 這裡**刻意不設** isProgrammaticMove：使用者要的就是「跳到我這裡並更新地址」，
+                //    地址由隨後的 moveend 去問（那一次也會過 shouldReverseGeocode 的距離閘）。
+                mapInstance.current.flyTo({ center: [longitude, latitude], zoom: MAP_DEFAULT_ZOOM });
             });
         }
     };
