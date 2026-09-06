@@ -7,6 +7,7 @@ import MapPicker from '../components/MapPicker';
 import ProfileIncompleteModal from '../components/ProfileIncompleteModal';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
+import { buildCreateGamePayload, validateCreateGame } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
 import { createPortal } from 'react-dom';
@@ -446,77 +447,21 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
 
             console.log('✨ [CreateGame] Profile complete, proceeding with validation');
 
-            // Validate start time
-            const selectedTime = new Date(formData.startTime).getTime();
-            const now = new Date();
-            // Reset seconds and milliseconds to 0 for fair comparison with datetime-local input
-            now.setSeconds(0);
-            now.setMilliseconds(0);
-
-            if (selectedTime < now.getTime()) {
-                showToast('開局時間不能早於目前時間', 'warning');
+            // 四道檢核（開局時間／定位／場地名稱／地址），順序與訊息在 utils/createGroupForm.ts
+            const validationError = validateCreateGame({ formData, coordinates, now: Date.now() });
+            if (validationError) {
+                showToast(validationError, 'warning');
                 setIsSubmitting(false);
                 return;
             }
 
-            // Validate coordinates
-            if (coordinates.latitude === 0 && coordinates.longitude === 0) {
-                showToast('請完成地址定位', 'warning');
-                setIsSubmitting(false);
-                return;
-            }
-
-            // Validate required fields
-            if (!formData.placeName.trim()) {
-                showToast('請輸入場地名稱', 'warning');
-                setIsSubmitting(false);
-                return;
-            }
-
-            if (!formData.location.trim()) {
-                showToast('請輸入完整地址', 'warning');
-                setIsSubmitting(false);
-                return;
-            }
-
-            // Convert datetime-local to ISO 8601 format
-            const startTimeISO = new Date(formData.startTime).toISOString();
-
-            // Filter out empty strings from arrays
-            const cleanManualFeatures = formData.features.filter(f => f.trim() !== '');
-
-            // 整合新選項與場地特色
-            const cleanFeatures = [
-                smoking,
-                ...parking,
-                elevator,
-                mahjongTable === '電動桌' && tableModel.trim()
-                    ? `電動桌:${tableModel.trim()}`
-                    : mahjongTable,
-                venueType,
-                skillLevel,
-                ...cleanManualFeatures
-            ].filter(f => f && f.trim() !== '');
-
-            const cleanRules = formData.rules.filter(r => r.trim() !== '');
-            const cleanRestrictions = formData.restrictions.filter(r => r.trim() !== '');
-
-            // Collect all successfully uploaded URLs
-            const uploadedImageUrls = imageItems
-                .filter(item => item.status === 'done' && item.url)
-                .map(item => item.url as string);
-
-            // Prepare game data matching API requirements
-            const gameData: CreateMahjongGamePayload = {
-                ...formData,
-                startTime: startTimeISO,
-                latitude: coordinates.latitude,
-                longitude: coordinates.longitude,
-                rules: cleanRules,
-                features: cleanFeatures,
-                restrictions: cleanRestrictions,
-                images: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined
-            };
+            // Prepare game data matching API requirements（組裝邏輯在 utils/createGroupForm.ts）
+            const gameData: CreateMahjongGamePayload = buildCreateGamePayload({
+                formData,
+                coordinates,
+                options: { smoking, parking, elevator, mahjongTable, tableModel, venueType, skillLevel },
+                imageItems
+            });
 
             const result = await onCreate(gameData);
 
