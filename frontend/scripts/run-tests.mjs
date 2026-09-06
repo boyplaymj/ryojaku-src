@@ -50,7 +50,12 @@ const MIN = [22, 18, 0];
 //      （實測 2026-09-02：同一天內 36 → 44，因為 maintenanceSignal.test.ts 正被改）。
 //      在那上面訂緊下限只會製造假警報，而假警報訓練出來的忽略是不可逆的 ⇒ 只守「沒有歸零」。
 const DEFAULT_TARGETS = [
-    { glob: 'utils/*.test.ts', min: 3, minTests: 20 },
+    // [A3-a] 2026-09-06 加了 createGroupForm.test.ts（26 條）：min 3→4、minTests 20→270。
+    //   當時實測 22 檔／291 條。270 = 「整份 createGroupForm.test.ts 被清空」（→265）會紅，
+    //   同時給別條 session 同步刪改留 21 條的餘裕（上面「刻意不對稱」那條仍然成立：
+    //   這不是釘死實際值，是讓「這次抽取的回歸網整個消失」不再與綠燈同形）。
+    //   ⚠️ 之後有人刪掉別的測試檔而這裡轉紅，是要抬回還是降下，看當時的實際條數決定。
+    { glob: 'utils/*.test.ts', min: 4, minTests: 270 },
     // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）
     { glob: 'engine/*.test.ts', min: 2, minTests: 9 },
 ];
