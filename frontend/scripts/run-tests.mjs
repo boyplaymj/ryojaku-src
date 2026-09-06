@@ -50,12 +50,20 @@ const MIN = [22, 18, 0];
 //      （實測 2026-09-02：同一天內 36 → 44，因為 maintenanceSignal.test.ts 正被改）。
 //      在那上面訂緊下限只會製造假警報，而假警報訓練出來的忽略是不可逆的 ⇒ 只守「沒有歸零」。
 const DEFAULT_TARGETS = [
-    // [A3-a] 2026-09-06 加了 createGroupForm.test.ts（26 條）：min 3→4、minTests 20→270。
-    //   當時實測 22 檔／291 條。270 = 「整份 createGroupForm.test.ts 被清空」（→265）會紅，
-    //   同時給別條 session 同步刪改留 21 條的餘裕（上面「刻意不對稱」那條仍然成立：
-    //   這不是釘死實際值，是讓「這次抽取的回歸網整個消失」不再與綠燈同形）。
-    //   ⚠️ 之後有人刪掉別的測試檔而這裡轉紅，是要抬回還是降下，看當時的實際條數決定。
-    { glob: 'utils/*.test.ts', min: 4, minTests: 270 },
+    // [A3-a] 2026-09-06 加了 createGroupForm.test.ts（26 條）⇒ min 3→4（檔數那道跟著抬）。
+    //   ⚠️ minTests **維持 20**，刻意不動：見下面那列單檔 target。
+    { glob: 'utils/*.test.ts', min: 4, minTests: 20 },
+    // [A3-a] 2026-09-06 新增這一列，取代「把全域 minTests 抬到 270」那個作法。
+    //   要擋的風險是「createGroupForm.test.ts 這份回歸網整個消失／被清空」——
+    //   而全域總數對它幾乎沒有鑑別力：當時 291 條，抬到 270 只留 21 條餘裕，
+    //   而 voiceTai.test.ts 剛好 21 條 ⇒ **刪掉它之後是 270，`270 < 270` 為 false，照樣綠**
+    //   （實測，2026-09-06）。換句話說那個數字擋得住的東西比它看起來的少，
+    //   代價卻是把別條 session 的正常刪改變成全機假警報 —— 上面那條註解正是在講這個。
+    //   ⇒ 照本檔自己的原則辦：**誰的下限就數誰**。這一列只數這一個檔。
+    //   ⚠️ 這個檔會被跑兩次（一次在 utils/*，一次在這裡），26 條不到一秒，可忽略。
+    //   ⚠️ 檔被整個刪掉時走的是 min 那道：expandTarget 對不含 * 的字面路徑回 []，
+    //      0 < 1 ⇒ rc=2（不是靠 minTests）。
+    { glob: 'utils/createGroupForm.test.ts', min: 1, minTests: 20 },
     // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）
     { glob: 'engine/*.test.ts', min: 2, minTests: 9 },
 ];
