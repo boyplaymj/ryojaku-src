@@ -37,3 +37,8 @@ migration/_synthetic/
 
 # Python 快取(infra/ 的驗收腳本被 import 或 py_compile 時會產生,原規則只蓋 migration/)
 __pycache__/
+
+# e2e harness 頁面：執行時從 frontend/index.html 現生、跑完即刪。
+# 刻意不進版控 —— 存靜態副本的話 index.html 一改它就靜靜過期，
+# 而過期的 harness 跟正常的 harness 在畫面上長得一模一樣。
+frontend/e2e/_generated.harness.html
