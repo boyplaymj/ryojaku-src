@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -143,12 +144,27 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// 🔴 [A3-l] 退點之前要先知道「這一次是不是真的由我們把它從未取消改成取消」。
+	//    `saveGame` 是無條件 PutItem ⇒ 重複呼叫這支 API 會重複成功，
+	//    而退點如果只看「這次呼叫成功了」就會**每呼叫一次退一次 120 點**。
+	//    ⚠️ 下面 saveGame 帶了條件式（status <> cancelled），所以競態也擋得住：
+	//      兩個併發請求只有一個寫得進去，另一個拿到 ConditionalCheckFailed。
+	prevStatus, _ := game["status"].(string)
+
 	// Update game status to cancelled
 	game["status"] = "cancelled"
 	game["updatedAt"] = time.Now().Format(time.RFC3339)
 
-	err = saveGame(ctx, game)
+	err = saveGameIfNotCancelled(ctx, game)
 	if err != nil {
+		if isConditionalCheckFailed(err) {
+			// 已經是 cancelled ⇒ 這次沒有造成任何狀態改變，**不可以**退點。
+			// 回 200：對呼叫端而言「這個局已經取消了」是它要的結果（冪等）。
+			log.Printf("[A3-l] game %s 已是 cancelled，本次不退點（冪等）", req.GameID)
+			response := Response{Success: true, Data: map[string]interface{}{"gameId": req.GameID, "alreadyCancelled": true}}
+			body, _ := json.Marshal(response)
+			return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Headers: headers, Body: string(body)}, nil
+		}
 		log.Printf("Failed to cancel game: %v", err)
 		response := Response{Success: false, Error: "取消團局失敗"}
 		body, _ := json.Marshal(response)
@@ -190,6 +206,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Also notify pending registrations
 	allRegistrations, err := getGameRegistrations(ctx, req.GameID)
+	regQueryOK := err == nil
 	if err == nil {
 		for _, reg := range allRegistrations {
 			if status, ok := reg["status"].(string); ok && status == "pending" {
@@ -217,10 +234,63 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	// Wait for all notifications to be sent
 	wg.Wait()
 
+	// ── [A3-l] 無人報名就全額退還發團費（使用者拍板 2026-09-07）
+	//
+	// 🔴 判準本身住在 `shared.ShouldRefundOnCancel`，因為它的兩個輸入在真實環境裡
+	//    很難湊齊（要一個「有人申請、主揪還沒核准」的局）⇒ 寫在這裡就沒有尺。
+	// 🔴 **查不到報名清單時一律不退**：`getGameRegistrations` 失敗會回空 slice，
+	//    而「查到 0 筆」與「查詢炸了」在 `len()` 上逐字相同 —— 拿後者去退點
+	//    等於把查詢故障變成發錢。
+	// ⚠️ `prevStatus` 那道已經擋掉重複呼叫；這裡再確認一次是為了讓「為什麼退」
+	//    在一個地方讀得完。
+	refunded := 0
+	{
+		currentPlayers := 0
+		if cp, ok := game["currentPlayers"].(float64); ok {
+			currentPlayers = int(cp)
+		}
+		// 🔴 判斷整段住在 `shared.DecideCancelRefund`（有測試）。這裡只做接線。
+		//    ⚠️ 三個分支答錯的後果都是「把點數送出去」，所以它不可以是 inline 的 if。
+		doRefund, reason := shared.DecideCancelRefund(regQueryOK, prevStatus, len(allRegistrations), currentPlayers)
+		log.Printf("[A3-l] game %s 退點判定：%s（報名 %d 筆／currentPlayers %d／查詢OK=%v／前狀態=%q）",
+			req.GameID, reason, len(allRegistrations), currentPlayers, regQueryOK, prevStatus)
+		if doRefund {
+			before, after, rerr := addUserPoints(ctx, userID, shared.CreateGameCost)
+			if rerr != nil {
+				// 🔴 退不成不可以讓整支 API 變成失敗：局**已經**取消了，
+				//    回 500 會讓前端以為沒取消而重試，重試又被冪等擋掉 ⇒ 使用者兩頭落空。
+				//    ⇒ 記 log（這是唯一的線索），照常回成功。
+				log.Printf("[A3-l] ⚠️ game %s 退點失敗（局已取消）：%v", req.GameID, rerr)
+			} else {
+				refunded = shared.CreateGameCost
+				// 🔴 帳本這一筆**同步**寫，不要 `go func()`。
+				//    本檔其他地方與 `web_create_game` 都用 goroutine，那是因為它們後面
+				//    還有工作、goroutine 有時間跑完。這裡緊接著就 return ⇒
+				//    Lambda 回應後 runtime 會凍結，那筆 log 可能**永遠不會寫**，
+				//    而外觀是「退點成功、帳本上沒有這筆」——事後查不出點數哪來的。
+				//    代價是一次 DDB 寫入的延遲；換的是點數異動一定有紀錄。
+				logCtx, logCancel := context.WithTimeout(ctx, 5*time.Second)
+				if lerr := shared.RecordPointChangeShadow(logCtx, dynamoClient, tablePrefix, userID,
+					shared.CreateGameCost, shared.PointTypeCredit, before, after,
+					"取消團局（無人報名）退還發團費", "web_cancel_game_refund", nil); lerr != nil {
+					// 點數已經加回去了，帳本沒寫成 ⇒ 這是**對帳會發現的差異**，要留線索。
+					log.Printf("[A3-l] 🔴 game %s 已退 %d 點但帳本寫入失敗：%v",
+						req.GameID, shared.CreateGameCost, lerr)
+				}
+				logCancel()
+			}
+		}
+	}
+
+	msg := "✅ 團局已取消，已通知所有報名者"
+	if refunded > 0 {
+		msg = fmt.Sprintf("✅ 團局已取消，因無人報名已退還 %d 點", refunded)
+	}
 	response := Response{
 		Success: true,
 		Data: map[string]interface{}{
-			"message": "✅ 團局已取消，已通知所有報名者",
+			"message":        msg,
+			"pointsRefunded": refunded,
 		},
 	}
 
@@ -264,6 +334,75 @@ func saveGame(ctx context.Context, game map[string]interface{}) error {
 		Item:      item,
 	})
 	return err
+}
+
+// saveGameIfNotCancelled 寫回局，但**只在它還不是 cancelled 時**才寫得進去。
+//
+// 🔴 原本是無條件 PutItem。加條件的理由是 [A3-l] 退點：沒有它的話，
+//
+//	同一顆局被取消兩次會退兩次 120 點，而兩次呼叫在回應上**逐字相同**。
+//	⚠️ 條件掛在 `status`，不是「有沒有這一列」——後者對「已經取消過」零鑑別力。
+func saveGameIfNotCancelled(ctx context.Context, game map[string]interface{}) error {
+	item, err := attributevalue.MarshalMap(game)
+	if err != nil {
+		return err
+	}
+
+	tableName := tablePrefix + "Games"
+	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           &tableName,
+		Item:                item,
+		ConditionExpression: aws.String("attribute_not_exists(#s) OR #s <> :cancelled"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":cancelled": &types.AttributeValueMemberS{Value: "cancelled"},
+		},
+	})
+	return err
+}
+
+// isConditionalCheckFailed 把「條件沒過」與其他錯誤分開。
+// 🔴 用 errors.As 認型別，不要比對錯誤字串 —— 字串會隨 SDK 版本改，
+//
+//	而改掉之後這裡會靜靜退化成「所有錯誤都當成一般失敗」，重複退點就回來了。
+func isConditionalCheckFailed(err error) bool {
+	var ccf *types.ConditionalCheckFailedException
+	return errors.As(err, &ccf)
+}
+
+// addUserPoints 原子地把點數加回去，回傳 (before, after)。
+//
+// 🔴 刻意用 `ADD`（DynamoDB 原子加），不是「讀出來 +120 再寫回去」——
+//
+//	後者是 `web_create_game` 扣點的做法，而那個做法在併發下會 lost update。
+//	退點若也那樣寫，使用者同時在別處賺點數就可能把退的那筆吃掉。
+//
+// ⚠️ before 由 after 反推：ADD 只回得到新值，而 point log 兩個都要。
+func addUserPoints(ctx context.Context, userID string, amount int) (int, int, error) {
+	tableName := tablePrefix + "Users"
+	out, err := dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &tableName,
+		Key: map[string]types.AttributeValue{
+			"userId": &types.AttributeValueMemberS{Value: userID},
+		},
+		UpdateExpression: aws.String("ADD points :amt SET updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":amt": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", amount)},
+			":now": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+		},
+		ReturnValues: types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	after := 0
+	if v, ok := out.Attributes["points"].(*types.AttributeValueMemberN); ok {
+		fmt.Sscanf(v.Value, "%d", &after)
+	}
+	return after - amount, after, nil
 }
 
 func getGameRegistrations(ctx context.Context, gameID string) ([]map[string]interface{}, error) {

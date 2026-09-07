@@ -289,7 +289,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	log.Printf("Parsed request: GameType=%s, PlaceName=%s, NeedPlayers=%d", req.GameType, req.PlaceName, req.NeedPlayers)
 
 	// Check user points before creating game
-	const REQUIRED_POINTS = 120
+	// 🔴 [A3-l] 這個數字只留一份：退點寫在 `web_cancel_game`，兩邊各寫一次的話，
+	//    改了其中一邊就會出現「扣 120 退 100」這種帳面永遠對不起來、
+	//    而且沒有任何測試會紅的漂移。
+	const REQUIRED_POINTS = shared.CreateGameCost
 	if user.Points < REQUIRED_POINTS {
 		response := Response{
 			Success: false,
