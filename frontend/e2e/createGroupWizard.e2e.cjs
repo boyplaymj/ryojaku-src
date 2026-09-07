@@ -475,40 +475,62 @@ async function main() {
     record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
     record('T10 送出的 payload 帶的是刷新後的開局時間（不是草稿那個舊的）', t10pass, t10detail);
 
-    // ── T11：**誘餌** —— 一個「路徑裡含 /user-info、但不是本機那支」的請求
-    //    必須①**不被**假 profile 接走 ②被記進被擋清單。
-    //    🔴 這是 T10 那個 stub 的反控。少了它，`isProfileStub` 被改回子字串比對
-    //       （`u.includes('/user-info')`）之後 —— T10 照樣綠、T8 也照樣綠，
-    //       因為誘餌會被 fulfill 掉、根本不會進 `blocked`。**兩條都對它零鑑別力。**
-    //    ⚠️ 它用**自己的** sink，不污染 T8 的清單（T8 斷言那份必須是空的）。
+    // ── T11：**四顆誘餌**，每顆只變一個維度，釘住 `isProfileStub` 的
+    //    `origin ∧ pathname ∧ GET` 三個條件**每一個都不可少**。
+    //    🔴 第一版只有一顆誘餌，而它同時「不同 origin、不同 pathname」——
+    //       那種誘餌只殺得掉 `includes`，對「只比 origin」「只比 pathname」
+    //       「漏掉 GET」三種錯誤**零鑑別力**（覆驗抓到的）。
+    //       ⇒ 反控要一次只動一個維度，否則殺掉的是哪一條無法歸因。
+    //    🔴 判準**分兩種，不能混**：
+    //       本機 origin 在白名單內 ⇒ 那兩顆會被 `continue`（回 dev server 的 404），
+    //       **不會進 sink**。對它們唯一有意義的問題是「有沒有拿到假 profile」。
+    //       非白名單那兩顆才該被 abort ＋ 記錄。
+    //       把「一律要被記錄」套到四顆上，就會用一個假的判準去驗一件真的事。
     const decoy = [];
     let t11pass = false;
     let t11detail = '';
-    const DECOY_URL = 'https://evil.example/x/user-info?userId=e2e-harness-user';
+    const PROBES = [
+        // 名稱                      url                                              method  該被記錄
+        ['錯origin＋路徑含user-info', 'https://evil.example/x/user-info?userId=e2e',   'GET',  true],
+        ['同origin＋錯pathname',      `${API_BASE}/user-info-not-really`,              'GET',  false],
+        ['錯origin＋同pathname',      `https://evil.example${PROFILE_STUB.pathname}`,  'GET',  true],
+        ['同origin＋同pathname＋POST', `${API_BASE}/user-info`,                        'POST', false],
+    ];
     try {
         const t11ctx = await browser.newContext({ viewport: { width: 390, height: 900 } });
         const dp = await t11ctx.newPage();
         await guard(dp, { fakeProfile: true, sink: decoy });
         await dp.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
         await dp.waitForSelector('text=團局種類', { timeout: 60000 });
-        const got = await dp.evaluate(async (url) => {
-            try {
-                const r = await fetch(url);
-                return { ok: true, body: (await r.text()).slice(0, 80) };
-            } catch (e) {
-                return { ok: false, err: String(e && e.message || e).slice(0, 60) };
+        const got = await dp.evaluate(async (probes) => {
+            const out = [];
+            for (const [name, url, method] of probes) {
+                try {
+                    const r = await fetch(url, { method });
+                    const body = (await r.text()).slice(0, 200);
+                    // 「拿到假 profile」的唯一判準：200 且 body 裡有那個假 userId。
+                    out.push({ name, url, threw: false, status: r.status, fake: r.ok && body.includes('e2e-harness-user') });
+                } catch (e) {
+                    out.push({ name, url, threw: true, fake: false, err: String((e && e.message) || e).slice(0, 40) });
+                }
             }
-        }, DECOY_URL);
+            return out;
+        }, PROBES);
         await t11ctx.close();
-        const recorded = decoy.includes(DECOY_URL);
-        // 🔴 兩個條件缺一不可：只驗「有被記錄」的話，一個「先 fulfill 又被記錄」的實作也會綠。
-        t11pass = got.ok === false && recorded === true;
-        t11detail = `誘餌被假profile接走=${got.ok}${got.ok ? `（回了「${got.body}」）` : `（abort：${got.err}）`} `
-            + `有進被擋清單=${recorded}`;
+
+        const lines = got.map((g, i) => {
+            const wantRecorded = PROBES[i][3];
+            const recorded = decoy.includes(g.url);
+            const okOne = g.fake === false && recorded === wantRecorded;
+            return { okOne, text: `${okOne ? '·' : '✗'}${g.name}[拿到假profile=${g.fake} `
+                + `${g.threw ? `abort(${g.err})` : `HTTP ${g.status}`} 被記錄=${recorded}(該=${wantRecorded})]` };
+        });
+        t11pass = got.length === PROBES.length && lines.every((l) => l.okOne);
+        t11detail = lines.map((l) => l.text).join(' ');
     } catch (e) {
         t11detail = `例外：${e && e.message ? e.message.split('\n')[0] : e}`;
     }
-    record('T11 誘餌：路徑含 /user-info 但非本機的請求 ⇒ 不被 stub 接走、且被記進被擋清單', t11pass, t11detail);
+    record('T11 四顆誘餌：origin／pathname／GET 三個條件每一個都不可少（每顆只變一維）', t11pass, t11detail);
 
     // ── T8：暖機頁＋正式頁都不准發出**非白名單**請求。
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。

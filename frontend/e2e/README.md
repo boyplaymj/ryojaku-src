@@ -46,7 +46,7 @@ A3-c 把發團表單改成兩步驟精靈，改動**全部是 UI 行為**。而�
 | T8 | **全部頁面**都沒有非白名單請求（這條在 try 之外，一定會跑，而且會影響 rc） |
 | T9 | 草稿帶回**過期**的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1（[A3-i]） |
 | T10 | **送出去的 payload** 帶的是刷新後的時間（在第 2 步停留超過一分鐘之後送出，[A3-i]） |
-| T11 | 誘餌：路徑含 `/user-info` 但**不是本機那支**的請求 ⇒ 不被 stub 接走、且被記進被擋清單 |
+| T11 | **四顆誘餌**：`origin`／`pathname`／`GET` 三個條件每一個都不可少（每顆只變一維） |
 
 🔴 **T3 和 T4 必須成對看。** 原生 `required` 只擋真正的空值，`'   '` 它會放行 ——
 只有這一對的**對比**才分得出「原生擋的」與「程式閘擋的」。
@@ -243,6 +243,39 @@ T10 要走完個資檢查那道閘，所以 `guard()` 對本機那個 `user-info
 實測（2026-09-07，把 `isProfileStub` 改回 `includes`）：
 **T8 綠、T10 綠、只有 T11 紅**，而且 T11 直接印出誘餌拿到了假 profile、沒進被擋清單。
 ⇒ 那兩條對這個缺陷**零鑑別力**，這正是 T11 不能省的證明。
+
+### 🔴 一顆誘餌不夠 —— 它同時變了兩個維度，殺得掉的只有 `includes`
+
+第一版 T11 只有一顆誘餌（`https://evil.example/x/user-info`），而它**同時**「不同 origin、
+不同 pathname」⇒ 對「只比 origin」「只比 pathname」「漏掉 GET」三種錯誤**零鑑別力**
+（覆驗抓到的）。**反控要一次只動一維，否則殺掉的是哪一條無法歸因。**
+
+現在是四顆，每顆只變一維：
+
+| 誘餌 | 該被記錄？ | 殺掉哪個錯 |
+|---|---|---|
+| 錯 origin ＋ 路徑含 `/user-info` | ✅ 是 | `includes` |
+| 同 origin ＋ **錯 pathname** | ❌ 否（本機在白名單 ⇒ `continue`） | 漏掉 pathname |
+| **錯 origin** ＋ 同 pathname | ✅ 是 | 漏掉 origin |
+| 同 origin ＋ 同 pathname ＋ **POST** | ❌ 否 | 漏掉 `GET` |
+
+🔴 **判準分兩種，不能混**：本機 origin 在白名單內 ⇒ 那兩顆會被 `continue`（拿到 dev server
+的回應），**不會進 sink**。對它們唯一有意義的問題是「有沒有拿到假 profile」。
+把「一律要被記錄」套到四顆上，就會用一個假的判準去驗一件真的事。
+
+突變實跑（每發只拿掉一個條件，四發都**只紅對應那一顆**）：
+
+| 突變 | 結果 |
+|---|---|
+| `isProfileStub` 改回 `includes` | ✅ 四顆全紅 |
+| 漏掉 pathname（改成比 origin ＋ `/__e2e_no_backend` 前綴） | ✅ 只紅「同 origin ＋ 錯 pathname」，其餘 10 條綠 |
+| 漏掉 origin（只比 pathname） | ✅ 只紅「錯 origin ＋ 同 pathname」 |
+| 漏掉 `GET` | ✅ 只紅「同 origin ＋ 同 pathname ＋ POST」 |
+
+⚠️ **第二發原本寫的是「只比 origin」，那發不可歸因**：它會把 harness 自己的 HTML／JS
+也 fulfill 成假 profile ⇒ 頁面根本載不出來，T11 紅在 `waitForSelector timeout`、
+連 T1–T7 一起垮（8/11）。**那是「突變體壞掉」不是「被探針咬住」，兩者在紅燈上長得一樣。**
+⇒ 改成保留前綴、只漏掉最後那一段，頁面正常、歸因乾淨。
 
 ⚠️ T11 用**自己的** sink，不把誘餌塞進 T8 那份清單（T8 斷言它必須是空的）。
 ⚠️ `E2E_API_BASE` 由 `run.sh` 傳進來，與 dev server 的 `VITE_API_BASE_URL` 是**同一個值**
