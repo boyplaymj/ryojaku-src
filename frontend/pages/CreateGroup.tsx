@@ -9,7 +9,7 @@ import CreateGroupStage1 from '../components/CreateGroupStage1';
 import CreateGroupStage2, { type ImageItem } from '../components/CreateGroupStage2';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
-import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, validateCreateGame, validateCreateGameStage1 } from '../utils/createGroupForm';
+import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, validateCreateGame, validateCreateGameStage1, validateCreateGameStage2 } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
 import { createPortal } from 'react-dom';
@@ -75,10 +75,16 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
     const [startTimeTouched, setStartTimeTouched] = useState(false);
 
     // 新增環境選項狀態
-    const [smoking, setSmoking] = useState<string>('無菸');
+    // 🔴 [A3-j] 這三項的初始值原本是 '無菸'／'有電梯'／'電動桌'，而它們的標籤寫著 `(必填)`。
+    //    後果不是「檢核沒作用」而已：`buildCreateGamePayload` 只濾空字串 ⇒ 那三個非空的
+    //    預設值**必定**被送進 `features`，使用者一次都沒碰過也會publish 成
+    //    「無菸、有電梯、電動桌」。那是有人會據以出門的資訊。
+    //    ⚠️ 改成 '' 只是修法的一半，另一半是 `validateCreateGameStage2`（見 handleSubmit）——
+    //      只改這裡的話，沒選就變成靜靜不送，而畫面上的 `(必填)` 依然是謊話。
+    const [smoking, setSmoking] = useState<string>('');
     const [parking, setParking] = useState<string[]>([]);
-    const [elevator, setElevator] = useState<string>('有電梯');
-    const [mahjongTable, setMahjongTable] = useState<string>('電動桌');
+    const [elevator, setElevator] = useState<string>('');
+    const [mahjongTable, setMahjongTable] = useState<string>('');
     const [tableModel, setTableModel] = useState<string>('');
     const [venueType, setVenueType] = useState<string>('');
     const [skillLevel, setSkillLevel] = useState<string>('');
@@ -117,10 +123,15 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             setFormData(fresh ? { ...draft.formData, startTime: fresh } : draft.formData);
             setCoordinates(draft.coordinates);
             if (draft.envOptions) {
-                setSmoking(draft.envOptions.smoking);
+                // 🔴 [A3-j] 舊草稿（沒有 envOptionsDeclared）的三個必填欄分不出
+                //    「使用者選的」與「A3-j 之前的預設值」⇒ 丟掉，要他重選一次。
+                //    其餘欄位（車位／型號／場館種類／程度）本來就預設為空，
+                //    非空必定是他填的，照原樣還原。
+                const declared = draft.envOptionsDeclared ?? false;
+                setSmoking(declared ? draft.envOptions.smoking : '');
+                setElevator(declared ? draft.envOptions.elevator : '');
+                setMahjongTable(declared ? draft.envOptions.mahjongTable : '');
                 setParking(draft.envOptions.parking);
-                setElevator(draft.envOptions.elevator);
-                setMahjongTable(draft.envOptions.mahjongTable);
                 setTableModel(draft.envOptions.tableModel);
                 setVenueType(draft.envOptions.venueType || '');
                 setSkillLevel(draft.envOptions.skillLevel || '');
@@ -382,6 +393,15 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             }
             setStep(2);
             window.scrollTo({ top: 0, behavior: 'auto' });
+            return;
+        }
+        // [A3-j] 三個標著 `(必填)` 的環境選項真的必填（見 validateCreateGameStage2 的註解）。
+        // ⚠️ `setShowTermsAgreement(true)` 在本檔有**第二個**呼叫點（isLocalhost 的測試面板），
+        //    那條刻意不擋 —— 它是 debug 捷徑、只在 `import.meta.env.DEV` 下渲染。
+        //    但 e2e 也跑在 DEV ⇒ **不要用那顆測試按鈕寫驗收**，會繞過本閘門而看起來全綠。
+        const stage2Error = validateCreateGameStage2({ options: { smoking, elevator, mahjongTable } });
+        if (stage2Error) {
+            showToast(stage2Error, 'warning');
             return;
         }
         setShowTermsAgreement(true);

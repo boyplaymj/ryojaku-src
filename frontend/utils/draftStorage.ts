@@ -38,6 +38,21 @@ export interface CreateGameDraft {
      *    把舊草稿當成「使用者選的」會讓他一還原就被擋，那正是本次要修的病。
      */
     startTimeTouched?: boolean;
+    /**
+     * 這份草稿的 `envOptions` 是不是由 **[A3-j] 之後**的表單寫的。
+     *
+     * 🔴 optional 是刻意的，理由與 `startTimeTouched` 同一個形狀但**不是同一件事**：
+     *    A3-j 之前，`smoking`／`elevator`／`mahjongTable` 的初始值是
+     *    `'無菸'`／`'有電梯'`／`'電動桌'` ⇒ 使用者一次都沒碰，草稿裡也是那三個值。
+     *    ⇒ **舊草稿的那三欄分不出「他選的」與「預設值」**，而還原之後它們會通過
+     *      新的 `validateCreateGameStage2`，那個假宣告就這樣活過了修法。
+     *    A3-j 之後初始值是 `''`，所以「非空」本身就等於「他點過」，不需要額外旗標。
+     *
+     * ⇒ 讀回 `undefined`（舊草稿）時，還原端**丟掉那三欄**、要使用者重選一次。
+     *   代價是最多 24 小時內、重點三下；換掉的是「publish 一個他沒宣告過的場地條件」。
+     *   兩邊不對稱，所以往「少宣稱」那邊倒。
+     */
+    envOptionsDeclared?: boolean;
 }
 
 /**
@@ -59,6 +74,10 @@ export function saveCreateGameDraft(
             envOptions,
             savedAt: Date.now(),
             startTimeTouched,
+            // [A3-j] 這一版寫出去的草稿，envOptions 的三個必填欄「非空＝使用者點過」。
+            // 🔴 寫死 true 是對的：能執行到這一行的**就是** A3-j 之後的程式。
+            //    做成參數反而會讓呼叫端有機會傳錯，而傳錯的後果是假宣告活下來。
+            envOptionsDeclared: true,
         };
         localStorage.setItem(STORAGE_KEYS.CREATE_GAME_DRAFT, JSON.stringify(draft));
     } catch (error) {

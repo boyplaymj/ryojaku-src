@@ -219,3 +219,53 @@ export function validateCreateGameStage1(input: ValidateCreateGameStage1Input): 
 
     return null;
 }
+
+export interface ValidateCreateGameStage2Input {
+    options: Pick<VenueOptions, 'smoking' | 'elevator' | 'mahjongTable'>;
+}
+
+/**
+ * [A3-j] 精靈第 2 步的閘門：三個標著 `(必填)` 的環境選項**真的**必填。
+ *
+ * 🔴 這一支存在的理由是一個**已經在線上發生**的缺陷，不是新功能的閘門。
+ *    `菸選項`／`電梯`／`麻將桌` 三個標籤從一開始就寫著 `(必填)`，而
+ *    `validateCreateGame` 的四道檢核**一項都沒有碰它們** —— 沒被抓到，是因為
+ *    它們的 `useState` 初始值分別是 `'無菸'`／`'有電梯'`／`'電動桌'`，
+ *    ⇒ **永遠是「已填」的**，那個 `(必填)` 從來沒有機會失敗。
+ *
+ * 🔴 而代價不是「檢核沒作用」這麼輕：`buildCreateGamePayload` 只濾掉空字串，
+ *    那三個預設值非空 ⇒ **必定被送進 `features`**。使用者從沒碰過那三個欄位，
+ *    也會publish 成「這個場地無菸、有電梯、是電動桌」。
+ *    那是有人會據以出門的資訊 —— 錯的方向是**多宣稱**，不是少宣稱。
+ *
+ * ⇒ 修法是**兩半，缺一不可**：
+ *    ① 初始值改成 `''`（不預選）—— 光是這一半的話，沒選就變成靜靜不送，
+ *      而畫面上的 `(必填)` 依然是謊話。
+ *    ② 本函式把 `(必填)` 變成真的 —— 光是這一半的話，預設值仍然通過檢核，
+ *      缺陷原封不動。
+ *    兩半各自都「看起來有做事」，**只有合起來才會改變行為**。
+ *
+ * ⚠️ 界線：本函式只管「有沒有做出宣告」，不管宣告的內容對不對
+ *    （沒有任何方式驗證那個場地真的有電梯）。
+ * ⚠️ 順序固定：與畫面由上而下一致（菸 → 電梯 → 麻將桌），
+ *    否則使用者被指到的欄位跟他眼睛掃描的順序不同。
+ *
+ * @returns 第一個錯誤訊息；全過回 `null`
+ */
+export function validateCreateGameStage2(input: ValidateCreateGameStage2Input): string | null {
+    const { smoking, elevator, mahjongTable } = input.options;
+
+    if (!smoking.trim()) {
+        return '請選擇菸選項';
+    }
+
+    if (!elevator.trim()) {
+        return '請選擇電梯';
+    }
+
+    if (!mahjongTable.trim()) {
+        return '請選擇麻將桌';
+    }
+
+    return null;
+}

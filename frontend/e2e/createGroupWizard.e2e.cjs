@@ -61,7 +61,9 @@ const isAllowed = (raw) => {
     }
 };
 
-const TOTAL_TESTS = 11;
+// 🔴 這是「應該跑幾條」的宣告，不是計數器 —— 少跑了才看得出來（中途 abort 會少）。
+//    加測試時要一起改；漏改會印出 `13/12` 這種一眼看得出不對的分數，那是刻意的。
+const TOTAL_TESTS = 14;
 const results = [];
 /** 一條測試紅了就**停在那裡**。 */
 class Failed extends Error {}
@@ -361,12 +363,35 @@ async function main() {
         `回程=${t6backStep} 場地名稱="${t6place}" 籌碼="${t6stakes}" 照片 ${imgBefore}→${imgAfter} 手動桌選中=${/bg-neutral-900/.test(manualCls)}`);
     await shot('05-step2-roundtrip.png');
 
-    // ── T7：第 2 步送出 ⇒ 服務條款彈窗（API 不會被呼叫，那是彈窗確認之後的事）
-    const terms = page.locator('text=/服務條款|同意/');
+    // ── T12：[A3-j] 三個標著 `(必填)` 的環境選項沒選 ⇒ 擋下，彈窗不出現
+    //
+    // 🔴 這條要排在 T7 **之前**，因為它量的是「還沒選」那個狀態，而 T7 會把它們選掉。
+    //    T6 只點過「手動桌」⇒ 走到這裡時 菸／電梯 仍是空的（A3-j 之後初始值是 ''）。
+    const termsHeading = page.getByRole('heading', { name: '服務條款確認' });
+    const smokeToast = page.locator('text=請選擇菸選項');
+    ok('T12a 送出前：服務條款彈窗本來就不在（正控 —— 少了它，T12b 的「不出現」可能只是恆真）',
+        (await termsHeading.count()) === 0, `送出前彈窗數=${await termsHeading.count()}`);
     await submit().click();
-    const termsShown = await appears(terms);
-    ok('T7 第 2 步「確認發起團局」→ 跳出服務條款確認彈窗',
-        termsShown === true, `彈窗出現=${termsShown} 命中字串數=${await terms.count()}`);
+    const blockedToast = await appears(smokeToast, 5000);
+    const termsAfterBlock = await termsHeading.count();
+    ok('T12b 菸選項／電梯沒選 → 跳 toast 指名欄位，且**沒有**跳出服務條款彈窗',
+        blockedToast === true && termsAfterBlock === 0,
+        `toast出現=${blockedToast} 彈窗數=${termsAfterBlock}`);
+    await shot('06a-stage2-required.png');
+
+    // ── T7：三項都選了之後送出 ⇒ 服務條款彈窗（API 不會被呼叫，那是彈窗確認之後的事）
+    //
+    // 🔴 定位器**不可以**用 `text=/服務條款|同意/`：`isLocalhost` 的除錯面板上有一顆
+    //    按鈕叫「測試：服務條款確認彈窗」，那串字永遠在頁面上 ⇒ 那樣寫的話，
+    //    **彈窗根本沒開也會綠**。A3-j 的閘門一接上就抓到了這件事：舊寫法回報
+    //    「彈窗出現=true 命中字串數=1」，而那個 1 就是那顆除錯按鈕。
+    //    ⇒ 改用 role=heading（除錯面板那顆是 button，角色天然分得開）。
+    await page.getByRole('button', { name: '無菸' }).click();
+    await page.getByRole('button', { name: '有電梯' }).click();
+    await submit().click();
+    const termsShown = await appears(termsHeading);
+    ok('T7 三項必填都選了 → 「確認發起團局」跳出服務條款確認彈窗',
+        termsShown === true, `彈窗出現=${termsShown} heading數=${await termsHeading.count()}`);
     await shot('06-terms.png');
     } catch (e) {
         aborted = e;
@@ -441,6 +466,11 @@ async function main() {
             //    ⇒ 把時鐘往前撥 10 分鐘，state 裡那個值就餿了，兩者才分得開。
             //    ⚠️ 這同時是一個真實情境：使用者在第 2 步慢慢填環境選項超過一分鐘。
             if (FIX_CLOCK) await freshPage.clock.setFixedTime(new Date(FIXED_NOW.getTime() + 10 * 60 * 1000));
+            // [A3-j] 三個 `(必填)` 環境選項要先選，否則卡在 Stage2 閘門到不了 onCreate。
+            // ⚠️ 這幾行是**前置條件**不是斷言 —— 擋不擋得住由 T12 負責量。
+            for (const opt of ['無菸', '有電梯', '手動桌']) {
+                await freshPage.getByRole('button', { name: opt }).click();
+            }
             await freshPage.getByRole('button', { name: /確認發起團局/ }).click();
             await freshPage.getByRole('button', { name: '確認同意' })
                 .waitFor({ state: 'visible', timeout: 20000 });
@@ -472,6 +502,56 @@ async function main() {
         if (!t9detail) t9detail = msg; else if (!t10detail) t10detail = msg;
     }
     await t9ctx.close();
+
+    // ── T13：[A3-j] **舊草稿**的三個必填環境選項要被丟掉（分不出「他選的」與「舊預設值」）
+    //
+    // 🔴 這條是 J3 那半個修法的**唯一**一把尺。少了它，`envOptionsDeclared` 的判斷
+    //    寫反、或整段被刪掉，其餘 12 條**一條都不會紅** —— 因為它們用的都是
+    //    新格式的草稿（或根本沒有草稿）。
+    // 🔴 兩臂缺一不可：只有「舊草稿被擋」的話，那個綠燈與「這個閘門對誰都擋」
+    //    逐字相同。新草稿那一臂才問得出「它擋的是舊格式」。
+    const t13ctx = await browser.newContext();
+    try {
+        const armResult = {};
+        for (const arm of ['old', 'new']) {
+            const pg = await t13ctx.newPage();
+            await guard(pg, { fakeProfile: true });
+            if (FIX_CLOCK) await pg.clock.setFixedTime(FIXED_NOW);
+            await pg.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+            await pg.waitForSelector('text=團局種類', { timeout: 60000 });
+            await pg.getByRole('button', { name: /填入測試資料/ }).click();
+            await pg.waitForTimeout(1200);   // 自動存草稿是 500ms debounce
+
+            // 把草稿改成「A3-j 之前」的樣子：三個必填欄帶著舊預設值。
+            // old 臂**拿掉** envOptionsDeclared（＝舊格式）；new 臂留著 true（＝新格式）。
+            await pg.evaluate((keepFlag) => {
+                const K = 'mahjongclub_create_game_draft';
+                const d = JSON.parse(localStorage.getItem(K));
+                d.envOptions = { ...(d.envOptions || {}), smoking: '無菸', elevator: '有電梯', mahjongTable: '電動桌', parking: [], tableModel: '' };
+                if (keepFlag) { d.envOptionsDeclared = true; } else { delete d.envOptionsDeclared; }
+                localStorage.setItem(K, JSON.stringify(d));
+            }, arm === 'new');
+
+            await pg.reload({ waitUntil: 'domcontentloaded' });
+            await pg.waitForSelector('text=團局種類', { timeout: 60000 });
+            await pg.getByRole('button', { name: '下一步' }).click();
+            await pg.locator('text=環境設施設定').first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+            await pg.getByRole('button', { name: /確認發起團局/ }).click();
+            armResult[arm] = {
+                blocked: await appears(pg.locator('text=請選擇菸選項'), 5000),
+                terms: await pg.getByRole('heading', { name: '服務條款確認' }).count(),
+            };
+            await pg.close();
+        }
+        ok('T13 舊草稿（無 envOptionsDeclared）的必填環境選項被丟掉 ⇒ 擋下；新草稿照樣放行',
+            armResult.old.blocked === true && armResult.old.terms === 0
+            && armResult.new.blocked === false && armResult.new.terms === 1,
+            `舊草稿 擋下=${armResult.old.blocked} 彈窗=${armResult.old.terms}`
+            + ` ／ 新草稿 擋下=${armResult.new.blocked} 彈窗=${armResult.new.terms}`);
+    } catch (e) {
+        ok('T13 舊草稿的必填環境選項被丟掉', false, `例外：${e.message}`);
+    }
+    await t13ctx.close();
     record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
     record('T10 送出的 payload 帶的是刷新後的開局時間（不是草稿那個舊的）', t10pass, t10detail);
 

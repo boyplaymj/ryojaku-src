@@ -15,9 +15,11 @@ import {
     toDateTimeLocalString,
     validateCreateGame,
     validateCreateGameStage1,
+    validateCreateGameStage2,
     type BuildCreateGamePayloadInput,
     type ValidateCreateGameInput,
     type ValidateCreateGameStage1Input,
+    type ValidateCreateGameStage2Input,
     type VenueOptions,
 } from './createGroupForm.ts';
 import type { CreateMahjongGamePayload } from '../types';
@@ -437,4 +439,61 @@ test('A3i-08 startTime 解析不出來（空字串）→ 不算過期、不推�
     // 若哪天決定要擋空值，兩支要一起改，這條會紅並逼人做那個決定。
     assert.equal(isStartTimeInPast({ startTime: '', now: NOW }), false);
     assert.equal(refreshStaleStartTime({ startTime: '', touched: false, now: NOW }), null);
+});
+
+// ── [A3-j] 第 2 步的三個 `(必填)` 環境選項 ────────────────────────────────
+//
+// 🔴 這一組釘的是一個**已經在線上發生**的缺陷：三個標籤寫著 `(必填)` 而沒有任何
+//    檢核，因為它們的初始值非空 ⇒ 永遠「已填」。修法有兩半（初始值改 ''、本檢核），
+//    而**只有一半**時外觀完全正常。下面 A3j-05 就是專門釘那個「只做一半」的。
+
+const stage2Input = (over: Partial<ValidateCreateGameStage2Input['options']> = {}): ValidateCreateGameStage2Input => ({
+    options: { smoking: '無菸', elevator: '有電梯', mahjongTable: '電動桌', ...over },
+});
+
+test('A3j-01 三項都選了 → 放行', () => {
+    assert.equal(validateCreateGameStage2(stage2Input()), null);
+});
+
+test('A3j-02 菸選項沒選 → 擋下，且訊息指名是哪一欄', () => {
+    assert.equal(validateCreateGameStage2(stage2Input({ smoking: '' })), '請選擇菸選項');
+});
+
+test('A3j-03 電梯沒選 → 擋下', () => {
+    assert.equal(validateCreateGameStage2(stage2Input({ elevator: '' })), '請選擇電梯');
+});
+
+test('A3j-04 麻將桌沒選 → 擋下', () => {
+    assert.equal(validateCreateGameStage2(stage2Input({ mahjongTable: '電動' })), null); // 非空即算已宣告
+    assert.equal(validateCreateGameStage2(stage2Input({ mahjongTable: '' })), '請選擇麻將桌');
+});
+
+test('A3j-05 🔴 純空白不算宣告 —— 少了 trim，「  」會被當成使用者選過', () => {
+    assert.equal(validateCreateGameStage2(stage2Input({ smoking: '   ' })), '請選擇菸選項');
+    assert.equal(validateCreateGameStage2(stage2Input({ elevator: '\t' })), '請選擇電梯');
+    assert.equal(validateCreateGameStage2(stage2Input({ mahjongTable: ' ' })), '請選擇麻將桌');
+});
+
+test('A3j-06 順序固定：菸 → 電梯 → 麻將桌（與畫面由上而下一致）', () => {
+    // 三項同時空著時，回的必須是**第一個**。少了這條，把順序寫反不會有任何測試紅。
+    assert.equal(
+        validateCreateGameStage2(stage2Input({ smoking: '', elevator: '', mahjongTable: '' })),
+        '請選擇菸選項',
+    );
+    // 正控：菸填好之後才輪到電梯 —— 少了它，上一行對「永遠回菸那句」零鑑別力。
+    assert.equal(
+        validateCreateGameStage2(stage2Input({ elevator: '', mahjongTable: '' })),
+        '請選擇電梯',
+    );
+});
+
+test('A3j-07 🔴 反控：這三項若被 buildCreateGamePayload 送出去，必須是使用者選的那個值', () => {
+    // 缺陷的形狀是「沒選也送」。這條從**另一端**釘：沒選（空字串）時
+    // features 裡不可以出現任何一個預設值 —— 少了它，初始值那一半被改回去也不會紅。
+    const payload = buildCreateGamePayload(buildInput({
+        options: { ...baseOptions(), smoking: '', elevator: '', mahjongTable: '', tableModel: '' },
+    }));
+    for (const ghost of ['無菸', '有電梯', '電動桌']) {
+        assert.equal(payload.features.includes(ghost), false, `沒選卻送出了「${ghost}」`);
+    }
 });
