@@ -8,6 +8,7 @@ import {
     acceptRegistration,
     rejectRegistration,
     cancelGame,
+    updateGame as apiUpdateGame,
     cancelRegistration as apiCancelRegistration,
     getRatings,
     getUserProfile,
@@ -271,6 +272,25 @@ export const api = {
             reason
         });
         if (!response.success) throw new Error(response.error || 'Operation failed');
+    },
+
+    /**
+     * [A3-m] 補充設定（第二段）。回 `{success, error}` 而**不 throw** ——
+     * 呼叫端（CreateGroup 第二段）要把後端那句話原樣顯示給使用者
+     * （「只有主揪可以修改團局」「此團局已取消」是不同的行動指示），
+     * 而 throw 之後那句話就只剩堆疊裡的一個字串。
+     */
+    updateGameExtras: async (input: {
+        gameId: string;
+        rules?: string[];
+        features?: string[];
+        restrictions?: string[];
+        images?: string[];
+    }): Promise<{ success: boolean; error?: string }> => {
+        const user = authService.getCurrentUser();
+        if (!user) return { success: false, error: '請先登入' };
+        const response = await apiUpdateGame(user.userId, input);
+        return { success: !!response.success, error: response.error };
     },
 
     cancelEvent: async (gameId: string, reason?: string): Promise<void> => {

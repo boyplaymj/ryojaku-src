@@ -27,7 +27,8 @@ import { AppSelect, AppButton } from '../components/ui/CommonUI';
 import { useToast } from '../contexts/ToastContext';
 
 interface CreateGroupProps {
-    onCreate: (gameData: CreateMahjongGamePayload) => Promise<{ success: boolean; error?: string }>;
+    // [A3-m] `data` 不可省：第一段送出就建局之後，第二段要拿 `data.gameID` 去打 update-game。
+    onCreate: (gameData: CreateMahjongGamePayload) => Promise<{ success: boolean; error?: string; data?: any }>;
     user: User | null;
 }
 
@@ -39,7 +40,10 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
     const [isMapOpen, setIsMapOpen] = useState(false);
     const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
-    // [A3-c2] 兩步驟精靈：只控制哪一段掛在畫面上，API 仍只在第 2 步送出時呼叫一次。
+    // [A3-m] 第一段送出成功後拿到的 gameId。它同時是「局已經成立」這件事的旗標：
+    // 非空 ⇒ 團局已公開招募、120 點已扣，第二段只能補資料，不能再建一次。
+    const [createdGameId, setCreatedGameId] = useState<string>('');
+    // [A3-c2] 兩步驟精靈：只控制哪一段掛在畫面上。
     // 刻意不存進草稿：重新進頁面一律從第 1 步開始（草稿可能只填了一半）。
     const [step, setStep] = useState<1 | 2>(1);
 
@@ -391,20 +395,76 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                 showToast(stage1Error, 'warning');
                 return;
             }
-            setStep(2);
-            window.scrollTo({ top: 0, behavior: 'auto' });
+            // 🔴 [A3-m] 第一段送出就**成立可招募**（§4.4），所以條款與扣點的閘門移到這裡。
+            //    在此之前這裡只是 `setStep(2)`，錢的閘門在第二段。
+            //    移動的是「錢的時機」不只是「彈窗的位置」—— 使用者按下確認的那一刻
+            //    就會被扣 120 點，就算他之後把第二段整個跳過。
+            setShowTermsAgreement(true);
             return;
         }
         // [A3-j] 三個標著 `(必填)` 的環境選項真的必填（見 validateCreateGameStage2 的註解）。
         // ⚠️ `setShowTermsAgreement(true)` 在本檔有**第二個**呼叫點（isLocalhost 的測試面板），
         //    那條刻意不擋 —— 它是 debug 捷徑、只在 `import.meta.env.DEV` 下渲染。
         //    但 e2e 也跑在 DEV ⇒ **不要用那顆測試按鈕寫驗收**，會繞過本閘門而看起來全綠。
+        // ⚠️ [A3-m] A3-j 那三個「(必填)」的語意變了：第二段整段**可以跳過**，
+        //    所以它們只在「使用者真的按了儲存」時必填，不是全域必填。
+        //    跳過的那條路不經過這裡（見 skipStage2）—— 這是刻意的，不是漏掉。
         const stage2Error = validateCreateGameStage2({ options: { smoking, elevator, mahjongTable } });
         if (stage2Error) {
             showToast(stage2Error, 'warning');
             return;
         }
-        setShowTermsAgreement(true);
+        await submitStage2();
+    };
+
+    /**
+     * [A3-m] 第二段＝補充設定，打 `update-game`（局在第一段就已經建好了）。
+     *
+     * 🔴 這裡**不可以**再呼叫一次 `onCreate` —— 那會建出第二個團局並再扣一次 120 點，
+     *    而使用者看到的只是「送出成功」。
+     */
+    const submitStage2 = async () => {
+        if (!createdGameId) {
+            showToast('找不到剛建立的團局，請回列表確認', 'error');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            const payload = buildCreateGamePayload({
+                formData,
+                coordinates,
+                options: { smoking, parking, elevator, mahjongTable, tableModel, venueType, skillLevel },
+                imageItems
+            });
+            const result = await api.updateGameExtras({
+                gameId: createdGameId,
+                // 只送第二段擁有的欄位。`rules` 屬第一段，建局時已經寫進去了，
+                // 這裡再送一次等於用第二段的狀態覆蓋它 —— 值相同，但那是多餘的權限使用。
+                features: payload.features,
+                restrictions: payload.restrictions,
+                images: payload.images ?? []
+            });
+            if (result && !result.success) {
+                showToast(result.error || '儲存補充設定失敗，請稍後再試', 'error');
+                return;
+            }
+            showToast('補充設定已儲存！', 'success');
+            setTimeout(() => navigate('/'), 1200);
+        } catch (error) {
+            console.error('Failed to update game:', error);
+            showToast('系統發生錯誤，請稍後再試', 'error');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    /**
+     * [A3-m] 跳過第二段。§4.4：「可跳過、可事後補」。
+     * ⚠️ 團局**已經公開招募中**，跳過不會取消它、也不會退點 —— 那是取消團局那條路。
+     */
+    const skipStage2 = () => {
+        showToast('已跳過補充設定，之後可以再補', 'success');
+        navigate('/');
     };
 
     const confirmCreate = async () => {
@@ -472,19 +532,32 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                 // 創建成功，清除草稿
                 clearCreateGameDraft();
 
+                // 🔴 [A3-m] 這裡**不再跳轉**。局已經公開招募了，接下來是「可跳過」的第二段。
+                //    gameId 是第二段唯一的著陸點：拿不到它的話 update-game 沒有對象，
+                //    而使用者會在一個看起來正常、實際上存不了檔的頁面上填東西。
+                const newGameId = result?.data?.gameID || result?.data?.gameId || '';
+                if (!newGameId) {
+                    // 局建起來了（錢也扣了），只是我們不知道它的 id ⇒ 不可以假裝沒事。
+                    console.error('❌ [CreateGame] 建立成功但回應裡沒有 gameID:', result);
+                    showToast('團局已建立，但無法載入補充設定，請到列表中編輯', 'warning');
+                    setTimeout(() => navigate('/'), 2000);
+                    return;
+                }
+                setCreatedGameId(newGameId);
+                setStep(2);
+                window.scrollTo({ top: 0, behavior: 'auto' });
+
                 // 檢查推播狀態，若未開啟則顯示引導
                 const isSupported = notificationService.isPushSupported();
                 const permission = notificationService.getPermissionState();
 
                 if (isSupported && !latestUser.hasClaimedPushBonus && permission !== 'denied') {
-                    // 顯示成功訊息後再顯示推播引導
-                    showToast('團局創建成功！', 'success');
+                    showToast('團局已公開招募！', 'success');
                     setTimeout(() => {
                         setIsPushModalOpen(true);
                     }, 1500);
                 } else {
-                    showToast('團局創建成功！正在跳轉...', 'success');
-                    setTimeout(() => navigate('/'), 2000);
+                    showToast('團局已公開招募！可以繼續補充設定，或直接跳過', 'success');
                 }
             }
         } catch (error) {
@@ -575,9 +648,9 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             <PushPermissionModal
                 isOpen={isPushModalOpen}
                 onClose={() => {
+                    // [A3-m] 不再跳首頁：局建好之後使用者停在第二段（補充設定），
+                    // 跳走的話那一段就永遠沒機會填，而它是這次改動的重點。
                     setIsPushModalOpen(false);
-                    // 關閉彈窗後跳轉到首頁
-                    setTimeout(() => navigate('/'), 500);
                 }}
                 onConfirm={handlePushConfirm}
             />
@@ -642,6 +715,27 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         initialLng={coordinates.longitude || undefined}
                     />
 
+                    {/* [A3-m] 局已經公開了 —— 這一條橫幅是使用者唯一會看到的告知。
+                        少了它，第二段看起來像「還沒送出」，而實際上錢已經扣了、別人已經看得到這個局。 */}
+                    {step === 2 && createdGameId && (
+                        <div className="rounded-lg border border-[#c5a059]/30 bg-[#c5a059]/[0.07] p-4 space-y-2">
+                            <p className="text-sm font-black text-[#8a6d3b]">✅ 團局已公開招募中</p>
+                            <p className="text-xs text-neutral-600 leading-relaxed">
+                                已扣除 120 點。以下都是<span className="font-bold">補充設定，可以跳過</span>，之後也能再補。
+                                <br />
+                                <span className="font-bold">尚無人報名時取消可全額退回 120 點</span>；
+                                直接離開這一頁**不會**取消團局，也不會退點。
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => navigate(`/event/${createdGameId}`)}
+                                className="text-xs font-bold text-[#8a6d3b] underline underline-offset-2"
+                            >
+                                前往團局頁（可在那裡取消）
+                            </button>
+                        </div>
+                    )}
+
                     {/* 第二段：環境設施／照片／場地特色／玩家限制（[A3-b1] 抽到 components/CreateGroupStage2.tsx） */}
                     {step === 2 && (
                     <CreateGroupStage2
@@ -677,20 +771,23 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         ) : (
                             <>
                                 <AppButton
-                                    type="button"
-                                    variant="secondary"
-                                    onClick={() => { setStep(1); window.scrollTo({ top: 0, behavior: 'auto' }); }}
-                                    className="w-full"
-                                >
-                                    上一步
-                                </AppButton>
-                                <AppButton
                                     type="submit"
                                     isLoading={isSubmitting}
-                                    disabled={coordinates.latitude === 0 && coordinates.longitude === 0}
                                     className="w-full"
                                 >
-                                    🎲 確認發起團局
+                                    儲存補充設定
+                                </AppButton>
+                                {/* 🔴 [A3-m] 「上一步」在這裡被拿掉是刻意的：局已經建好了，
+                                    第一段那四件事（時間／地點／底台／人數）已經寫進資料庫，
+                                    退回去改也不會生效 —— 留著它會變成一個看起來能改、
+                                    其實什麼都沒改的按鈕。要改那些請走團局頁。 */}
+                                <AppButton
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={skipStage2}
+                                    className="w-full"
+                                >
+                                    跳過，之後再補
                                 </AppButton>
                             </>
                         )}

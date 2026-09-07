@@ -426,6 +426,25 @@ export async function createGame(userIdentifier: string, gameData: CreateGameReq
   });
 }
 
+/**
+ * [A3-m] 補充設定（第二段）。四個欄位都是 optional —— **沒送＝不動這一項**，
+ * 送空陣列＝清空。後端 `update-game` 用指標區分這兩件事，這裡不要用 `?? []` 把它抹平。
+ */
+export interface UpdateGameRequest {
+  gameId: string;
+  rules?: string[];
+  features?: string[];
+  restrictions?: string[];
+  images?: string[];
+}
+
+export async function updateGame(userIdentifier: string, gameData: UpdateGameRequest) {
+  return apiRequest(`/update-game?${authParamFor(userIdentifier)}`, {
+    method: 'POST',
+    body: JSON.stringify(gameData),
+  });
+}
+
 // Get my games
 export async function getMyGames(userIdentifier: string) {
   // Always try to call real API first
