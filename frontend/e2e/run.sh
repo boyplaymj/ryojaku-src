@@ -31,7 +31,14 @@ VITE_PORT_PIDS=""
 # ⇒ 抽出去才有尺（`portwait.test.sh`，含把 ss／fuser 一起遮蔽的反控）。
 #    ⚠️ 刻意不在這裡寫「幾條」—— 那個數字加一條測試就自動說謊，而且零徵兆。
 #      要知道幾條就去跑它，它自己會把 `N 過 / M 紅` 印出來。
-. "$HERE/portwait.sh"
+# 🔴 少了它就**不是** rc=5,是 rc=4。沒有守衛的話:source 失敗 ⇒ `wait_port_release`
+#    變成 command not found(127)⇒ CLEANUP_STATE=127 ⇒ 回 rc=5「收尾沒收乾淨」——
+#    而真相是「沒有儀器」。同一個 rc 講兩件不同的事,查的方向就錯了。
+. "$HERE/portwait.sh" || {
+  echo "❌ [設備] 載入不了 $HERE/portwait.sh —— 收尾的 port 判定整段不存在。" >&2
+  echo "   （rc=4 是『沒有儀器』;這種情況**不可以**回 rc=5,那是另一件事。）" >&2
+  exit 4
+}
 
 # 🔴 「有沒有起過 server」用**自己的旗標**，不要用 `VITE_PORT_PIDS` 當代理：
 #    後者是 `fuser` 的產物，fuser 一不可用它就是空的 ⇒ 等待整段被跳過，
@@ -58,6 +65,15 @@ cleanup() {
       1) echo "⚠️ [e2e] 收尾後 port $PORT 仍被佔著（SIGKILL 之後又等了 3 秒）。占用者：$(port_pids "$PORT")" >&2 ;;
       2) echo "⚠️ [e2e] 判不出 port $PORT 的狀態（ss 與 fuser 都問不出來）—— 這**不是**「已經放掉了」。" >&2 ;;
     esac
+  fi
+
+  # 🔴 vite 的 log 是 `mktemp` 出來的,原本**從來沒有人刪它** —— 實測累積到 402 個檔,
+  #    而 TMPDIR 是 /opt/sml/.buildtmp（真的硬碟,不是 tmpfs ⇒ 重開機也不會消失）。
+  #    ⚠️ 但不可以無條件刪:rc≠0 時它是唯一的線索。⇒ 只在「全乾淨」時刪,否則印出路徑。
+  if [ "$exit_rc" = 0 ] && [ "$CLEANUP_STATE" = 0 ]; then
+    rm -f "$VITE_LOG"
+  else
+    echo "[e2e] vite log 留著（rc=$exit_rc cleanup=$CLEANUP_STATE）：$VITE_LOG" >&2
   fi
 
   # 🔴 收尾失敗必須影響 rc，否則那道保證沒有 exit code（見檔頭 rc=5）。
