@@ -21,10 +21,35 @@ VITE_PORT_PIDS=""
 #    留下一個孤兒 dev server —— 而腳本印的是 rc=0，外觀完全正常）。
 #    ⇒ 收尾要連「真的佔著這個 port 的那些 pid」一起收。那份名單在啟動成功後才抓，
 #      所以不會誤殺「port 本來就被別人佔著」那種情況（那種會在 --strictPort 直接起不來）。
+port_busy() { fuser "$PORT/tcp" >/dev/null 2>&1; }
+
 cleanup() {
   [ -n "$VITE_PID" ] && kill "$VITE_PID" 2>/dev/null
   [ -n "$VITE_PORT_PIDS" ] && kill $VITE_PORT_PIDS 2>/dev/null
   rm -f "$GEN"
+
+  # 🔴 `kill` 只是「送出訊號」，不是「已經退出」。實測（2026-09-07，覆驗者抓到）：
+  #    腳本回 rc 的那一刻 **6/6 次 port 都還在監聽**，約 0.1 秒後才消失。
+  #    不是孤兒（它會自己走完），但「rc 回來了」與「port 已釋放」是兩件事 ——
+  #    緊接著重跑就會撞 `--strictPort`，而那個失敗看起來會像「port 被別人佔著」。
+  #    ⇒ 等到它真的釋放為止。5 秒不放就升級 SIGKILL，再 3 秒仍不放就**印警告**
+  #      （靜默的話，下一次那個莫名其妙的 rc=4 就沒有線索）。
+  #    ⚠️ 只在「我們真的起過 server」時才等：早退時 port 上那個是別人的，
+  #      空等 8 秒再警告只會製造假訊號。
+  if [ -n "$VITE_PORT_PIDS" ]; then
+    waited=0
+    while port_busy && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited+1)); done
+    if port_busy; then
+      kill -9 $VITE_PORT_PIDS 2>/dev/null
+      [ -n "$VITE_PID" ] && kill -9 "$VITE_PID" 2>/dev/null
+      waited=0
+      while port_busy && [ "$waited" -lt 30 ]; do sleep 0.1; waited=$((waited+1)); done
+    fi
+    if port_busy; then
+      echo "⚠️ [e2e] 收尾後 port $PORT 仍被佔著（SIGKILL 之後又等了 3 秒）——" >&2
+      echo "   下一次重跑會撞 --strictPort 而回 rc=4。占用者：$(fuser "$PORT/tcp" 2>&1 | tr -s ' ')" >&2
+    fi
+  fi
 }
 trap cleanup EXIT
 
