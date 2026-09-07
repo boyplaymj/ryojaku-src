@@ -438,8 +438,9 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             });
             const result = await api.updateGameExtras({
                 gameId: createdGameId,
-                // 只送第二段擁有的欄位。`rules` 屬第一段，建局時已經寫進去了，
-                // 這裡再送一次等於用第二段的狀態覆蓋它 —— 值相同，但那是多餘的權限使用。
+                // 只送第二段擁有的欄位。[A3-m/M5] `rules` 已由第一段搬進第二段，
+                // 所以它現在也在這裡 —— 建局時送的是空的，這一送才是它真正的寫入點。
+                rules: payload.rules,
                 features: payload.features,
                 restrictions: payload.restrictions,
                 images: payload.images ?? []
@@ -686,7 +687,8 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                     </div>
                     )}
 
-                    {/* 第一段：團局種類／開始時間／缺幾人與籌碼／麻將規則／地點資訊（[A3-b2] 抽到 components/CreateGroupStage1.tsx） */}
+                    {/* 第一段：團局種類／開始時間／缺幾人與籌碼／地點資訊（[A3-b2] 抽到 components/CreateGroupStage1.tsx）
+                        [A3-m/M5] 麻將規則已搬到第二段 —— §4.4 的第一段只問四件事。 */}
                     {step === 1 && (
                     <CreateGroupStage1
                         startTime={formData.startTime}
@@ -695,10 +697,6 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         setNeedPlayers={(num) => setFormData({ ...formData, needPlayers: num })}
                         stakes={formData.stakes}
                         setStakes={(value) => setFormData({ ...formData, stakes: value })}
-                        rules={formData.rules}
-                        addListItem={addListItem}
-                        handleListChange={handleListChange}
-                        removeListItem={removeListItem}
                         placeName={formData.placeName}
                         setPlaceName={(value) => setFormData({ ...formData, placeName: value })}
                         location={formData.location}
@@ -750,6 +748,7 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                         fileInputRef={fileInputRef}
                         handleImageSelect={handleImageSelect}
                         removeImage={removeImage}
+                        rules={formData.rules}
                         features={formData.features}
                         restrictions={formData.restrictions}
                         addListItem={addListItem}

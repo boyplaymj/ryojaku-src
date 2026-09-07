@@ -1,7 +1,6 @@
 import React from 'react';
 import { Clock, Coins, Home, MapPin, ChevronRight } from 'lucide-react';
 import { AppInput } from './ui/CommonUI';
-import DynamicListInput from './DynamicListInput';
 
 // [A3-b2] 發團表單的「第一段」：團局種類／開始時間／缺幾人與籌碼／麻將規則／地點資訊。
 // 從 pages/CreateGroup.tsx 原封搬出（JSX 本體逐字不變，只有縮排位移與機械式改名：
@@ -11,7 +10,10 @@ import DynamicListInput from './DynamicListInput';
 // 這一塊只搬 JSX，A3-c 才會真的分成兩步驟送出。
 
 /** 第一段自己擁有的清單欄位（麻將規則那塊）。'features'／'restrictions' 屬於第二段，不在這裡。 */
-export type Stage1ListField = 'rules';
+// [A3-m] 第一段已經沒有任何清單欄位了（麻將規則搬去第二段）。
+// 這個型別留成 never：日後有人想再往第一段塞一個清單欄位時，型別會先擋一次，
+// 而不是靜靜地讓第一段又長回五件事。
+export type Stage1ListField = never;
 
 export interface CreateGroupStage1Props {
     // 開始時間：只顯示，點了叫父層打開 DatePicker
@@ -23,10 +25,6 @@ export interface CreateGroupStage1Props {
     stakes: string;
     setStakes: (value: string) => void;
     // 麻將規則
-    rules: string[];
-    addListItem: (field: Stage1ListField) => void;
-    handleListChange: (field: Stage1ListField, index: number, value: string) => void;
-    removeListItem: (field: Stage1ListField, index: number) => void;
     // 地點資訊：場地名稱可編輯；地址與座標只顯示，點了叫父層打開 MapPicker
     placeName: string;
     setPlaceName: (value: string) => void;
@@ -39,7 +37,6 @@ const CreateGroupStage1: React.FC<CreateGroupStage1Props> = ({
     startTime, openDatePicker,
     needPlayers, setNeedPlayers,
     stakes, setStakes,
-    rules, addListItem, handleListChange, removeListItem,
     placeName, setPlaceName,
     location, coordinates, openMap
 }) => (
@@ -112,15 +109,9 @@ const CreateGroupStage1: React.FC<CreateGroupStage1Props> = ({
                 </div>
             </div>
 
-            {/* Mahjong Rules & Dynamic List */}
-            <DynamicListInput
-                label="麻將規則"
-                items={rules}
-                placeholder="例如：不打請提前告知場主"
-                onAdd={() => addListItem('rules')}
-                onChange={(index, value) => handleListChange('rules', index, value)}
-                onRemove={(index) => removeListItem('rules', index)}
-            />
+            {/* [A3-m] 「麻將規則」搬到第二段了。§4.4：第一段**只問四件事**
+                （時間／地點／底台／人數），規則細項屬於「補充設定」。
+                在此之前這裡是五件事，而那個差異一直只寫在設計冊的缺口表裡。 */}
 
             {/* Location Section */}
             <div className="space-y-5">

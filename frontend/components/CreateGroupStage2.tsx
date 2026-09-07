@@ -17,8 +17,10 @@ export interface ImageItem {
     status: 'uploading' | 'done' | 'error';
 }
 
-/** 第二段自己擁有的兩個清單欄位（DynamicListInput 那兩塊）。'rules' 屬於第一段，不在這裡。 */
-export type Stage2ListField = 'features' | 'restrictions';
+/** 第二段自己擁有的三個清單欄位（DynamicListInput 那幾塊）。
+ * [A3-m] `rules` 於 2026-09-07 由第一段搬進來 —— §4.4 的第一段**只問四件事**，
+ * 規則細項屬於「補充設定」。（本行原本寫「'rules' 屬於第一段，不在這裡」。） */
+export type Stage2ListField = 'rules' | 'features' | 'restrictions';
 
 export interface CreateGroupStage2Props {
     // 環境設施設定：七個選項與 setter（值都是直接指定，沒有 functional update）
@@ -41,7 +43,8 @@ export interface CreateGroupStage2Props {
     fileInputRef: React.RefObject<HTMLInputElement | null>;
     handleImageSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
     removeImage: (id: string) => void;
-    // 場地特色／玩家限制
+    // 麻將規則（[A3-m] 由第一段搬來）／場地特色／玩家限制
+    rules: string[];
     features: string[];
     restrictions: string[];
     addListItem: (field: Stage2ListField) => void;
@@ -58,7 +61,7 @@ const CreateGroupStage2: React.FC<CreateGroupStage2Props> = ({
     mahjongTable, setMahjongTable,
     tableModel, setTableModel,
     imageItems, fileInputRef, handleImageSelect, removeImage,
-    features, restrictions, addListItem, handleListChange, removeListItem
+    rules, features, restrictions, addListItem, handleListChange, removeListItem
 }) => (
     <>
             {/* 環境設施選項 (新增區塊) */}
@@ -291,6 +294,15 @@ const CreateGroupStage2: React.FC<CreateGroupStage2Props> = ({
                     className="hidden"
                 />
             </div>
+
+            <DynamicListInput
+                label="麻將規則 (選填)"
+                items={rules}
+                placeholder="例如：不打請提前告知場主"
+                onAdd={() => addListItem('rules')}
+                onChange={(index, value) => handleListChange('rules', index, value)}
+                onRemove={(index) => removeListItem('rules', index)}
+            />
 
             <DynamicListInput
                 label="場地特色 (選填)"
