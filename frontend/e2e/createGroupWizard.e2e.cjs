@@ -7,18 +7,22 @@
 //    `vite build` 連型別都不驗、`run-tests.mjs` 咬的是純函式。三道閘對
 //    「按下去會發生什麼」零鑑別力。
 //
-// 🔴🔴 **T4 有一個間歇性假紅，根因到 2026-09-07 為止仍然不明。**
-//    症狀：同一顆 commit、同一份工作樹，T4 報「toast 沒出現」而步驟仍是 1、第二段 0。
-//    已經排除的候選：
-//      ① 固定 sleep 取樣 —— `ToastContext` 的 toast `duration` 預設 3000ms **會自己消失**，
-//         舊版在 click 後固定等 600ms 取一次樣，那個窗**兩端都是封閉的**。
-//         已改成閂住式 MutationObserver（出現過就記住），這條路已經封了。
+// 🔴🔴 **T4／T5 曾經每 4～5 次假紅一次；根因已查明＝跳出來的是「另一句」toast。**
+//    表單的 `startTime` 預設 = **開頁那一刻**截到分的時間，而檢核① 拿它跟
+//    「現在（秒歸零）」比 ⇒ 只要跑過一個分鐘邊界，先擋下來的是
+//    「開局時間不能早於目前時間」，`stakes` 那道永遠輪不到。
+//    修法：`page.clock.setFixedTime()`（見下方 FIX_CLOCK）。
+//    反控：`E2E_NO_CLOCK_FIX=1` 關掉它，假紅會回來。
+//
+//    ⚠️ 排除過程留著，因為前兩個假說**都是錯的**，而它們看起來都很合理：
+//      ① 固定 sleep 取樣 —— toast `duration` 預設 3000ms **會自己消失**，
+//         舊版在 click 後固定等 600ms 取一次樣，窗**兩端都是封閉的**。
+//         改成閂住式 MutationObserver ＋ 上限 20s 之後 —— **照樣紅**。
 //      ② dev server 中途重載 —— rc=3 那道會抓，而它沒有觸發（vite log 沒有 reloading）。
-//    ⇒ 所以「等不夠久」不是它。**還沒查明的那個原因仍然在。**
-//    ⇒ 因此加了 `__submits` 這個儀器：下次再發生時，
-//      `submit有派送=false` ⇒ 這一下點擊根本沒送出表單；
-//      `submit有派送=true` 而 `toast出現過=false` ⇒ 表單送出了但真的沒跳訊息。
-//      **在能分辨這兩者之前不要再猜。**
+//    ⇒ 真正問出答案的是 `__submits` 這個儀器：它讓
+//      `submit有派送=false`（這一下根本沒送出表單）與
+//      `submit有派送=true` 而 `toast出現過=false`（送出了但沒跳**那一句**）分得開。
+//      **在能分辨之前不要再猜** —— 我猜錯了兩次，其中一次還先寫進註解才去驗。
 //
 // 🔴 一律等「可觀測的結果」，不准用固定 sleep 當判準：
 //    正面斷言用 `appears()`／`until()`（等到為止）；負面斷言用**有界的**觀察窗，
@@ -94,9 +98,20 @@ async function main() {
     //       那個缺陷是真的，見 README「順手量到的產品問題」。
     //    反控：`E2E_NO_CLOCK_FIX=1` 關掉它，假紅就會回來。
     const FIX_CLOCK = process.env.E2E_NO_CLOCK_FIX !== '1';
+    // 🔴 `blocked` 由暖機頁與正式頁**共用**。第一版只有正式頁在記 ⇒ 暖機頁被擋的
+    //    請求不會進清單，而 T8 卻宣稱「整趟」。攔截在兩頁都有效（安全性沒破口），
+    //    但**宣稱的範圍**比量到的大 —— 那正是「量了 A 卻說成 B」。
+    const blocked = [];
+    const guard = (p) => p.route('**/*', (r) => {
+        const u = r.request().url();
+        if (isAllowed(u)) return r.continue();
+        blocked.push(u);
+        return r.abort();
+    });
+
     const warm = await ctx.newPage();
     if (FIX_CLOCK) await warm.clock.setFixedTime(new Date());
-    await warm.route('**/*', (r) => (isAllowed(r.request().url()) ? r.continue() : r.abort()));
+    await guard(warm);
     await warm.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
     await warm.waitForSelector('text=團局種類', { timeout: 60000 });
     await warm.waitForTimeout(2500);
@@ -105,20 +120,14 @@ async function main() {
     const page = await ctx.newPage();
     if (FIX_CLOCK) await page.clock.setFixedTime(new Date());
     const errs = [];
-    const blocked = [];
     let loads = 0;
     page.on('load', () => { loads += 1; });
     page.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
     page.on('console', (m) => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 200)); });
     // 🔴 只註冊**一個** route handler：Playwright 的多個 handler 是後註冊者先跑，
     //    而沒有呼叫 continue/abort/fallback 的那個會讓請求**整個掛住**。
-    //    記錄與放行/攔截必須寫在同一支裡。
-    await page.route('**/*', (r) => {
-        const u = r.request().url();
-        if (isAllowed(u)) return r.continue();
-        blocked.push(u);
-        return r.abort();
-    });
+    //    記錄與放行/攔截必須寫在同一支裡（`guard()` 就是那一支）。
+    await guard(page);
 
     await page.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('text=團局種類', { timeout: 60000 });
@@ -308,14 +317,17 @@ async function main() {
         aborted = e;
     }
 
-    // ── T8：整趟不准有任何請求想連外。
+    // ── T8：暖機頁＋正式頁都不准發出**非白名單**請求。
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。
-    //    🔴 而且它必須影響 rc —— 上一版只把清單印出來、不影響成敗，
+    //    🔴 而且它必須影響 rc —— 更早的版本只把清單印出來、不影響成敗，
     //       等於 README 寫的「硬防線」沒有任何執行力（覆驗抓到的）。
+    //    ⚠️ **措辭要精確**：白名單裡有 `cdn.tailwindcss.com` 與 `unpkg.com`
+    //       （`index.html` 本來就會抓），所以這條**不是**「完全沒有對外連線」，
+    //       而是「沒有白名單以外的連線，特別是沒有任何正式後端」。
     const external = [...new Set(blocked)];
-    record('T8 整趟沒有任何請求想連外（不可能碰到正式後端）',
+    record(`T8 兩頁都沒有非白名單請求（白名單＝本機＋${[...ALLOW_HOSTS].filter((h) => !/^(127\.0\.0\.1|localhost)$/.test(h)).join('／')}；正式後端不在其中）`,
         external.length === 0,
-        external.length === 0 ? '被擋清單為空' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
+        external.length === 0 ? '非白名單請求 0 筆（暖機頁與正式頁合計）' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
 
     const reloaded = loads > loadsAfterGoto;
 
