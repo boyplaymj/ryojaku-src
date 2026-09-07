@@ -9,16 +9,28 @@ import (
 
 // Game represents a mahjong game session (matching LINE Bot structure)
 type Game struct {
-	GameID            string       `dynamodbav:"gameId" json:"gameId"`
-	HostUserID        string       `dynamodbav:"hostUserId" json:"hostUserId"`
-	HostDisplayName   string       `dynamodbav:"hostDisplayName" json:"hostDisplayName"`
-	HostPictureURL    string       `dynamodbav:"-" json:"hostPictureUrl,omitempty"`
-	Type              string       `dynamodbav:"type" json:"type"`     // "long-term" or "one-time"
-	Status            string       `dynamodbav:"status" json:"status"` // "recruiting", "full", "closed", "cancelled"
-	Location          Location     `dynamodbav:"location" json:"location"`
-	Geohash           string       `dynamodbav:"geohash" json:"geohash"` // For location queries
-	PlayersNeeded     int          `dynamodbav:"playersNeeded" json:"playersNeeded"`
-	CurrentPlayers    int          `dynamodbav:"currentPlayers" json:"currentPlayers"`
+	GameID          string   `dynamodbav:"gameId" json:"gameId"`
+	HostUserID      string   `dynamodbav:"hostUserId" json:"hostUserId"`
+	HostDisplayName string   `dynamodbav:"hostDisplayName" json:"hostDisplayName"`
+	HostPictureURL  string   `dynamodbav:"-" json:"hostPictureUrl,omitempty"`
+	Type            string   `dynamodbav:"type" json:"type"`     // "long-term" or "one-time"
+	Status          string   `dynamodbav:"status" json:"status"` // "recruiting", "full", "closed", "cancelled"
+	Location        Location `dynamodbav:"location" json:"location"`
+	Geohash         string   `dynamodbav:"geohash" json:"geohash"` // For location queries
+	PlayersNeeded   int      `dynamodbav:"playersNeeded" json:"playersNeeded"`
+	CurrentPlayers  int      `dynamodbav:"currentPlayers" json:"currentPlayers"`
+	// RegistrationCount 是這個局收到的報名列數，由 `web_register` 的交易原子遞增。
+	//
+	// 🔴 [A3-o2] 它存在的唯一理由是：取消退點不可以依賴 `GameIdIndex` 的查詢結果。
+	//    GSI 在 DynamoDB **不支援強一致讀** ⇒ 剛寫進去的報名可能查不到，
+	//    而「還沒同步過來」與「真的沒人報名」在筆數上逐字相同 —— 拿後者退點就是發錢。
+	//    把計數放在 Games 這一列上，退點判斷就只依賴**一次強一致讀**（甚至是
+	//    取消那筆 UpdateItem 的 ALL_OLD 回傳值），GSI 延遲整個退出這個問題。
+	//
+	// ⚠️ **omitempty 不可以加**：A3-o2 之前建立的局沒有這個屬性，而
+	//    「屬性不存在」必須 fail-closed 成**不退**，不可以與「值是 0」混為一談。
+	//    加了 omitempty 之後，新建的 0 也會消失 ⇒ 兩者變成同一個形狀。
+	RegistrationCount int          `dynamodbav:"registrationCount" json:"registrationCount"`
 	JoinedPlayers     []Player     `dynamodbav:"joinedPlayers" json:"joinedPlayers"`
 	GameInfo          GameInfo     `dynamodbav:"gameInfo" json:"gameInfo"`
 	VenueFeatures     []string     `dynamodbav:"venueFeatures,omitempty" json:"venueFeatures,omitempty"`

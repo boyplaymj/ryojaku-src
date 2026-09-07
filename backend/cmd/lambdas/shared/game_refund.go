@@ -42,7 +42,7 @@ type RefundReason string
 
 const (
 	RefundYes              RefundReason = "refund:no-registrations"
-	RefundSkipRegQueryFail RefundReason = "skip:registration-query-failed"
+	RefundSkipCountUnknown RefundReason = "skip:registration-count-unknown"
 	RefundSkipAlreadyDone  RefundReason = "skip:already-cancelled"
 	RefundSkipHasInterest  RefundReason = "skip:has-registration-or-player"
 )
@@ -55,18 +55,21 @@ const (
 //	寫在 handler 裡就等於沒有尺，而其中兩個分支答錯的後果是**把點數送出去**。
 //
 // 參數的意義與陷阱：
-//   - `regQueryOK`：報名清單**查得到嗎**。🔴 這個布林不可以省 ——
-//     查詢失敗時 `registrationCount` 會是 0，而「查到 0 筆」與「查詢炸了」
-//     在數字上逐字相同。把後者當成前者，就是把查詢故障變成發錢。
+//   - `countsKnown`：下面那兩個數字**讀得出來嗎**。🔴 這個布林不可以省 ——
+//     讀不出來時它們都會是 0，而「真的是 0」與「根本沒讀到」在數字上逐字相同。
+//     把後者當成前者，就是把「不知道」變成發錢。
+//     ⚠️ 它涵蓋的情況隨呼叫端演進過：一開始是「GSI 查詢失敗」（A3-l），
+//     現在是「Games 那一列上沒有 `registrationCount` 屬性」（A3-o3，舊局都沒有）。
+//     **兩者是同一個判準的兩個實例**，所以參數留一個就夠。
 //   - `prevStatus`：**這次呼叫之前**那顆局的狀態。已經是 cancelled 代表這一次
 //     沒有造成任何狀態改變 ⇒ 不可以再退一次（重複呼叫在回應上長得一樣）。
 //   - 其餘兩個交給 ShouldRefundOnCancel，判準與理由見該函式。
 //
 // 順序是有意義的：兩道「不知道／已經做過」排在「有沒有人」前面，
 // 因為那兩種情況之下 registrationCount 根本不可信。
-func DecideCancelRefund(regQueryOK bool, prevStatus string, registrationCount, currentPlayers int) (bool, RefundReason) {
-	if !regQueryOK {
-		return false, RefundSkipRegQueryFail
+func DecideCancelRefund(countsKnown bool, prevStatus string, registrationCount, currentPlayers int) (bool, RefundReason) {
+	if !countsKnown {
+		return false, RefundSkipCountUnknown
 	}
 	if prevStatus == "cancelled" {
 		return false, RefundSkipAlreadyDone

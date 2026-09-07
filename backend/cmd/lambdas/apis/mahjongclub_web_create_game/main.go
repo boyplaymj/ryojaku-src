@@ -384,6 +384,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		Restrictions:      req.Restrictions,
 		ContactInfo:       ContactInfo{LineID: user.LineID}, // Use user's LINE ID from profile
 		NotificationQuota: 3,
+		// [A3-o2] 明確寫 0：讓「新局的計數是 0」與「舊局根本沒有這個屬性」分得開。
+		RegistrationCount: 0,
 		CreatedAt:         nowUnix,
 		UpdatedAt:         FlexibleTime{Time: now},
 		ExpiresAt:         now.Add(30 * 24 * time.Hour).Unix(),

@@ -71,13 +71,14 @@ func TestDecideCancelRefund_RefundsWhenTrulyEmpty(t *testing.T) {
 	}
 }
 
-func TestDecideCancelRefund_QueryFailureIsNotZero(t *testing.T) {
-	// 🔴 這一格是整組最重要的：查詢失敗時 registrationCount 一定是 0，
-	//    與「真的沒人報名」在數字上逐字相同。少了 regQueryOK 這個參數，
-	//    DynamoDB 一抖就變成發錢，而 log 上看起來完全正常。
+func TestDecideCancelRefund_UnknownCountIsNotZero(t *testing.T) {
+	// 🔴 這一格是整組最重要的：讀不到計數時它一定是 0，
+	//    與「真的沒人報名」在數字上逐字相同。少了 countsKnown 這個參數，
+	//    **A3-o2 之前建立的每一個局**（沒有 registrationCount 屬性）都會被退款，
+	//    而 log 上看起來完全正常。
 	ok, reason := DecideCancelRefund(false, "recruiting", 0, 1)
-	if ok || reason != RefundSkipRegQueryFail {
-		t.Fatalf("報名清單查不到時不可以退，得到 ok=%v reason=%s", ok, reason)
+	if ok || reason != RefundSkipCountUnknown {
+		t.Fatalf("計數讀不出來時不可以退，得到 ok=%v reason=%s", ok, reason)
 	}
 }
 
@@ -102,7 +103,7 @@ func TestDecideCancelRefund_ReasonsAreDistinct(t *testing.T) {
 	// 🔴 四個 reason 若有兩個撞在一起，上面那些測試會互相冒充通過，
 	//    而 log 也就答不出「這次為什麼沒退」——那是事後唯一的線索。
 	seen := map[RefundReason]bool{}
-	for _, r := range []RefundReason{RefundYes, RefundSkipRegQueryFail, RefundSkipAlreadyDone, RefundSkipHasInterest} {
+	for _, r := range []RefundReason{RefundYes, RefundSkipCountUnknown, RefundSkipAlreadyDone, RefundSkipHasInterest} {
 		if r == "" {
 			t.Fatal("reason 不可以是空字串（空字串在 log 裡與「沒印」分不出來）")
 		}

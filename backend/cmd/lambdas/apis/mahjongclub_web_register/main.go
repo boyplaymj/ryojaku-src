@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -204,19 +206,80 @@ func (d *Database) GetGame(ctx context.Context, gameID string) (*Game, error) {
 	return &game, nil
 }
 
-// SaveRegistration saves a registration to DynamoDB
-func (d *Database) SaveRegistration(ctx context.Context, reg *Registration) error {
+// SaveRegistrationAtomically 把「報名列寫入」與「Games 上的計數遞增」放進同一筆交易，
+// 並且**在交易裡**確認那個局仍然是 `recruiting`。
+//
+// 🔴 [A3-o2] 原本是無條件 `PutItem`，而上面第 2 步只是「讀出來看一眼」——
+//
+//	那是 TOCTOU：讀到 recruiting 之後、寫進去之前，主揪可以取消這個局並拿回 120 點，
+//	而這筆報名照樣寫得進去。結果是「有人報名的局被當成無人報名退了款」。
+//	⚠️ 條件掛在 Games 那一列（`#s = :recruiting`），不是掛在報名列上 ——
+//	  後者對「局在這中間被取消了」零鑑別力。
+//
+// 🔴 為什麼是 `Update`＋`ConditionExpression` 而不是 `ConditionCheck`＋另一個 `Update`：
+//
+//	DynamoDB 的交易**不允許同一筆交易碰同一個 item 兩次**。所以檢查與遞增必須
+//	合成同一個 `Update`，讓它自己的條件當那道檢查。
+//
+// 🔴 報名列那筆帶 `attribute_not_exists(registrationId)`：少了它，同一個 registrationId
+//
+//	重送會讓計數多加一次，而報名列看起來完全正常。
+func (d *Database) SaveRegistrationAtomically(ctx context.Context, reg *Registration) error {
 	item, err := attributevalue.MarshalMap(reg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal registration: %w", err)
 	}
 
-	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: &[]string{d.cfg.GetTableName("Registrations")}[0],
-		Item:      item,
-	})
+	gamesTable := d.cfg.GetTableName("Games")
+	regTable := d.cfg.GetTableName("Registrations")
 
+	_, err = d.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Update: &types.Update{
+					TableName: &gamesTable,
+					Key: map[string]types.AttributeValue{
+						"gameId": &types.AttributeValueMemberS{Value: reg.GameID},
+					},
+					UpdateExpression:    aws.String("ADD registrationCount :one SET updatedAt = :now"),
+					ConditionExpression: aws.String("#s = :recruiting"),
+					ExpressionAttributeNames: map[string]string{
+						"#s": "status",
+					},
+					ExpressionAttributeValues: map[string]types.AttributeValue{
+						":one":        &types.AttributeValueMemberN{Value: "1"},
+						":now":        &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+						":recruiting": &types.AttributeValueMemberS{Value: "recruiting"},
+					},
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:           &regTable,
+					Item:                item,
+					ConditionExpression: aws.String("attribute_not_exists(registrationId)"),
+				},
+			},
+		},
+	})
 	return err
+}
+
+// isTransactionConditionFailed 認出「交易裡有條件沒過」。
+// 🔴 用 errors.As 認型別，不要比對字串 —— 字串隨 SDK 版本改，改掉之後這裡會靜靜退化成
+//
+//	「所有錯誤都是一般失敗」，於是「局已被取消」會回 500 而不是那句該給使用者的話。
+func isTransactionConditionFailed(err error) bool {
+	var tc *types.TransactionCanceledException
+	if !errors.As(err, &tc) {
+		return false
+	}
+	for _, r := range tc.CancellationReasons {
+		if r.Code != nil && *r.Code == "ConditionalCheckFailed" {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateGame updates a game in DynamoDB
@@ -460,8 +523,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Save registration
-	err = db.SaveRegistration(ctx, registration)
+	err = db.SaveRegistrationAtomically(ctx, registration)
 	if err != nil {
+		if isTransactionConditionFailed(err) {
+			// 🔴 上面第 2 步讀到的是 `recruiting`，到這裡卻不是了 ⇒ 局在這中間被取消／額滿。
+			//    給的是與第 2 步**同一句話**：對使用者而言這兩種情況沒有分別。
+			log.Printf("[A3-o2] game %s 報名時狀態已非 recruiting（TOCTOU 被交易擋下）", req.GameID)
+			response := Response{Success: false, Error: "此團局已不接受報名"}
+			body, _ := json.Marshal(response)
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    headers,
+				Body:       string(body),
+			}, nil
+		}
 		log.Printf("Failed to save registration: %v", err)
 		response := Response{Success: false, Error: "報名失敗，請稍後再試"}
 		body, _ := json.Marshal(response)

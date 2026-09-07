@@ -149,18 +149,19 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	//    而退點如果只看「這次呼叫成功了」就會**每呼叫一次退一次 120 點**。
 	//    ⚠️ 下面 saveGame 帶了條件式（status <> cancelled），所以競態也擋得住：
 	//      兩個併發請求只有一個寫得進去，另一個拿到 ConditionalCheckFailed。
-	prevStatus, _ := game["status"].(string)
-
-	// Update game status to cancelled
-	game["status"] = "cancelled"
-	game["updatedAt"] = time.Now().Format(time.RFC3339)
-
-	err = saveGameIfNotCancelled(ctx, game)
+	// 🔴 [A3-o3] 這裡**不再整筆覆寫**。原本是「讀出來、改 status、整筆 PutItem 寫回」，
+	//    而那會把別的寫者在這中間對這一列做的事一起蓋掉 —— 包括 `web_register`
+	//    剛遞增上去的 `registrationCount`（於是「有人報名」在退款判斷時消失）。
+	// 🔴 而 `ReturnValues: ALL_OLD` 是整個修法的關鍵：它讓「把局翻成 cancelled」與
+	//    「取得判斷退款所需的那份快照」變成**同一個原子動作**。
+	//    在此之前退款讀的是 `GameIdIndex`（GSI 不支援強一致讀）⇒ 剛寫的報名可能
+	//    還沒同步過來，而那與「真的沒人報名」在筆數上逐字相同。
+	oldItem, err := cancelGameAtomically(ctx, req.GameID)
 	if err != nil {
 		if isConditionalCheckFailed(err) {
 			// 已經是 cancelled ⇒ 這次沒有造成任何狀態改變，**不可以**退點。
 			// 回 200：對呼叫端而言「這個局已經取消了」是它要的結果（冪等）。
-			log.Printf("[A3-l] game %s 已是 cancelled，本次不退點（冪等）", req.GameID)
+			log.Printf("[A3-l] game %s 已是 cancelled 或不存在，本次不退點（冪等）", req.GameID)
 			response := Response{Success: true, Data: map[string]interface{}{"gameId": req.GameID, "alreadyCancelled": true}}
 			body, _ := json.Marshal(response)
 			return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Headers: headers, Body: string(body)}, nil
@@ -206,7 +207,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Also notify pending registrations
 	allRegistrations, err := getGameRegistrations(ctx, req.GameID)
-	regQueryOK := err == nil
+	// ⚠️ [A3-o3] 這次查詢**只**用來發通知。退款判準已改讀 `oldItem` 的 registrationCount ——
+	//    GSI 查不到／查漏了只會少發通知，不會再影響點數。
 	if err == nil {
 		for _, reg := range allRegistrations {
 			if status, ok := reg["status"].(string); ok && status == "pending" {
@@ -245,15 +247,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	//    在一個地方讀得完。
 	refunded := 0
 	{
-		currentPlayers := 0
-		if cp, ok := game["currentPlayers"].(float64); ok {
-			currentPlayers = int(cp)
-		}
+		// 🔴 [A3-o3] 這兩個數字一律取自**取消那一筆 UpdateItem 的 ALL_OLD 回傳值**，
+		//    不是取自開頭那次 `getGame`，也不再是 GSI 的筆數。
+		//    理由：只有 ALL_OLD 保證「這就是我們把它翻成 cancelled 的那一瞬間的樣子」。
+		//    ⚠️ `allRegistrations`（GSI）仍然用來發通知 —— 那個用途容得下延遲，退款不行。
+		regCount, currentPlayers, countsKnown := refundInputsFromItem(oldItem)
+
 		// 🔴 判斷整段住在 `shared.DecideCancelRefund`（有測試）。這裡只做接線。
 		//    ⚠️ 三個分支答錯的後果都是「把點數送出去」，所以它不可以是 inline 的 if。
-		doRefund, reason := shared.DecideCancelRefund(regQueryOK, prevStatus, len(allRegistrations), currentPlayers)
-		log.Printf("[A3-l] game %s 退點判定：%s（報名 %d 筆／currentPlayers %d／查詢OK=%v／前狀態=%q）",
-			req.GameID, reason, len(allRegistrations), currentPlayers, regQueryOK, prevStatus)
+		//    ⚠️ 第二個參數傳 `""`：走到這裡代表條件式**通過**了，也就是
+		//      「這一次真的由我們完成 recruiting→cancelled 的轉換」。冪等由條件式擋，
+		//      不是由這個字串擋 —— 兩道都留著是因為它們擋的不是同一件事。
+		doRefund, reason := shared.DecideCancelRefund(countsKnown, "", regCount, currentPlayers)
+		log.Printf("[A3-l/o3] game %s 退點判定：%s（報名計數 %d／currentPlayers %d／計數可讀=%v／GSI 另查到 %d 筆・僅供通知）",
+			req.GameID, reason, regCount, currentPlayers, countsKnown, len(allRegistrations))
 		if doRefund {
 			before, after, rerr := addUserPoints(ctx, userID, shared.CreateGameCost)
 			if rerr != nil {
@@ -342,25 +349,83 @@ func saveGame(ctx context.Context, game map[string]interface{}) error {
 //
 //	同一顆局被取消兩次會退兩次 120 點，而兩次呼叫在回應上**逐字相同**。
 //	⚠️ 條件掛在 `status`，不是「有沒有這一列」——後者對「已經取消過」零鑑別力。
-func saveGameIfNotCancelled(ctx context.Context, game map[string]interface{}) error {
-	item, err := attributevalue.MarshalMap(game)
-	if err != nil {
-		return err
-	}
-
+func cancelGameAtomically(ctx context.Context, gameID string) (map[string]types.AttributeValue, error) {
 	tableName := tablePrefix + "Games"
-	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           &tableName,
-		Item:                item,
-		ConditionExpression: aws.String("attribute_not_exists(#s) OR #s <> :cancelled"),
+	out, err := dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &tableName,
+		Key: map[string]types.AttributeValue{
+			"gameId": &types.AttributeValueMemberS{Value: gameID},
+		},
+		UpdateExpression:    aws.String("SET #s = :cancelled, updatedAt = :now"),
+		ConditionExpression: aws.String("attribute_exists(gameId) AND #s <> :cancelled"),
 		ExpressionAttributeNames: map[string]string{
 			"#s": "status",
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":cancelled": &types.AttributeValueMemberS{Value: "cancelled"},
+			":now":       &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
 		},
+		ReturnValues: types.ReturnValueAllOld,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return out.Attributes, nil
+}
+
+// registrationCountFromItem 從一筆 Games 的 DDB item 讀出報名計數。
+//
+// 🔴 回傳的第二個值是「**這個屬性存在嗎**」，不是「值是不是 0」。
+//
+//	`[A3-o2]` 之前建立的局根本沒有 `registrationCount` 這個屬性，
+//	而 Go 的零值會讓它變成 0 ⇒ **舊局會全部被判成「無人報名」而退款**。
+//	這是同一個坑第三次出現（前兩次：A3-l 的 GSI 查詢失敗、models 的 omitempty），所以它有自己的回傳值。
+func registrationCountFromItem(item map[string]types.AttributeValue) (int, bool) {
+	v, ok := item["registrationCount"]
+	if !ok {
+		return 0, false
+	}
+	n, ok := v.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, false
+	}
+	count := 0
+	if _, err := fmt.Sscanf(n.Value, "%d", &count); err != nil {
+		return 0, false
+	}
+	return count, true
+}
+
+// refundInputsFromItem 把退款判斷需要的兩個數字、以及「它們**都**讀得出來嗎」一次取出。
+//
+// 🔴 這支存在的理由是一發**存活過的突變**：兩個 known 旗標的合取原本直接寫在 handler 裡，
+//
+//	把 `&&` 改成 `||` **沒有任何測試會紅**。而那個改動的後果是
+//	「只要其中一個讀得到就敢退款」—— 舊局剛好就是 `currentPlayers` 讀得到、
+//	`registrationCount` 讀不到，正中那個缺口。
+//
+// ⚠️ 合取不是保守過頭：兩個數字都是 `ShouldRefundOnCancel` 的輸入，少一個就判不了。
+func refundInputsFromItem(item map[string]types.AttributeValue) (int, int, bool) {
+	regCount, regKnown := registrationCountFromItem(item)
+	currentPlayers, playersKnown := currentPlayersFromItem(item)
+	return regCount, currentPlayers, regKnown && playersKnown
+}
+
+// currentPlayersFromItem 同上，讀已加入人數。缺屬性一樣回 false（fail-closed）。
+func currentPlayersFromItem(item map[string]types.AttributeValue) (int, bool) {
+	v, ok := item["currentPlayers"]
+	if !ok {
+		return 0, false
+	}
+	n, ok := v.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, false
+	}
+	count := 0
+	if _, err := fmt.Sscanf(n.Value, "%d", &count); err != nil {
+		return 0, false
+	}
+	return count, true
 }
 
 // isConditionalCheckFailed 把「條件沒過」與其他錯誤分開。
