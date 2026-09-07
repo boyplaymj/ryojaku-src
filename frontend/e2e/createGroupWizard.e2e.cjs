@@ -39,6 +39,10 @@ const path = require('path');
 
 const PORT = process.env.E2E_PORT || '5199';
 const BASE = `http://127.0.0.1:${PORT}`;
+// 🔴 由 run.sh 傳進來，與 dev server 的 `VITE_API_BASE_URL` **是同一個值**（見 run.sh 的 API_BASE）。
+//    T10 要 stub 的那個 `user-info` 就掛在它底下。單獨跑時退回預設值。
+const API_BASE = process.env.E2E_API_BASE || `${BASE}/__e2e_no_backend`;
+const PROFILE_STUB = new URL(`${API_BASE}/user-info`);
 const URL_HARNESS = `${BASE}/e2e/_generated.harness.html`;
 const SHOT_DIR = process.env.E2E_SHOT_DIR || path.join(os.tmpdir(), 'a3c-shots');
 
@@ -57,7 +61,7 @@ const isAllowed = (raw) => {
     }
 };
 
-const TOTAL_TESTS = 10;
+const TOTAL_TESTS = 11;
 const results = [];
 /** 一條測試紅了就**停在那裡**。 */
 class Failed extends Error {}
@@ -128,16 +132,33 @@ async function main() {
         ageRange: '26-35', mahjongExperience: '中級', lineId: 'e2e-line',
         hasClaimedPushBonus: true,   // 避開推播引導那條岔路（那不在本套件涵蓋範圍）
     };
+    /**
+     * 🔴 **精確比對，不准用 `u.includes('/user-info')`**（覆驗抓到的，而且是同一類的第二次犯）：
+     *    子字串比對之下 `https://evil.example/?x=/user-info` 也會被 fulfill ⇒
+     *    它不進 `blocked`，**T8 那條安全斷言就變成假綠**。
+     *    ⇒ 解析後比 origin ＋ pathname，再釘 GET。反控是 T11。
+     *    ⚠️ 這與白名單那邊踩過的坑同源（整條 URL 的 regex 會被 query string 命中）。
+     */
+    const isProfileStub = (r) => {
+        if (r.request().method() !== 'GET') return false;
+        try {
+            const u = new URL(r.request().url());
+            return u.origin === PROFILE_STUB.origin && u.pathname === PROFILE_STUB.pathname;
+        } catch {
+            return false;   // 解析不了就不是它（不敢判就不敢放）
+        }
+    };
     const guard = (p, opts = {}) => p.route('**/*', (r) => {
         const u = r.request().url();
-        if (opts.fakeProfile && u.includes('/user-info')) {
+        const sink = opts.sink || blocked;
+        if (opts.fakeProfile && isProfileStub(r)) {
             return r.fulfill({
                 status: 200, contentType: 'application/json',
                 body: JSON.stringify({ success: true, data: FAKE_PROFILE }),
             });
         }
         if (isAllowed(u)) return r.continue();
-        blocked.push(u);
+        sink.push(u);
         return r.abort();
     });
 
@@ -357,7 +378,8 @@ async function main() {
     //    🔴 為什麼要新開 context：草稿住在 localStorage。沿用正式頁那個 context 的話，
     //       裡面已經有一份 startTime = 現在（＝**不過期**）的草稿，
     //       T9 想造的場景會被它蓋掉 —— 而那樣 T9 會綠，且綠得毫無理由。
-    //    ⚠️ 執行順序與編號不同：T9／T10 跑在 T8 前面，好讓 T8 的 `blocked` 也涵蓋這兩頁。
+    //    ⚠️ 執行順序與編號不同：T9／T10／T11 跑在 T8 前面，好讓 T8 的 `blocked` 也涵蓋它們的頁面
+    //       （T11 例外：它刻意用自己的 sink，理由見該條）。
     //       編號是斷言的身分，不是執行順序。
     const t9ctx = await browser.newContext({ viewport: { width: 390, height: 900 }, deviceScaleFactor: 2 });
     let t9pass = false;
@@ -452,6 +474,41 @@ async function main() {
     await t9ctx.close();
     record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
     record('T10 送出的 payload 帶的是刷新後的開局時間（不是草稿那個舊的）', t10pass, t10detail);
+
+    // ── T11：**誘餌** —— 一個「路徑裡含 /user-info、但不是本機那支」的請求
+    //    必須①**不被**假 profile 接走 ②被記進被擋清單。
+    //    🔴 這是 T10 那個 stub 的反控。少了它，`isProfileStub` 被改回子字串比對
+    //       （`u.includes('/user-info')`）之後 —— T10 照樣綠、T8 也照樣綠，
+    //       因為誘餌會被 fulfill 掉、根本不會進 `blocked`。**兩條都對它零鑑別力。**
+    //    ⚠️ 它用**自己的** sink，不污染 T8 的清單（T8 斷言那份必須是空的）。
+    const decoy = [];
+    let t11pass = false;
+    let t11detail = '';
+    const DECOY_URL = 'https://evil.example/x/user-info?userId=e2e-harness-user';
+    try {
+        const t11ctx = await browser.newContext({ viewport: { width: 390, height: 900 } });
+        const dp = await t11ctx.newPage();
+        await guard(dp, { fakeProfile: true, sink: decoy });
+        await dp.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+        await dp.waitForSelector('text=團局種類', { timeout: 60000 });
+        const got = await dp.evaluate(async (url) => {
+            try {
+                const r = await fetch(url);
+                return { ok: true, body: (await r.text()).slice(0, 80) };
+            } catch (e) {
+                return { ok: false, err: String(e && e.message || e).slice(0, 60) };
+            }
+        }, DECOY_URL);
+        await t11ctx.close();
+        const recorded = decoy.includes(DECOY_URL);
+        // 🔴 兩個條件缺一不可：只驗「有被記錄」的話，一個「先 fulfill 又被記錄」的實作也會綠。
+        t11pass = got.ok === false && recorded === true;
+        t11detail = `誘餌被假profile接走=${got.ok}${got.ok ? `（回了「${got.body}」）` : `（abort：${got.err}）`} `
+            + `有進被擋清單=${recorded}`;
+    } catch (e) {
+        t11detail = `例外：${e && e.message ? e.message.split('\n')[0] : e}`;
+    }
+    record('T11 誘餌：路徑含 /user-info 但非本機的請求 ⇒ 不被 stub 接走、且被記進被擋清單', t11pass, t11detail);
 
     // ── T8：暖機頁＋正式頁都不准發出**非白名單**請求。
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。

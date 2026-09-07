@@ -8,6 +8,9 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND="$(dirname "$HERE")"
 PORT="${E2E_PORT:-5199}"
+# 🔴 只留一份真值：dev server 的 VITE_API_BASE_URL 與腳本要 stub 的那個 URL 是**同一個**。
+#    兩邊各寫一次的話，改了其中一邊 ⇒ T10 拿不到 profile、走不到 onCreate（會紅，不會靜默）。
+API_BASE="http://127.0.0.1:$PORT/__e2e_no_backend"
 GEN="$HERE/_generated.harness.html"
 VITE_LOG="$(mktemp -t ryojaku-e2e-vite-XXXXXX.log)"
 VITE_PID=""
@@ -58,7 +61,7 @@ fi
 echo "[e2e] 起 dev server（port $PORT，log: $VITE_LOG）"
 (
   cd "$FRONTEND" || exit 1
-  VITE_API_BASE_URL="http://127.0.0.1:$PORT/__e2e_no_backend" \
+  VITE_API_BASE_URL="$API_BASE" \
     npx vite --port "$PORT" --strictPort --host 127.0.0.1 >"$VITE_LOG" 2>&1
 ) &
 VITE_PID=$!
@@ -76,7 +79,7 @@ VITE_PORT_PIDS="$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ')"
 
 # ── 4. 跑
 echo "[e2e] 開跑"
-NODE_PATH="$PW_NODE_PATH" E2E_PORT="$PORT" node "$HERE/createGroupWizard.e2e.cjs"
+NODE_PATH="$PW_NODE_PATH" E2E_PORT="$PORT" E2E_API_BASE="$API_BASE" node "$HERE/createGroupWizard.e2e.cjs"
 RC=$?
 
 echo "[e2e] rc=$RC"
