@@ -6,16 +6,19 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"mahjongclub-backend/cmd/lambdas/shared"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -217,11 +220,15 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}, nil
 	}
 
-	// Check if game is full
-	currentPlayers := int(game["currentPlayers"].(float64))
-	playersNeeded := int(game["playersNeeded"].(float64))
-	if currentPlayers >= playersNeeded+1 {
-		response := Response{Success: false, Error: "團局已滿，無法接受更多報名"}
+	// 🔴 [A3-o1] 從這裡到交易送出之間的每一道判斷，都只是**提早失敗**（給使用者一句
+	//    像樣的話）。真正的守門員是下面那筆交易的 ConditionExpression —— 讀與寫之間
+	//    永遠有空窗，而 cancel_game 正是在那個空窗裡把局翻成 cancelled 的。
+	// ⚠️ 這兩道與交易條件重複是刻意的，但**它們不是那個保證** —— 讀出來的東西在送出前
+	//    隨時會過期。反過來說也成立：這裡就算漏判，交易照樣擋得住，使用者拿到的會是
+	//    decideAcceptConflict 依 ALL_OLD 講的那句話（而不是這裡先猜的那句）。
+	gameStatus, _ := game["status"].(string)
+	if gameStatus != "recruiting" {
+		response := Response{Success: false, Error: gameNotRecruitingMessage(gameStatus)}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusBadRequest,
@@ -230,17 +237,15 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}, nil
 	}
 
-	// Update registration status
-	registration["status"] = "accepted"
-	registration["updatedAt"] = time.Now().Format(time.RFC3339)
-
-	err = saveRegistration(ctx, registration)
-	if err != nil {
-		log.Printf("Failed to update registration: %v", err)
-		response := Response{Success: false, Error: "接受報名失敗"}
+	// Check if game is full
+	currentPlayers := int(game["currentPlayers"].(float64))
+	playersNeeded := int(game["playersNeeded"].(float64))
+	capacity := playersNeeded + 1 // 主揪自己也佔一個位子
+	if currentPlayers >= capacity {
+		response := Response{Success: false, Error: msgGameFull}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayV2HTTPResponse{
-			StatusCode: http.StatusInternalServerError,
+			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
 		}, nil
@@ -259,35 +264,62 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}
 	}
 
-	newPlayer := map[string]interface{}{
+	now := time.Now().Format(time.RFC3339)
+	newPlayerAV, err := attributevalue.MarshalMap(map[string]interface{}{
 		"userId":      playerUserID,
 		"displayName": playerDisplayName,
 		"pictureUrl":  pictureURL,
-		"joinedAt":    time.Now().Format(time.RFC3339),
-	}
-
-	// Add to joined players
-	joinedPlayers := []interface{}{}
-	if jp, ok := game["joinedPlayers"].([]interface{}); ok {
-		joinedPlayers = jp
-	}
-	joinedPlayers = append(joinedPlayers, newPlayer)
-	game["joinedPlayers"] = joinedPlayers
-
-	// Update current players count
-	game["currentPlayers"] = currentPlayers + 1
-
-	// Update game status if full
-	if currentPlayers+1 >= playersNeeded+1 {
-		game["status"] = "full"
-	}
-
-	game["updatedAt"] = time.Now().Format(time.RFC3339)
-
-	err = saveGame(ctx, game)
+		"joinedAt":    now,
+	})
 	if err != nil {
-		log.Printf("Failed to update game: %v", err)
-		response := Response{Success: false, Error: "更新團局失敗"}
+		log.Printf("Failed to marshal new player: %v", err)
+		response := Response{Success: false, Error: "接受報名失敗"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayV2HTTPResponse{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
+
+	// 🔴 [A3-o1] 報名列與團局改成**同一筆交易**，而且都不再整筆覆寫。原本是
+	//    「先整筆 PutItem 寫回報名列，再整筆 PutItem 寫回團局」，兩個獨立的缺陷：
+	//    ① 整筆覆寫會把別的寫者在讀寫空窗裡寫上去的東西一起蓋掉 —— 包含
+	//       cancel_game 剛寫的 `status = cancelled`（於是已取消的局被復活成
+	//       recruiting／full，而主揪已經領回 120 點）與 register 遞增的 registrationCount。
+	//    ② 兩次寫入之間任一次失敗，會留下「報名已 accepted、人卻沒進團局」的殘局；
+	//       而重試會被上面那道「此報名已經接受過了」擋住 ⇒ 兩頭落空。
+	//    交易把這兩件事變成一個原子動作，條件沒過就整筆不生效。
+	_, err = dynamoClient.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: buildAcceptTransactItems(
+			tablePrefix+"Registrations",
+			tablePrefix+"Games",
+			acceptWrite{
+				RegistrationID:  finalRegistrationID,
+				GameID:          finalGameID,
+				NewPlayer:       newPlayerAV,
+				ExpectedPlayers: currentPlayers,
+				Capacity:        capacity,
+				Now:             now,
+			},
+		),
+	})
+	if err != nil {
+		var tc *types.TransactionCanceledException
+		if errors.As(err, &tc) {
+			if msg, ok := decideAcceptConflict(tc.CancellationReasons); ok {
+				log.Printf("Accept rejected by condition: reg=%s game=%s msg=%s", finalRegistrationID, finalGameID, msg)
+				response := Response{Success: false, Error: msg}
+				body, _ := json.Marshal(response)
+				return events.APIGatewayV2HTTPResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    headers,
+					Body:       string(body),
+				}, nil
+			}
+		}
+		log.Printf("Failed to accept registration atomically: %v", err)
+		response := Response{Success: false, Error: "接受報名失敗"}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusInternalServerError,
@@ -347,6 +379,188 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	}, nil
 }
 
+// ── [A3-o1] 接受報名的原子寫入 ────────────────────────────────────────────────
+//
+// 這一段刻意做成「純函式組出請求 → 呼叫端只負責送出」，因為交易本身、條件式與
+// ReturnValuesOnConditionCheckFailure 的**行為**要真的 DynamoDB 才驗得到。
+// 這裡的測試釘得住的是**請求長什麼樣**（哪一格對哪張表、條件寫了什麼、
+// 佔位符有沒有對齊），釘不住 DynamoDB 收到之後會怎麼做 —— 兩者不要互相冒充。
+
+// 交易格的順序即索引。decideAcceptConflict 靠這兩個常數認出「是哪一格被擋下來的」，
+// 🔴 而 CancellationReasons 的順序**就是** TransactItems 的順序（AWS 保證逐格對應）。
+// ⇒ 順序一旦改動，錯誤訊息會整個對調（把「團局已取消」講成「報名已處理過」）。
+// buildAcceptTransactItems 的測試會斷言這兩格各自打在哪張表，那就是這條約定的尺。
+const (
+	txIdxRegistration = 0
+	txIdxGame         = 1
+)
+
+const (
+	msgGameFull         = "團局已滿，無法接受更多報名"
+	msgGameCancelled    = "此團局已取消，無法接受報名"
+	msgGameNotOpen      = "此團局目前不接受報名"
+	msgGameChanged      = "團局狀態已變動，請重新整理後再試"
+	msgRegAccepted      = "此報名已經接受過了"
+	msgRegRejected      = "此報名已經被拒絕過了"
+	msgRegStatusChanged = "報名狀態已變動，請重新整理後再試"
+)
+
+// gameNotRecruitingMessage 把團局狀態翻成給使用者的那句話。
+// 🔴 讀出來先擋的那一道與交易條件失敗後的那一道**共用這一個函式** —— 兩處各寫一份的話，
+// 同一個情境會依「誰先發現」給出不同的話，而那個差異沒有任何人會去對。
+func gameNotRecruitingMessage(status string) string {
+	if status == "cancelled" {
+		return msgGameCancelled
+	}
+	return msgGameNotOpen
+}
+
+// acceptWrite 是「接受一筆報名」要寫下去的全部東西。
+type acceptWrite struct {
+	RegistrationID string
+	GameID         string
+	NewPlayer      map[string]types.AttributeValue
+	// ExpectedPlayers 是讀到的 currentPlayers，當樂觀鎖用：條件寫成相等而不是
+	// 「小於上限」，因為 status 要不要翻成 full 是**依這個讀數算出來的**。
+	// 只寫「小於上限」的話，兩個併發的接受都會過，而其中一個算出來的 full 是錯的。
+	ExpectedPlayers int
+	Capacity        int // playersNeeded + 1（主揪自己佔一個位子）
+	Now             string
+}
+
+// buildAcceptTransactItems 組出「接受報名」那一筆交易。
+//
+// 兩格都掛 ReturnValuesOnConditionCheckFailure: ALL_OLD —— 少了它，被擋下來時只知道
+// 「有條件沒過」，說不出是哪一種（局取消了／滿了／報名已處理過），而那三句話要給的
+// 使用者行動完全不同。
+func buildAcceptTransactItems(regTable, gamesTable string, w acceptWrite) []types.TransactWriteItem {
+	// 團局：只動該動的欄位。整筆覆寫正是 [A3-o1] 要修掉的東西。
+	gameUpdate := "SET joinedPlayers = list_append(if_not_exists(joinedPlayers, :empty), :newPlayers), currentPlayers = :next, updatedAt = :now"
+	gameValues := map[string]types.AttributeValue{
+		":empty":      &types.AttributeValueMemberL{Value: []types.AttributeValue{}},
+		":newPlayers": &types.AttributeValueMemberL{Value: []types.AttributeValue{&types.AttributeValueMemberM{Value: w.NewPlayer}}},
+		":next":       &types.AttributeValueMemberN{Value: strconv.Itoa(w.ExpectedPlayers + 1)},
+		":now":        &types.AttributeValueMemberS{Value: w.Now},
+		":recruiting": &types.AttributeValueMemberS{Value: "recruiting"},
+		":expected":   &types.AttributeValueMemberN{Value: strconv.Itoa(w.ExpectedPlayers)},
+	}
+	// 🔴 只有「這一筆剛好把它填滿」才寫 status，而且只寫 full。
+	// 這支端點**永遠不會**把 status 寫成 recruiting —— 那正是它以前復活已取消團局的手法。
+	if w.ExpectedPlayers+1 >= w.Capacity {
+		gameUpdate += ", #s = :full"
+		gameValues[":full"] = &types.AttributeValueMemberS{Value: "full"}
+	}
+
+	return []types.TransactWriteItem{
+		txIdxRegistration: {
+			Update: &types.Update{
+				TableName: aws.String(regTable),
+				Key: map[string]types.AttributeValue{
+					"registrationId": &types.AttributeValueMemberS{Value: w.RegistrationID},
+				},
+				UpdateExpression: aws.String("SET #s = :accepted, updatedAt = :now"),
+				// 條件掛在 pending：accepted／rejected 都不可以再被改一次，
+				// 而「這一列還在不在」對「已經處理過」零鑑別力。
+				ConditionExpression:      aws.String("#s = :pending"),
+				ExpressionAttributeNames: map[string]string{"#s": "status"},
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":accepted": &types.AttributeValueMemberS{Value: "accepted"},
+					":pending":  &types.AttributeValueMemberS{Value: "pending"},
+					":now":      &types.AttributeValueMemberS{Value: w.Now},
+				},
+				ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
+			},
+		},
+		txIdxGame: {
+			Update: &types.Update{
+				TableName: aws.String(gamesTable),
+				Key: map[string]types.AttributeValue{
+					"gameId": &types.AttributeValueMemberS{Value: w.GameID},
+				},
+				UpdateExpression:                    aws.String(gameUpdate),
+				ConditionExpression:                 aws.String("#s = :recruiting AND currentPlayers = :expected"),
+				ExpressionAttributeNames:            map[string]string{"#s": "status"},
+				ExpressionAttributeValues:           gameValues,
+				ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
+			},
+		},
+	}
+}
+
+// decideAcceptConflict 從交易的取消原因決定回給使用者的那句話。
+//
+// 回傳的 bool 是「這是不是條件沒過」。**不可以省掉它**：TransactionCanceledException
+// 也會因為 TransactionConflict／ProvisionedThroughputExceeded 之類的原因發生，
+// 那些是伺服器端的問題，回 400 加一句「狀態已變動」等於對使用者說謊，
+// 而且會讓真正該被看見的失敗消失在一句「請重新整理」裡。
+func decideAcceptConflict(reasons []types.CancellationReason) (string, bool) {
+	// 團局那一格優先：它答得出「為什麼」（取消了／滿了），報名那格只答得出「已處理過」。
+	// 兩格同時失敗時（例如重複點擊撞上取消），前者才是使用者需要知道的。
+	if item, ok := conditionFailedItem(reasons, txIdxGame); ok {
+		return gameConflictMessage(item), true
+	}
+	if item, ok := conditionFailedItem(reasons, txIdxRegistration); ok {
+		switch itemString(item, "status") {
+		case "accepted":
+			return msgRegAccepted, true
+		case "rejected":
+			return msgRegRejected, true
+		}
+		return msgRegStatusChanged, true
+	}
+	return "", false
+}
+
+// conditionFailedItem 取出「第 idx 格是不是因為條件沒過被擋下來」以及它當時的樣子。
+// ⚠️ 沒失敗的那幾格 Code 是 "None" 而不是 nil ⇒ 不可以用「有沒有這一格」當判準。
+func conditionFailedItem(reasons []types.CancellationReason, idx int) (map[string]types.AttributeValue, bool) {
+	if idx < 0 || idx >= len(reasons) {
+		return nil, false
+	}
+	r := reasons[idx]
+	if r.Code == nil || *r.Code != "ConditionalCheckFailed" {
+		return nil, false
+	}
+	return r.Item, true
+}
+
+// gameConflictMessage 依「被擋下來那一瞬間的團局」決定那句話。
+// item 是 nil 時只能給最含糊的那一句 —— 猜一個具體的理由比含糊更糟。
+func gameConflictMessage(item map[string]types.AttributeValue) string {
+	if item == nil {
+		return msgGameChanged
+	}
+	if status := itemString(item, "status"); status != "recruiting" {
+		return gameNotRecruitingMessage(status)
+	}
+	// 狀態仍是 recruiting ⇒ 擋下來的是樂觀鎖那一半：有人在這中間先被接受了。
+	cur, curOK := itemNumber(item, "currentPlayers")
+	needed, neededOK := itemNumber(item, "playersNeeded")
+	if curOK && neededOK && cur >= needed+1 {
+		return msgGameFull
+	}
+	return msgGameChanged
+}
+
+func itemString(item map[string]types.AttributeValue, key string) string {
+	if av, ok := item[key].(*types.AttributeValueMemberS); ok {
+		return av.Value
+	}
+	return ""
+}
+
+func itemNumber(item map[string]types.AttributeValue, key string) (int, bool) {
+	av, ok := item[key].(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(av.Value)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 func getGame(ctx context.Context, gameID string) (map[string]interface{}, error) {
 	tableName := tablePrefix + "Games"
 	result, err := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
@@ -367,20 +581,6 @@ func getGame(ctx context.Context, gameID string) (map[string]interface{}, error)
 	return game, err
 }
 
-func saveGame(ctx context.Context, game map[string]interface{}) error {
-	item, err := attributevalue.MarshalMap(game)
-	if err != nil {
-		return err
-	}
-
-	tableName := tablePrefix + "Games"
-	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: &tableName,
-		Item:      item,
-	})
-	return err
-}
-
 func getRegistration(ctx context.Context, registrationID string) (map[string]interface{}, error) {
 	tableName := tablePrefix + "Registrations"
 	result, err := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
@@ -399,20 +599,6 @@ func getRegistration(ctx context.Context, registrationID string) (map[string]int
 	var registration map[string]interface{}
 	err = attributevalue.UnmarshalMap(result.Item, &registration)
 	return registration, err
-}
-
-func saveRegistration(ctx context.Context, registration map[string]interface{}) error {
-	item, err := attributevalue.MarshalMap(registration)
-	if err != nil {
-		return err
-	}
-
-	tableName := tablePrefix + "Registrations"
-	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: &tableName,
-		Item:      item,
-	})
-	return err
 }
 
 func getUser(ctx context.Context, userID string) (map[string]interface{}, error) {
