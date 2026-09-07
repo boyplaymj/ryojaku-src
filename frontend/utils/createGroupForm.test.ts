@@ -10,6 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildCreateGamePayload,
+    isStartTimeInPast,
+    refreshStaleStartTime,
+    toDateTimeLocalString,
     validateCreateGame,
     validateCreateGameStage1,
     type BuildCreateGamePayloadInput,
@@ -356,4 +359,82 @@ test('A3c-10 邊界反控：validateCreateGame 自己**不**檢查 stakes ——
     const x = stage1Input({ formData: { ...stage1Input().formData, stakes: '' } });
     assert.equal(validateCreateGame(x), null);
     assert.equal(validateCreateGameStage1(x), '請輸入籌碼');
+});
+
+// ─────────────── A3-i：使用者沒碰過的開局時間要自己保持新鮮 ───────────────
+//
+// 🔴 這一組的全部重點是 `touched`。少了它，「預設值餿掉」與「使用者**故意**填一個
+//    過去的時間」在程式眼裡逐字相同 —— 上面 A3a-15/17、A3c-09 那幾條釘的是後者，
+//    它們必須維持綠燈。所以本組**沒有一條**去改 `validateCreateGame` 的行為。
+
+test('A3i-01 touched=true 且已過期 → null（使用者自己填的過去時間，不准動）', () => {
+    assert.equal(
+        refreshStaleStartTime({ startTime: new Date(NOW - 10 * MIN).toISOString(), touched: true, now: NOW }),
+        null,
+    );
+});
+
+test('A3i-02 touched=false 且已過期 → 回「現在」（截到分的 datetime-local 字串）', () => {
+    const got = refreshStaleStartTime({ startTime: new Date(NOW - 10 * MIN).toISOString(), touched: false, now: NOW });
+    assert.equal(got, toDateTimeLocalString(NOW));
+    assert.match(String(got), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+});
+
+test('A3i-03 touched=false 但沒過期 → null（不做無謂的覆蓋）', () => {
+    assert.equal(
+        refreshStaleStartTime({ startTime: new Date(NOW + 10 * MIN).toISOString(), touched: false, now: NOW }),
+        null,
+    );
+});
+
+test('A3i-04 秒歸零邊界與檢核①一致：同一分鐘但秒數較早 → 不算過期 → null', () => {
+    const now = NOW + 45_000;
+    assert.equal(refreshStaleStartTime({ startTime: new Date(NOW).toISOString(), touched: false, now }), null);
+});
+
+test('A3i-05 🔴 一致性反控：touched=false 時「要不要推進」必須與檢核①「擋不擋」逐格相同', () => {
+    // 兩個判準各寫一次比較式的話，只要差一個 </<=，就會出現
+    // 「自動推進了但驗證仍然擋下來」這種從畫面上完全看不出原因的死結。
+    // ⚠️ 樣本刻意跨過秒歸零邊界（-61s ~ +61s），否則這條對那個差別零鑑別力。
+    const now = NOW + 45_000;
+    for (let deltaS = -125; deltaS <= 125; deltaS += 1) {
+        const startTime = new Date(NOW + deltaS * 1000).toISOString();
+        const refreshed = refreshStaleStartTime({ startTime, touched: false, now }) !== null;
+        const blocked = validateCreateGame(validateInput({ now, formData: { ...validateInput().formData, startTime } }))
+            === '開局時間不能早於目前時間';
+        assert.equal(refreshed, blocked, `deltaS=${deltaS} 推進=${refreshed} 擋下=${blocked}`);
+        assert.equal(blocked, isStartTimeInPast({ startTime, now }), `deltaS=${deltaS} 檢核①沒有走 isStartTimeInPast`);
+    }
+});
+
+test('A3i-06 🔴 閉環：推進之後 validateCreateGame 必須放行（否則等於沒修）', () => {
+    const now = NOW + 45_000;
+    const stale = new Date(NOW - 10 * MIN).toISOString();
+    const fresh = refreshStaleStartTime({ startTime: stale, touched: false, now });
+    assert.notEqual(fresh, null);
+    // 正控：推進之前它真的是被擋的（少了這句，fresh 沒生效也會讓下一句綠）
+    assert.equal(
+        validateCreateGame(validateInput({ now, formData: { ...validateInput().formData, startTime: stale } })),
+        '開局時間不能早於目前時間',
+    );
+    assert.equal(
+        validateCreateGame(validateInput({ now, formData: { ...validateInput().formData, startTime: String(fresh) } })),
+        null,
+    );
+});
+
+test('A3i-07 toDateTimeLocalString 產出的是**本地**時間、截到分（parse 回來同一分鐘）', () => {
+    const s = toDateTimeLocalString(NOW + 37_000); // 帶 37 秒
+    const back = new Date(s);                      // datetime-local 字串被當本地時間解析
+    assert.equal(back.getFullYear(), new Date(NOW).getFullYear());
+    assert.equal(back.getMinutes(), new Date(NOW).getMinutes());
+    assert.equal(back.getSeconds(), 0, '秒必須被截掉');
+    assert.equal(s.length, 16);
+});
+
+test('A3i-08 startTime 解析不出來（空字串）→ 不算過期、不推進 —— 行為照搬檢核①，不是「應該的行為」', () => {
+    // new Date('') 是 NaN，NaN < now 為 false ⇒ 檢核①放行。這裡刻意與它保持一致：
+    // 若哪天決定要擋空值，兩支要一起改，這條會紅並逼人做那個決定。
+    assert.equal(isStartTimeInPast({ startTime: '', now: NOW }), false);
+    assert.equal(refreshStaleStartTime({ startTime: '', touched: false, now: NOW }), null);
 });

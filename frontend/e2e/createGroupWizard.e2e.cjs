@@ -57,7 +57,7 @@ const isAllowed = (raw) => {
     }
 };
 
-const TOTAL_TESTS = 8;
+const TOTAL_TESTS = 9;
 const results = [];
 /** 一條測試紅了就**停在那裡**。 */
 class Failed extends Error {}
@@ -335,17 +335,75 @@ async function main() {
         aborted = e;
     }
 
+    // ── T9：草稿帶著**過期**的開局時間回來時，使用者一個字都沒改也要能過 Stage1（[A3-i]）。
+    //    🔴 這條也在 try 之外，理由不同於 T8：它有**自己的 context**，不吃前面七條
+    //       推進出來的表單狀態 ⇒ 前面紅了它照樣量得到，不該被連坐標成「未跑」。
+    //    🔴 為什麼要新開 context：草稿住在 localStorage。沿用正式頁那個 context 的話，
+    //       裡面已經有一份 startTime = 現在（＝**不過期**）的草稿，
+    //       T9 想造的場景會被它蓋掉 —— 而那樣 T9 會綠，且綠得毫無理由。
+    //    ⚠️ 執行順序與編號不同：T9 跑在 T8 前面，好讓 T8 的 `blocked` 也涵蓋這兩頁。
+    //       編號是斷言的身分，不是執行順序。
+    const t9ctx = await browser.newContext({ viewport: { width: 390, height: 900 }, deviceScaleFactor: 2 });
+    let t9pass = false;
+    let t9detail = '';
+    try {
+        // ① 舊分鐘的那一頁：把時鐘往前撥 10 分鐘，按「填入測試資料」讓它寫一份草稿。
+        const stalePage = await t9ctx.newPage();
+        await guard(stalePage);
+        const STALE_NOW = new Date(FIXED_NOW.getTime() - 10 * 60 * 1000);
+        if (FIX_CLOCK) await stalePage.clock.setFixedTime(STALE_NOW);
+        await stalePage.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+        await stalePage.waitForSelector('text=團局種類', { timeout: 60000 });
+        await stalePage.getByRole('button', { name: /填入測試資料/ }).click();
+        await stalePage.waitForTimeout(1200);   // 自動存草稿是 500ms debounce
+        const staleDraft = await stalePage.evaluate(() => localStorage.getItem('mahjongclub_create_game_draft'));
+        const staleStart = staleDraft ? JSON.parse(staleDraft).formData.startTime : null;
+        await stalePage.close();
+
+        // ② 十分鐘後回來的那一頁：草稿一還原，startTime 必然是過去的。
+        const freshPage = await t9ctx.newPage();
+        await guard(freshPage);
+        if (FIX_CLOCK) await freshPage.clock.setFixedTime(FIXED_NOW);
+        await freshPage.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+        await freshPage.waitForSelector('text=團局種類', { timeout: 60000 });
+        // 正控：草稿真的被還原了（否則本條測到的是「一張全新的空表單」，那毫無意義）
+        const restored = await freshPage.getByPlaceholder('例如：台北信義 / 自家場').inputValue();
+
+        await freshPage.evaluate(() => {
+            const w = window;
+            w.__t9seen = false;
+            const check = () => { if (document.body.innerText.includes('開局時間不能早於目前時間')) w.__t9seen = true; };
+            check();
+            new MutationObserver(check).observe(document.body, { childList: true, subtree: true, characterData: true });
+        });
+        await freshPage.getByRole('button', { name: '下一步' }).click();
+        const wentOn = await freshPage.locator('text=環境設施設定').first()
+            .waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+        const t9toast = await freshPage.evaluate(() => !!window.__t9seen);
+        await freshPage.screenshot({ path: path.join(SHOT_DIR, '07-draft-stale-starttime.png') });
+
+        t9pass = restored === '測試場地' && wentOn === true && t9toast === false;
+        t9detail = `草稿還原=${restored === '測試場地' ? '是' : `否(${restored})`} 草稿裡的開局時間=${staleStart} `
+            + `進到第 2 步=${wentOn} 時間toast出現過=${t9toast}`;
+    } catch (e) {
+        t9detail = `例外：${e && e.message ? e.message.split('\n')[0] : e}`;
+    }
+    await t9ctx.close();
+    record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
+
     // ── T8：暖機頁＋正式頁都不准發出**非白名單**請求。
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。
     //    🔴 而且它必須影響 rc —— 更早的版本只把清單印出來、不影響成敗，
     //       等於 README 寫的「硬防線」沒有任何執行力（覆驗抓到的）。
+    //    ⚠️ 這裡的「兩頁」自 T9 加入後其實是**四頁**（暖機／正式／T9 的兩頁）——
+    //       訊息維持講「暖機頁與正式頁」會漏掉 T9 那兩頁，所以下面改成講「全部頁面」。
     //    ⚠️ **措辭要精確**：白名單裡有 `cdn.tailwindcss.com` 與 `unpkg.com`
     //       （`index.html` 本來就會抓），所以這條**不是**「完全沒有對外連線」，
     //       而是「沒有白名單以外的連線，特別是沒有任何正式後端」。
     const external = [...new Set(blocked)];
-    record(`T8 兩頁都沒有非白名單請求（白名單＝本機＋${[...ALLOW_HOSTS].filter((h) => !/^(127\.0\.0\.1|localhost)$/.test(h)).join('／')}；正式後端不在其中）`,
+    record(`T8 全部頁面都沒有非白名單請求（白名單＝本機＋${[...ALLOW_HOSTS].filter((h) => !/^(127\.0\.0\.1|localhost)$/.test(h)).join('／')}；正式後端不在其中）`,
         external.length === 0,
-        external.length === 0 ? '非白名單請求 0 筆（暖機頁與正式頁合計）' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
+        external.length === 0 ? '非白名單請求 0 筆（暖機頁＋正式頁＋T9 兩頁合計）' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
 
     const reloaded = loads > loadsAfterGoto;
 

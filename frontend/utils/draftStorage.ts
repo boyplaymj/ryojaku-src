@@ -29,6 +29,15 @@ export interface CreateGameDraft {
         skillLevel?: string;
     };
     savedAt: number;  // Unix timestamp，用於檢查資料是否過期
+    /**
+     * 使用者有沒有**自己動過**開局時間欄位（[A3-i]）。
+     *
+     * 🔴 optional 是刻意的：舊草稿沒有這個欄位，讀回來是 `undefined`。
+     *    還原端一律當成 `false`（＝「不是使用者選的」⇒ 過期就重算），
+     *    因為草稿存活 24 小時，裡面那個 `startTime` **必然**已經過去 ——
+     *    把舊草稿當成「使用者選的」會讓他一還原就被擋，那正是本次要修的病。
+     */
+    startTimeTouched?: boolean;
 }
 
 /**
@@ -40,7 +49,8 @@ export interface CreateGameDraft {
 export function saveCreateGameDraft(
     formData: CreateMahjongGamePayload,
     coordinates: { latitude: number; longitude: number },
-    envOptions?: CreateGameDraft['envOptions']
+    envOptions?: CreateGameDraft['envOptions'],
+    startTimeTouched?: boolean
 ): void {
     try {
         const draft: CreateGameDraft = {
@@ -48,6 +58,7 @@ export function saveCreateGameDraft(
             coordinates,
             envOptions,
             savedAt: Date.now(),
+            startTimeTouched,
         };
         localStorage.setItem(STORAGE_KEYS.CREATE_GAME_DRAFT, JSON.stringify(draft));
     } catch (error) {

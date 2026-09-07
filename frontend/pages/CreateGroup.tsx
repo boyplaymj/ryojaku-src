@@ -9,7 +9,7 @@ import CreateGroupStage1 from '../components/CreateGroupStage1';
 import CreateGroupStage2, { type ImageItem } from '../components/CreateGroupStage2';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
-import { buildCreateGamePayload, validateCreateGame, validateCreateGameStage1 } from '../utils/createGroupForm';
+import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, validateCreateGame, validateCreateGameStage1 } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
 import { createPortal } from 'react-dom';
@@ -64,11 +64,15 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
     const draftLoaded = useRef(false);
 
     // Get minimum datetime (current time)
-    const getMinDateTime = () => {
-        const now = new Date();
-        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-        return now.toISOString().slice(0, 16);
-    };
+    // 🔴 算法本身搬到 utils/createGroupForm.ts 的 `toDateTimeLocalString`（[A3-i]）：
+    //    自動推進那支要產出**完全一樣**的字串，各留一份副本必定會漂。
+    const getMinDateTime = () => toDateTimeLocalString(Date.now());
+
+    // 使用者有沒有自己動過開局時間欄位。
+    // 🔴 這個旗標是 [A3-i] 的全部重點：少了它，「預設值餿掉」與「使用者**故意**填一個
+    //    過去的時間」在程式眼裡逐字相同 —— 後者必須繼續被 validateCreateGame 擋下來。
+    //    唯一會把它設成 true 的地方是下面那個 DatePicker 的 onChange。
+    const [startTimeTouched, setStartTimeTouched] = useState(false);
 
     // 新增環境選項狀態
     const [smoking, setSmoking] = useState<string>('無菸');
@@ -104,7 +108,13 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
         const draft = loadCreateGameDraft();
         if (draft) {
             console.log('📋 載入草稿資料');
-            setFormData(draft.formData);
+            // 🔴 草稿有效期 24 小時，裡面的 startTime **必然**已經過去（[A3-i]）。
+            //    沒碰過就換成「現在」；使用者自己選的（touched）照原樣還原、繼續被擋。
+            //    舊草稿沒有這個欄位 ⇒ undefined 當 false。
+            const touched = draft.startTimeTouched ?? false;
+            const fresh = refreshStaleStartTime({ startTime: draft.formData.startTime, touched, now: Date.now() });
+            setStartTimeTouched(touched);
+            setFormData(fresh ? { ...draft.formData, startTime: fresh } : draft.formData);
             setCoordinates(draft.coordinates);
             if (draft.envOptions) {
                 setSmoking(draft.envOptions.smoking);
@@ -135,7 +145,7 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                 tableModel,
                 venueType,
                 skillLevel
-            });
+            }, startTimeTouched);
         }, 500); // 500ms debounce
 
         return () => clearTimeout(timer);
@@ -345,14 +355,27 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             tableModel,
             venueType,
             skillLevel
-        });
+        }, startTimeTouched);
+    };
+
+    /**
+     * 送出前把**使用者沒碰過**的過期開局時間換成「現在」（[A3-i]）。
+     * 回傳這一次要用的 formData —— `setFormData` 是非同步的，同一個 render 裡
+     * 讀回來還是舊值，所以驗證與組 payload 都必須用這個回傳值，不能用 state。
+     */
+    const withFreshStartTime = (): CreateMahjongGamePayload => {
+        const fresh = refreshStaleStartTime({ startTime: formData.startTime, touched: startTimeTouched, now: Date.now() });
+        if (!fresh) return formData;
+        const next = { ...formData, startTime: fresh };
+        setFormData(next);
+        return next;
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (step === 1) {
             // Stage1 卸載後原生 required 不再跑，這裡補上同一組檢核（含 stakes）
-            const stage1Error = validateCreateGameStage1({ formData, coordinates, now: Date.now() });
+            const stage1Error = validateCreateGameStage1({ formData: withFreshStartTime(), coordinates, now: Date.now() });
             if (stage1Error) {
                 showToast(stage1Error, 'warning');
                 return;
@@ -403,7 +426,8 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             console.log('✨ [CreateGame] Profile complete, proceeding with validation');
 
             // 四道檢核（開局時間／定位／場地名稱／地址），順序與訊息在 utils/createGroupForm.ts
-            const validationError = validateCreateGame({ formData, coordinates, now: Date.now() });
+            const freshFormData = withFreshStartTime();
+            const validationError = validateCreateGame({ formData: freshFormData, coordinates, now: Date.now() });
             if (validationError) {
                 showToast(validationError, 'warning');
                 setIsSubmitting(false);
@@ -411,8 +435,10 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             }
 
             // Prepare game data matching API requirements（組裝邏輯在 utils/createGroupForm.ts）
+            // 🔴 這裡一定要用 freshFormData，不是 state 裡的 formData ——
+            //    否則會變成「驗證放行了，送出去的還是那個過期的時間」。
             const gameData: CreateMahjongGamePayload = buildCreateGamePayload({
-                formData,
+                formData: freshFormData,
                 coordinates,
                 options: { smoking, parking, elevator, mahjongTable, tableModel, venueType, skillLevel },
                 imageItems
@@ -763,6 +789,7 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                             value={formData.startTime}
                             onChange={(date) => {
                                 setFormData({ ...formData, startTime: date });
+                                setStartTimeTouched(true);   // [A3-i] 使用者自己選的，之後一律不自動改
                             }}
                             onClose={() => setShowDatePicker(false)}
                             includeTime={true}

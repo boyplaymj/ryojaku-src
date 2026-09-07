@@ -102,17 +102,66 @@ export interface ValidateCreateGameInput {
  * ③ 場地名稱空白
  * ④ 完整地址空白
  */
-export function validateCreateGame(input: ValidateCreateGameInput): string | null {
-    const { formData, coordinates } = input;
+/**
+ * 把毫秒時間戳轉成 `<input type="datetime-local">` 用的**本地時間**字串（截到分）。
+ *
+ * 🔴 這支存在的理由是「只留一份算法」：元件裡的 `getMinDateTime()` 與
+ *    下面 `refreshStaleStartTime()` 要產出**完全一樣**的字串，各寫一份必定會漂
+ *    —— 而漂掉的徵兆是「預設值看起來只差一分鐘」，沒有人會注意到。
+ */
+export function toDateTimeLocalString(now: number): string {
+    const d = new Date(now);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+}
 
-    // Validate start time
-    const selectedTime = new Date(formData.startTime).getTime();
+/**
+ * 開局時間是否早於現在（現在的秒與毫秒歸零，配合 datetime-local 只到分）。
+ *
+ * 🔴 `validateCreateGame` 檢核① 與 `refreshStaleStartTime` 都呼叫這一支。
+ *    兩邊各寫一次比較式的話，「什麼叫過期」就有兩個定義 ——
+ *    而它們只要差一個 `<`／`<=`，就會出現「自動推進了但驗證仍然擋下來」這種
+ *    從畫面上完全看不出原因的死結。
+ * ⚠️ `startTime` 解析不出來時（NaN）回 false —— 與抽取前的行為逐字相同。
+ */
+export function isStartTimeInPast(input: { startTime: string; now: number }): boolean {
+    const selectedTime = new Date(input.startTime).getTime();
     const now = new Date(input.now);
     // Reset seconds and milliseconds to 0 for fair comparison with datetime-local input
     now.setSeconds(0);
     now.setMilliseconds(0);
+    return selectedTime < now.getTime();
+}
 
-    if (selectedTime < now.getTime()) {
+export interface RefreshStaleStartTimeInput {
+    startTime: string;
+    /** 使用者有沒有**自己動過**開局時間欄位。true ⇒ 一律不動它。 */
+    touched: boolean;
+    now: number;
+}
+
+/**
+ * 預設的開局時間會餿掉：`CreateGroup` 開頁時把它設成「現在」，而使用者填完那張表
+ * 幾乎不可能在一分鐘內；草稿還原更糟（有效期 24 小時，還原回來的**必然**是過去）。
+ * ⇒ 這支負責「使用者沒碰過的欄位，程式自己保持新鮮」。
+ *
+ * 回傳新字串＝要覆蓋；回傳 `null`＝不要動。
+ *
+ * 🔴 `touched` 是這支的全部重點。少了它，「預設值餿掉」與「使用者**故意**填一個
+ *    過去的時間」在程式眼裡逐字相同 —— 而後者必須繼續被 `validateCreateGame` 擋下來
+ *    （那 5 條斷言是對的行為，不要為了修前者去改它們）。
+ */
+export function refreshStaleStartTime(input: RefreshStaleStartTimeInput): string | null {
+    if (input.touched) return null;
+    if (!isStartTimeInPast({ startTime: input.startTime, now: input.now })) return null;
+    return toDateTimeLocalString(input.now);
+}
+
+export function validateCreateGame(input: ValidateCreateGameInput): string | null {
+    const { formData, coordinates } = input;
+
+    // Validate start time
+    if (isStartTimeInPast({ startTime: formData.startTime, now: input.now })) {
         return '開局時間不能早於目前時間';
     }
 
