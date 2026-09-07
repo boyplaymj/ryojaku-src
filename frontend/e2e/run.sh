@@ -2,7 +2,13 @@
 # e2e/run.sh — 起 dev server → 跑瀏覽器實跑 → 收尾。用法：`npm run e2e`
 #
 # rc：0 全過／1 有測試沒過／2 腳本爆了／3 量不到（中途重載）／4 環境缺東西（playwright 找不到）
+#     5 測試通過，但**收尾沒收乾淨**（port 沒釋放，或根本判不出來）
 # 🔴 4 跟 1 不可混為一談：4 是「沒有儀器」，不是「量到失敗」。
+# 🔴 5 為什麼要有自己的碼（2026-09-07 覆驗第二輪抓到）：原本收尾失敗只印一行 stderr，
+#    rc 照樣是測試的 rc ⇒ **那道「port 一定放掉了」的保證沒有 exit code**，
+#    而下一次撞 `--strictPort` 會看起來像「port 被別人佔著」。
+#    ⚠️ 5 只在「測試本身通過」時才蓋上去 —— 測試紅了就保留 1/2/3/4，
+#      那是更重要的訊號，不可以被收尾問題遮掉。
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,9 +27,20 @@ VITE_PORT_PIDS=""
 #    留下一個孤兒 dev server —— 而腳本印的是 rc=0，外觀完全正常）。
 #    ⇒ 收尾要連「真的佔著這個 port 的那些 pid」一起收。那份名單在啟動成功後才抓，
 #      所以不會誤殺「port 本來就被別人佔著」那種情況（那種會在 --strictPort 直接起不來）。
-port_busy() { fuser "$PORT/tcp" >/dev/null 2>&1; }
+# 「等到 port 真的釋放」那段住在隔壁，因為它的兩條失敗路徑在真實環境造不出來
+# ⇒ 抽出去才有尺（`portwait.test.sh`，含把 ss／fuser 一起遮蔽的反控）。
+#    ⚠️ 刻意不在這裡寫「幾條」—— 那個數字加一條測試就自動說謊，而且零徵兆。
+#      要知道幾條就去跑它，它自己會把 `N 過 / M 紅` 印出來。
+. "$HERE/portwait.sh"
+
+# 🔴 「有沒有起過 server」用**自己的旗標**，不要用 `VITE_PORT_PIDS` 當代理：
+#    後者是 `fuser` 的產物，fuser 一不可用它就是空的 ⇒ 等待整段被跳過，
+#    而那正是最需要等的時候（實測遮蔽 fuser：rc=0、全綠、零警告、port 還在監聽）。
+VITE_STARTED=0
+CLEANUP_STATE=0     # 0=乾淨 1=等不到 2=判不出來
 
 cleanup() {
+  local exit_rc=$?
   [ -n "$VITE_PID" ] && kill "$VITE_PID" 2>/dev/null
   [ -n "$VITE_PORT_PIDS" ] && kill $VITE_PORT_PIDS 2>/dev/null
   rm -f "$GEN"
@@ -32,25 +49,26 @@ cleanup() {
   #    腳本回 rc 的那一刻 **6/6 次 port 都還在監聽**，約 0.1 秒後才消失。
   #    不是孤兒（它會自己走完），但「rc 回來了」與「port 已釋放」是兩件事 ——
   #    緊接著重跑就會撞 `--strictPort`，而那個失敗看起來會像「port 被別人佔著」。
-  #    ⇒ 等到它真的釋放為止。5 秒不放就升級 SIGKILL，再 3 秒仍不放就**印警告**
-  #      （靜默的話，下一次那個莫名其妙的 rc=4 就沒有線索）。
-  #    ⚠️ 只在「我們真的起過 server」時才等：早退時 port 上那個是別人的，
-  #      空等 8 秒再警告只會製造假訊號。
-  if [ -n "$VITE_PORT_PIDS" ]; then
-    waited=0
-    while port_busy && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited+1)); done
-    if port_busy; then
-      kill -9 $VITE_PORT_PIDS 2>/dev/null
-      [ -n "$VITE_PID" ] && kill -9 "$VITE_PID" 2>/dev/null
-      waited=0
-      while port_busy && [ "$waited" -lt 30 ]; do sleep 0.1; waited=$((waited+1)); done
-    fi
-    if port_busy; then
-      echo "⚠️ [e2e] 收尾後 port $PORT 仍被佔著（SIGKILL 之後又等了 3 秒）——" >&2
-      echo "   下一次重跑會撞 --strictPort 而回 rc=4。占用者：$(fuser "$PORT/tcp" 2>&1 | tr -s ' ')" >&2
-    fi
+  if [ "$VITE_STARTED" = 1 ]; then
+    wait_port_release "$PORT" "$VITE_PORT_PIDS"
+    CLEANUP_STATE=$?
+    case "$CLEANUP_STATE" in
+      # 診斷也走 `port_pids`（ss 優先），不要退回裸 `fuser` —— 收尾判定已經是多來源了，
+      # 這一行還單押 fuser 的話，最需要線索的那種環境（沒有 fuser）剛好印不出東西。
+      1) echo "⚠️ [e2e] 收尾後 port $PORT 仍被佔著（SIGKILL 之後又等了 3 秒）。占用者：$(port_pids "$PORT")" >&2 ;;
+      2) echo "⚠️ [e2e] 判不出 port $PORT 的狀態（ss 與 fuser 都問不出來）—— 這**不是**「已經放掉了」。" >&2 ;;
+    esac
+  fi
+
+  # 🔴 收尾失敗必須影響 rc，否則那道保證沒有 exit code（見檔頭 rc=5）。
+  #    只在測試本身通過時蓋上去：測試紅了保留原本的 1/2/3/4。
+  if [ "$exit_rc" = 0 ] && [ "$CLEANUP_STATE" != 0 ]; then
+    echo "[e2e] rc=5（測試通過，但收尾沒收乾淨：CLEANUP_STATE=$CLEANUP_STATE）" >&2
+    trap - EXIT      # 免得 exit 又觸發一次自己
+    exit 5
   fi
 }
+
 trap cleanup EXIT
 
 # ── 1. 從 index.html **現生** harness 頁面
@@ -100,7 +118,8 @@ if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/e2e/_generated.ha
   tail -20 "$VITE_LOG" >&2
   exit 4
 fi
-VITE_PORT_PIDS="$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ')"
+VITE_PORT_PIDS="$(port_pids "$PORT")"
+VITE_STARTED=1
 
 # ── 4. 跑
 echo "[e2e] 開跑"
