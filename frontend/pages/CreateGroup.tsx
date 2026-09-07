@@ -9,7 +9,7 @@ import CreateGroupStage1 from '../components/CreateGroupStage1';
 import CreateGroupStage2, { type ImageItem } from '../components/CreateGroupStage2';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
-import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, validateCreateGame, validateCreateGameStage1, validateCreateGameStage2 } from '../utils/createGroupForm';
+import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, toStage1Payload, validateCreateGame, validateCreateGameStage1, validateCreateGameStage2 } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
 import { createPortal } from 'react-dom';
@@ -525,7 +525,10 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
                 imageItems
             });
 
-            const result = await onCreate(gameData);
+            // 🔴 [A3-m] 第一段只送第一段問過的東西。`buildCreateGamePayload` 會把
+            //    `...formData` 整包帶出去，而 rules／features／restrictions 已經歸第二段 ——
+            //    草稿還原那條路上它們可能是非空的（見 toStage1Payload 的註解）。
+            const result = await onCreate(toStage1Payload(gameData));
 
             if (result && !result.success) {
                 showToast(result.error || '創建團局失敗，請稍後再試', 'error');

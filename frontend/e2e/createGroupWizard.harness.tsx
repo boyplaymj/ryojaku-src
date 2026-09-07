@@ -29,6 +29,12 @@ const fakeUser: any = {
     points: 9999,
 };
 
+// [A3-m] 第二段（補充設定）走 `dataService.updateGameExtras`，而它是用
+// `authService.getCurrentUser()`（讀 localStorage）取身分，**不是**用上面那個 prop。
+// 少了這一行，第二段的每一次儲存都會在還沒送出前就回「請先登入」——
+// 而畫面上那個 toast 跟「後端擋下來」長得一樣，會被讀成端點壞了。
+localStorage.setItem('mahjongclub_user_session', JSON.stringify(fakeUser));
+
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('harness: 找不到 #root');
 
@@ -44,7 +50,14 @@ ReactDOM.createRoot(rootEl).render(
                     //    在外面**完全不可觀測** —— 我一度把這件事寫成「沒有尺」，
                     //    其實只是沒往這裡看。onCreate 本來就是可觀測的邊界。
                     (window as any).__created = gameData;
-                    return { success: true };
+                    // 🔴 [A3-m] 計數是新的儀器：現在「建局」與「補資料」是兩個端點，
+                    //    而「第二段又呼叫了一次 onCreate」的症狀是**多扣 120 點**，
+                    //    畫面上只會顯示「送出成功」⇒ 沒有計數就完全不可觀測。
+                    (window as any).__createCalls = ((window as any).__createCalls || 0) + 1;
+                    // 🔴 `data.gameID` 不可省：它是第二段唯一的著陸點。回 `{success:true}`
+                    //    的舊版會讓 CreateGroup 走進「拿不到 id」的降級路徑，
+                    //    於是所有第二段的驗收都在測那條降級路徑而不是正常流程。
+                    return { success: true, data: { gameID: 'e2e-game-0001' } };
                 }}
                 user={fakeUser}
             />

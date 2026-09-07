@@ -63,7 +63,7 @@ const isAllowed = (raw) => {
 
 // 🔴 這是「應該跑幾條」的宣告，不是計數器 —— 少跑了才看得出來（中途 abort 會少）。
 //    加測試時要一起改；漏改會印出 `13/12` 這種一眼看得出不對的分數，那是刻意的。
-const TOTAL_TESTS = 14;
+const TOTAL_TESTS = 17;   // [A3-m] 14 → 17：T6b／T14（第一段 payload）／T15（跳過）
 const results = [];
 /** 一條測試紅了就**停在那裡**。 */
 class Failed extends Error {}
@@ -150,9 +150,30 @@ async function main() {
             return false;   // 解析不了就不是它（不敢判就不敢放）
         }
     };
+    // [A3-m] 攔下第二段的 update-game 並記下**送出去的 body**。
+    // 🔴 為什麼要攔在網路層而不是在 harness 裡塞假函式：Codex 要的四條尺
+    //    （第一段不得帶 extras／onCreate 恰好一次／跳過不送 update／儲存只送一次且
+    //    帶建立時的 gameID）問的都是「真的送出去了什麼」。假函式只驗到
+    //    dataService 那一層，攔在這裡才連 apiService 組請求那一段一起涵蓋。
+    const updateCalls = [];
+    const isUpdateGame = (u) => /\/update-game(\?|$)/.test(u);
+
     const guard = (p, opts = {}) => p.route('**/*', (r) => {
         const u = r.request().url();
         const sink = opts.sink || blocked;
+        if (isUpdateGame(u)) {
+            let body = null;
+            try { body = JSON.parse(r.request().postData() || 'null'); } catch (_) { body = r.request().postData(); }
+            const entry = { url: u, body };
+            updateCalls.push(entry);
+            // 每頁自己的一份：`updateCalls` 是整趟共用的累加器，拿它當「這一頁送了幾次」
+            // 會隨測試順序漂掉（T15 第一版的正控就是這樣寫成恆假的）。
+            if (opts.updates) opts.updates.push(entry);
+            return r.fulfill({
+                status: 200, contentType: 'application/json',
+                body: JSON.stringify({ success: true, data: { message: 'ok' } }),
+            });
+        }
         if (opts.fakeProfile && isProfileStub(r)) {
             return r.fulfill({
                 status: 200, contentType: 'application/json',
@@ -182,7 +203,11 @@ async function main() {
     // 🔴 只註冊**一個** route handler：Playwright 的多個 handler 是後註冊者先跑，
     //    而沒有呼叫 continue/abort/fallback 的那個會讓請求**整個掛住**。
     //    記錄與放行/攔截必須寫在同一支裡（`guard()` 就是那一支）。
-    await guard(page);
+    // 🔴 [A3-m] `fakeProfile` 在這一頁從「不需要」變成「必要」：條款彈窗搬到第一段之後，
+    //    T6 會真的按下「確認同意」，而 `confirmCreate` 第一件事就是打 `api.getUserInfo`。
+    //    少了它，那一步會停在「無法驗證個人資料狀態」—— 而畫面上停在第一段的樣子，
+    //    跟「建局那段程式壞了」長得一模一樣。
+    await guard(page, { fakeProfile: true });
 
     await page.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('text=團局種類', { timeout: 60000 });
@@ -203,8 +228,11 @@ async function main() {
 
     const stepText = () => page.locator('text=/步驟 \\d \\/ 2/').first().innerText();
     const next = () => page.getByRole('button', { name: '下一步' });
-    const back = () => page.getByRole('button', { name: '上一步' });
-    const submit = () => page.getByRole('button', { name: /確認發起團局/ });
+    // [A3-m] 第二段的送出鈕改名了（它現在打的是 update-game，不是建局）。
+    // 「上一步」整顆移除 —— 局在第一段就建好了，退回去改不會生效。
+    const submit = () => page.getByRole('button', { name: '儲存補充設定' });
+    const skip = () => page.getByRole('button', { name: '跳過，之後再補' });
+    const createCalls = () => page.evaluate(() => window.__createCalls || 0);
     const stakes = () => page.getByPlaceholder('100/20');
     const placeName = () => page.getByPlaceholder('例如：台北信義 / 自家場');
     const stage1 = () => page.locator('text=團局種類');
@@ -326,73 +354,102 @@ async function main() {
         + `${t4timeToast ? ' 🔴跳的是「開局時間不能早於目前時間」＝時鐘漂移,不是產品回歸' : ''} ${t4step} 第二段=${await stage2().count()}`);
     await shot('03-step1-toast.png');
 
-    // ── T5：合格 ⇒ 進第 2 步，第一段卸載、第二段掛上
+    // ── T5：[A3-m] 合格 ⇒ **跳出服務條款彈窗**（不是直接進第二段）
+    //    這一條的方向在 A3-m 整個翻面了：以前「下一步」只是換頁，現在它是**花錢的閘門**
+    //    —— 按下去之後確認就會建局並扣 120 點。所以這裡要驗的是「彈窗有出來」，
+    //    而且「第二段還沒掛上」（＝還沒建局）。
+    //
+    // 🔴 定位器不可以用 `text=/服務條款|同意/`：`isLocalhost` 除錯面板上有一顆按鈕叫
+    //    「測試：服務條款確認彈窗」，那串字永遠在頁面上 ⇒ 彈窗沒開也會綠（A3-j 抓過）。
+    const termsHeading = page.getByRole('heading', { name: '服務條款確認' });
     await stakes().fill('300/50');
+    const t5termsBefore = await termsHeading.count();
+    const t5createsBefore = await createCalls();
     const t5submitsBefore = await submits();
     await next().click();
-    // 同一個儀器：分得出「送出了但沒換頁」與「這一下根本沒送出」。
     const t5submitted = await until(async () => (await submits()) > t5submitsBefore, 10000);
-    const t5s2Shown = await appears(stage2());
-    const t5s1Gone = await disappears(stage1());
-    const t5step = await stepText();
-    ok('T5 合格後進第 2 步：submit 有派送、第一段卸載、第二段掛上',
-        t5submitted === true && t5s2Shown === true && t5s1Gone === true && /步驟 2/.test(t5step),
-        `submit有派送=${t5submitted} 第二段出現=${t5s2Shown} 第一段卸載=${t5s1Gone} ${t5step}`);
-    await shot('04-step2.png');
+    const t5terms = await appears(termsHeading);
+    ok('T5 合格後按「下一步」→ 跳出服務條款彈窗，且此時**還沒**建局、也還沒進第二段',
+        t5submitted === true && t5termsBefore === 0 && t5terms === true
+        && (await createCalls()) === t5createsBefore && (await stage2().count()) === 0,
+        `submit有派送=${t5submitted} 送出前彈窗=${t5termsBefore} 彈窗出現=${t5terms} `
+        + `onCreate 次數=${await createCalls()}（送出前 ${t5createsBefore}） 第二段=${await stage2().count()}`);
+    await shot('04-terms-stage1.png');
 
-    // ── T6：往返。第二段改一個選項＋塞一張照片，回第一段再前進，看三種狀態都還在。
-    //    ⚠️ 照片一定會上傳失敗（本機沒有後端，這是刻意的）—— 要驗的不是上傳成功，
-    //       而是 `imageItems` 這筆**活過了 Stage2 的卸載與重掛**。
+    // ── T6：[A3-m] 確認同意 ⇒ onCreate **恰好一次**、進第二段、第一段卸載
+    //    ⚠️ 「恰好一次」不是挑剔：這一次呼叫＝扣 120 點。兩次的症狀是**多扣一次**，
+    //       而畫面上只會顯示一次成功。
+    await page.getByRole('button', { name: '確認同意' }).click();
+    const t6s2Shown = await appears(stage2());
+    const t6s1Gone = await disappears(stage1());
+    const t6created = await createCalls();
+    const t6step = await stepText();
+    const t6banner = await page.locator('text=團局已公開招募中').count();
+    const t6refund = await page.locator('text=尚無人報名時取消可全額退回 120 點').count();
+    const t6cancelEntry = await page.getByRole('button', { name: /前往團局頁/ }).count();
+    ok('T6 確認同意 → onCreate 恰好一次、進第二段，且橫幅講明「已公開／可全退／取消入口」',
+        t6created === t5createsBefore + 1 && t6s2Shown === true && t6s1Gone === true
+        && /步驟 2/.test(t6step) && t6banner === 1 && t6refund === 1 && t6cancelEntry === 1,
+        `onCreate 次數=${t6created}（應為 ${t5createsBefore + 1}） 第二段=${t6s2Shown} 第一段卸載=${t6s1Gone} `
+        + `${t6step} 橫幅=${t6banner} 退款說明=${t6refund} 取消入口=${t6cancelEntry}`);
+    await shot('05-step2-after-create.png');
+
+    // ── T14 的位置說明（斷言本體搬到下面自己的 context 去了）
+    //    🔴 這裡**曾經**放過 T14。它在這條路上是假綠：主流程從頭到尾沒有任何一個
+    //       輸入框能填 rules／features／restrictions（它們已經全部歸第二段），
+    //       所以「payload 裡是空的」與「這個函式什麼都沒做」逐字相同 ——
+    //       等價性測試釘在退化格上，對那一維零鑑別力。
+    //    ⇒ 搬到下面用**草稿還原**造出「state 真的帶著那三樣」的場景才問得出問題。
+
+    // 第二段狀態：選一個選項＋塞一張照片（後面 T7 要驗它們真的被送進 update）
+    //    ⚠️ 照片一定會上傳失敗（本機沒有後端，這是刻意的）—— 要驗的不是上傳成功。
     await page.getByRole('button', { name: '手動桌' }).click();
     await page.locator('input[type=file]').setInputFiles(probe);
     const photoShown = await appears(photos());
-    const imgBefore = await photos().count();
+    ok('T6b 第二段的選項與照片都掛得上（T7 的前提：沒有它們，T7 送出的內容無從比對）',
+        photoShown === true && (await photos().count()) > 0
+        && /bg-neutral-900/.test(await page.getByRole('button', { name: '手動桌' }).evaluate((el) => el.className)),
+        `照片=${await photos().count()} 手動桌選中=${/bg-neutral-900/.test(await page.getByRole('button', { name: '手動桌' }).evaluate((el) => el.className))}`);
 
-    await back().click();
-    const backOk = await appears(stage1());
-    const t6backStep = await stepText();
-    const t6place = await placeName().inputValue();
-    const t6stakes = await stakes().inputValue();
-    await next().click();
-    const fwdOk = await appears(stage2());
-    const manualCls = await page.getByRole('button', { name: '手動桌' }).evaluate((el) => el.className);
-    const imgAfter = await photos().count();
-    ok('T6 上一步→下一步 往返：第一段欄位、第二段選項與照片都還在',
-        backOk && fwdOk && /步驟 1/.test(t6backStep) && t6place === '測試場地' && t6stakes === '300/50'
-        && photoShown && imgBefore > 0 && imgAfter === imgBefore && /bg-neutral-900/.test(manualCls),
-        `回程=${t6backStep} 場地名稱="${t6place}" 籌碼="${t6stakes}" 照片 ${imgBefore}→${imgAfter} 手動桌選中=${/bg-neutral-900/.test(manualCls)}`);
-    await shot('05-step2-roundtrip.png');
-
-    // ── T12：[A3-j] 三個標著 `(必填)` 的環境選項沒選 ⇒ 擋下，彈窗不出現
-    //
-    // 🔴 這條要排在 T7 **之前**，因為它量的是「還沒選」那個狀態，而 T7 會把它們選掉。
-    //    T6 只點過「手動桌」⇒ 走到這裡時 菸／電梯 仍是空的（A3-j 之後初始值是 ''）。
-    const termsHeading = page.getByRole('heading', { name: '服務條款確認' });
+    // ── T12：[A3-j→A3-m] 三個「(必填)」沒選 ⇒ 擋下。
+    //    🔴 這一條的**判準換了**：A3-m 之前它擋的是「服務條款彈窗不出現」（＝還沒建局）；
+    //       現在局已經建好了，它擋的是「**不送出 update**」。
+    //       照舊寫「彈窗沒出現」的話會恆真（那個彈窗這時候本來就不會再出現）⇒ 假綠。
+    //    ⚠️ 這三項的必填語意也窄了：整段可跳過，所以它們只在「真的按了儲存」時必填。
     const smokeToast = page.locator('text=請選擇菸選項');
-    ok('T12a 送出前：服務條款彈窗本來就不在（正控 —— 少了它，T12b 的「不出現」可能只是恆真）',
-        (await termsHeading.count()) === 0, `送出前彈窗數=${await termsHeading.count()}`);
+    const t12updatesBefore = updateCalls.length;
+    ok('T12a 送出前：一次 update 都還沒送（正控 —— 少了它，T12b 的「沒送」可能只是恆真）',
+        t12updatesBefore === 0, `送出前 update 次數=${t12updatesBefore}`);
     await submit().click();
     const blockedToast = await appears(smokeToast, 5000);
-    const termsAfterBlock = await termsHeading.count();
-    ok('T12b 菸選項／電梯沒選 → 跳 toast 指名欄位，且**沒有**跳出服務條款彈窗',
-        blockedToast === true && termsAfterBlock === 0,
-        `toast出現=${blockedToast} 彈窗數=${termsAfterBlock}`);
+    await page.waitForTimeout(500);   // 給「如果會送，它也送出去了」的時間
+    ok('T12b 菸選項／電梯沒選 → 跳 toast 指名欄位，且**一次 update 都沒送出去**',
+        blockedToast === true && updateCalls.length === t12updatesBefore,
+        `toast出現=${blockedToast} update 次數=${updateCalls.length}（送出前 ${t12updatesBefore}）`);
     await shot('06a-stage2-required.png');
 
-    // ── T7：三項都選了之後送出 ⇒ 服務條款彈窗（API 不會被呼叫，那是彈窗確認之後的事）
-    //
-    // 🔴 定位器**不可以**用 `text=/服務條款|同意/`：`isLocalhost` 的除錯面板上有一顆
-    //    按鈕叫「測試：服務條款確認彈窗」，那串字永遠在頁面上 ⇒ 那樣寫的話，
-    //    **彈窗根本沒開也會綠**。A3-j 的閘門一接上就抓到了這件事：舊寫法回報
-    //    「彈窗出現=true 命中字串數=1」，而那個 1 就是那顆除錯按鈕。
-    //    ⇒ 改用 role=heading（除錯面板那顆是 button，角色天然分得開）。
+    // ── T7：[A3-m] 三項都選了之後儲存 ⇒ **恰好一次** update，帶著建立時拿到的 gameId
+    //    🔴 「帶著建立時那個 gameId」是這條的重點：拿錯 id 的話會去改**別人的**團局，
+    //       而後端會回「只有主揪可以修改團局」—— 使用者看到的是一句莫名其妙的話。
+    //    🔴 「恰好一次」同樣不是挑剔：若這裡誤用了 onCreate，症狀是再建一個局、再扣 120 點。
     await page.getByRole('button', { name: '無菸' }).click();
     await page.getByRole('button', { name: '有電梯' }).click();
+    const t7createsBefore = await createCalls();
     await submit().click();
-    const termsShown = await appears(termsHeading);
-    ok('T7 三項必填都選了 → 「確認發起團局」跳出服務條款確認彈窗',
-        termsShown === true, `彈窗出現=${termsShown} heading數=${await termsHeading.count()}`);
-    await shot('06-terms.png');
+    const t7sent = await until(() => Promise.resolve(updateCalls.length > t12updatesBefore), 15000);
+    await page.waitForTimeout(500);   // 讓「其實送了第二次」有機會現形
+    const call = updateCalls[updateCalls.length - 1] || null;
+    const body = call && call.body ? call.body : {};
+    const t7features = Array.isArray(body.features) ? body.features : [];
+    ok('T7 三項必填都選了 → 恰好一次 update-game，gameId 是建立時拿到的那個，內容帶得上第二段的選擇；且沒有再呼叫 onCreate',
+        t7sent === true && updateCalls.length === t12updatesBefore + 1
+        && body.gameId === 'e2e-game-0001'
+        && t7features.includes('無菸') && t7features.includes('有電梯') && t7features.includes('手動桌')
+        && (await createCalls()) === t7createsBefore,
+        `update 次數=${updateCalls.length}（應為 ${t12updatesBefore + 1}） gameId=${body.gameId} `
+        + `features=${JSON.stringify(t7features)} onCreate 次數=${await createCalls()}（應仍為 ${t7createsBefore}）`);
+    await shot('06-update-sent.png');
+
     } catch (e) {
         aborted = e;
     }
@@ -442,7 +499,9 @@ async function main() {
             new MutationObserver(check).observe(document.body, { childList: true, subtree: true, characterData: true });
         });
         await freshPage.getByRole('button', { name: '下一步' }).click();
-        const wentOn = await freshPage.locator('text=環境設施設定').first()
+        // [A3-m] 「過得了 Stage1」的證據換成**條款彈窗出現**（以前是第二段掛上）——
+        // 現在第二段要等建局成功才會出現，拿它當證據會把「建局失敗」也算成 Stage1 沒過。
+        const wentOn = await freshPage.getByRole('heading', { name: '服務條款確認' })
             .waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
         const t9toast = await freshPage.evaluate(() => !!window.__t9seen);
         await freshPage.screenshot({ path: path.join(SHOT_DIR, '07-draft-stale-starttime.png') });
@@ -465,15 +524,12 @@ async function main() {
             //    「用 state」與「用回傳值」量出來**逐字相同**，突變照樣存活而 T10 全綠。
             //    ⇒ 把時鐘往前撥 10 分鐘，state 裡那個值就餿了，兩者才分得開。
             //    ⚠️ 這同時是一個真實情境：使用者在第 2 步慢慢填環境選項超過一分鐘。
+            // 🔴 [A3-m] 撥時鐘的位置跟著流程換了：現在餿掉的空窗是「彈窗開著、
+            //    使用者在讀條款」的那段，而 confirmCreate 會在確認之後才組 payload。
+            //    ⚠️ 這一步仍然是 T10 有沒有鑑別力的全部關鍵 —— 不撥的話「用 state」
+            //       與「用 withFreshStartTime() 的回傳值」量出來逐字相同。
+            //    ⚠️ 三個環境選項不必再選：它們已經搬到第二段，而第二段在建局之後。
             if (FIX_CLOCK) await freshPage.clock.setFixedTime(new Date(FIXED_NOW.getTime() + 10 * 60 * 1000));
-            // [A3-j] 三個 `(必填)` 環境選項要先選，否則卡在 Stage2 閘門到不了 onCreate。
-            // ⚠️ 這幾行是**前置條件**不是斷言 —— 擋不擋得住由 T12 負責量。
-            for (const opt of ['無菸', '有電梯', '手動桌']) {
-                await freshPage.getByRole('button', { name: opt }).click();
-            }
-            await freshPage.getByRole('button', { name: /確認發起團局/ }).click();
-            await freshPage.getByRole('button', { name: '確認同意' })
-                .waitFor({ state: 'visible', timeout: 20000 });
             await freshPage.getByRole('button', { name: '確認同意' }).click();
             const captured = await freshPage.waitForFunction(() => window.__created || null, null, { timeout: 20000 })
                 .then((h) => h.jsonValue(), () => null);
@@ -534,24 +590,124 @@ async function main() {
 
             await pg.reload({ waitUntil: 'domcontentloaded' });
             await pg.waitForSelector('text=團局種類', { timeout: 60000 });
+            // [A3-m] 要走到第二段得先真的建局：下一步 → 條款 → 確認同意。
             await pg.getByRole('button', { name: '下一步' }).click();
-            await pg.locator('text=環境設施設定').first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
-            await pg.getByRole('button', { name: /確認發起團局/ }).click();
-            armResult[arm] = {
-                blocked: await appears(pg.locator('text=請選擇菸選項'), 5000),
-                terms: await pg.getByRole('heading', { name: '服務條款確認' }).count(),
-            };
+            await pg.getByRole('button', { name: '確認同意' }).waitFor({ state: 'visible', timeout: 20000 });
+            await pg.getByRole('button', { name: '確認同意' }).click();
+            await pg.locator('text=環境設施設定').first().waitFor({ state: 'visible', timeout: 20000 });
+            // 🔴 判準換成「有沒有送出 update」。A3-m 之前它是「服務條款彈窗有沒有跳」，
+            //    而那個彈窗現在**在第一段就用掉了** ⇒ 照舊寫的話兩臂都會量到 0，
+            //    old 那半恆綠、new 那半恆紅。
+            const before = updateCalls.length;
+            await pg.getByRole('button', { name: '儲存補充設定' }).click();
+            const blocked = await appears(pg.locator('text=請選擇菸選項'), 5000);
+            // 沒被擋的那一臂要等它真的送到；被擋的那一臂靠這段時間讓「其實有送」現形。
+            await until(() => Promise.resolve(updateCalls.length > before), 8000);
+            armResult[arm] = { blocked, sent: updateCalls.length - before };
             await pg.close();
         }
-        ok('T13 舊草稿（無 envOptionsDeclared）的必填環境選項被丟掉 ⇒ 擋下；新草稿照樣放行',
-            armResult.old.blocked === true && armResult.old.terms === 0
-            && armResult.new.blocked === false && armResult.new.terms === 1,
-            `舊草稿 擋下=${armResult.old.blocked} 彈窗=${armResult.old.terms}`
-            + ` ／ 新草稿 擋下=${armResult.new.blocked} 彈窗=${armResult.new.terms}`);
+        ok('T13 舊草稿（無 envOptionsDeclared）的必填環境選項被丟掉 ⇒ 擋下且不送 update；新草稿照樣放行並送出一次',
+            armResult.old.blocked === true && armResult.old.sent === 0
+            && armResult.new.blocked === false && armResult.new.sent === 1,
+            `舊草稿 擋下=${armResult.old.blocked} update=${armResult.old.sent}`
+            + ` ／ 新草稿 擋下=${armResult.new.blocked} update=${armResult.new.sent}`);
     } catch (e) {
         ok('T13 舊草稿的必填環境選項被丟掉', false, `例外：${e.message}`);
     }
     await t13ctx.close();
+
+    // ── T14：[A3-m] 第一段交給 `onCreate` 的 payload 不得帶任何第二段才會確認的 extras。
+    //    🔴 這條是 Codex 指名要的尺，而它**只有在 state 真的帶著那三樣時才有鑑別力**。
+    //       第一段的畫面上已經沒有任何一個框能填 rules／features／restrictions ⇒
+    //       在主流程裡量它，「空」是因為沒人填過，不是因為程式清掉了。
+    //    ⇒ 這裡用 `[DEBUG] 填入測試資料` 造場景：它會把三樣一起塞進 formData
+    //       （＝真實世界那條路的等價物：A3-m 之前存下的草稿還原回來）。
+    //    ⚠️ 判準是「空」不是「不存在」：features 被 buildCreateGamePayload 濾成 []，
+    //       images 一張都沒有時是 undefined。兩種都算沒帶，但有值一定不算。
+    const t14ctx = await browser.newContext({ viewport: { width: 390, height: 900 } });
+    try {
+        const pg = await t14ctx.newPage();
+        await guard(pg, { fakeProfile: true });
+        if (FIX_CLOCK) await pg.clock.setFixedTime(FIXED_NOW);
+        await pg.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+        await pg.waitForSelector('text=團局種類', { timeout: 60000 });
+        await pg.getByRole('button', { name: /填入測試資料/ }).click();
+        await pg.waitForTimeout(1200);   // 自動存草稿是 500ms debounce
+
+        // 🔴 正控：先證明 state 真的帶著那三樣。少了這一段，下面的「都是 0」
+        //    與「這個場景根本沒造出來」逐字相同 —— 那正是這條搬家的理由。
+        const seeded = await pg.evaluate(() => {
+            const d = JSON.parse(localStorage.getItem('mahjongclub_create_game_draft') || 'null');
+            const n = (v) => (Array.isArray(v) ? v.filter((x) => String(x || '').trim() !== '').length : 0);
+            return d ? { rules: n(d.formData.rules), features: n(d.formData.features), restrictions: n(d.formData.restrictions) } : null;
+        });
+
+        await pg.getByRole('button', { name: '下一步' }).click();
+        await pg.getByRole('button', { name: '確認同意' }).waitFor({ state: 'visible', timeout: 20000 });
+        await pg.getByRole('button', { name: '確認同意' }).click();
+        const sent = await pg.waitForFunction(() => window.__created || null, null, { timeout: 20000 })
+            .then((h) => h.jsonValue(), () => null);
+        const n = (v) => (Array.isArray(v) ? v.filter((x) => String(x || '').trim() !== '').length : 0);
+        const got = sent
+            ? { rules: n(sent.rules), features: n(sent.features), restrictions: n(sent.restrictions), images: n(sent.images), placeName: sent.placeName, stakes: sent.stakes }
+            : null;
+        ok('T14 state 帶著 rules／features／restrictions 時，第一段的 payload 仍然一個都不帶（而第一段自己那四件事照送）',
+            !!seeded && seeded.rules > 0 && seeded.features > 0 && seeded.restrictions > 0
+            && !!got && got.rules === 0 && got.features === 0 && got.restrictions === 0 && got.images === 0
+            && got.placeName === '測試場地' && got.stakes === '300/50',
+            `正控(state 裡)=${seeded ? `rules ${seeded.rules}／features ${seeded.features}／restrictions ${seeded.restrictions}` : '沒有草稿'}`
+            + ` ／ 送出的 payload=${got ? `rules ${got.rules}／features ${got.features}／restrictions ${got.restrictions}／images ${got.images}`
+                + `，場地="${got.placeName}" 籌碼="${got.stakes}"` : '沒有捕捉到 onCreate'}`);
+        await pg.screenshot({ path: path.join(SHOT_DIR, '08-stage1-payload.png') });
+        await pg.close();
+    } catch (e) {
+        ok('T14 第一段的 payload 不帶第二段的 extras', false, `例外：${e.message}`);
+    }
+    await t14ctx.close();
+
+    // ── T15：[A3-m] 「跳過，之後再補」**一次 update 都不送**，也不會再建一次局。
+    //    🔴 Codex 指名的尺之一。兩個方向的錯都很難從畫面上看出來：
+    //       ① 跳過卻送了 update ⇒ 把使用者沒確認的東西（空的三個必填）寫進去
+    //       ② 跳過卻又呼叫一次 onCreate ⇒ 建出第二個團局、**再扣 120 點**
+    //       兩者畫面上都只是一句「已跳過補充設定」。
+    //    ⚠️ 這一條同時是「第二段可跳過」這個產品決定的唯一一把尺：三個 `(必填)`
+    //       在這條路上**一個都沒選**，而它必須放行。
+    const t15ctx = await browser.newContext({ viewport: { width: 390, height: 900 } });
+    try {
+        const pg = await t15ctx.newPage();
+        const t15updates = [];
+        await guard(pg, { fakeProfile: true, updates: t15updates });
+        if (FIX_CLOCK) await pg.clock.setFixedTime(FIXED_NOW);
+        await pg.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
+        await pg.waitForSelector('text=團局種類', { timeout: 60000 });
+        await pg.getByRole('button', { name: /填入測試資料/ }).click();
+        await pg.getByRole('button', { name: '下一步' }).click();
+        await pg.getByRole('button', { name: '確認同意' }).waitFor({ state: 'visible', timeout: 20000 });
+        await pg.getByRole('button', { name: '確認同意' }).click();
+        await pg.locator('text=環境設施設定').first().waitFor({ state: 'visible', timeout: 20000 });
+        const createdBefore = await pg.evaluate(() => window.__createCalls || 0);
+        // 🔴 兩道正控，方向不同，缺一不可：
+        //    ① `createdBefore === 1`：這一頁真的走過「建局」那一步（不是停在第一段就來按跳過）。
+        //    ② `updateCalls.length > 0`：**攔截器這一趟真的錄到過** update-game（T7／T13 錄的）。
+        //       少了②，「t15updates 是空的」與「這支攔截器根本沒在錄」逐字相同 ——
+        //       而後者會讓這條在功能壞掉時照樣全綠。
+        const meterProven = updateCalls.length > 0;
+        const preOk = createdBefore === 1 && meterProven && t15updates.length === 0;
+        await pg.getByRole('button', { name: '跳過，之後再補' }).click();
+        const skipToast = await appears(pg.locator('text=已跳過補充設定'), 8000);
+        await pg.waitForTimeout(1500);   // 有界觀察窗：讓「其實送了」與「其實又建了一次」現形
+        const createdAfter = await pg.evaluate(() => window.__createCalls || 0);
+        ok('T15 三個必填一個都沒選也能「跳過」→ 提示有出來，且不送 update、不再建一次局',
+            preOk === true && skipToast === true
+            && t15updates.length === 0 && createdAfter === createdBefore,
+            `正控(這頁建局 ${createdBefore} 次／攔截器這趟錄到 ${updateCalls.length} 次)=${preOk} 提示=${skipToast} `
+            + `跳過後 這頁的 update=${t15updates.length}（觀察窗 1.5s） onCreate=${createdAfter}`);
+        await pg.screenshot({ path: path.join(SHOT_DIR, '09-skip-stage2.png') });
+        await pg.close();
+    } catch (e) {
+        ok('T15 跳過第二段不送 update、不再建一次局', false, `例外：${e.message}`);
+    }
+    await t15ctx.close();
     record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
     record('T10 送出的 payload 帶的是刷新後的開局時間（不是草稿那個舊的）', t10pass, t10detail);
 
@@ -616,15 +772,17 @@ async function main() {
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。
     //    🔴 而且它必須影響 rc —— 更早的版本只把清單印出來、不影響成敗，
     //       等於 README 寫的「硬防線」沒有任何執行力（覆驗抓到的）。
-    //    ⚠️ 這裡的「兩頁」自 T9 加入後其實是**四頁**（暖機／正式／T9 的兩頁）——
-    //       訊息維持講「暖機頁與正式頁」會漏掉 T9 那兩頁，所以下面改成講「全部頁面」。
+    //    ⚠️ 「兩頁」這個說法早就過期了：暖機／正式／T9 的兩頁／T13 的兩頁／T14／T15
+    //       —— 所以標題與 detail 都講「全部頁面」。
+    //    🔴 這句話會隨著新增 context 靜靜過期（把數目寫死在句子裡的那個坑），
+    //       所以下面 detail 只列**來源**不列數目。
     //    ⚠️ **措辭要精確**：白名單裡有 `cdn.tailwindcss.com` 與 `unpkg.com`
     //       （`index.html` 本來就會抓），所以這條**不是**「完全沒有對外連線」，
     //       而是「沒有白名單以外的連線，特別是沒有任何正式後端」。
     const external = [...new Set(blocked)];
     record(`T8 全部頁面都沒有非白名單請求（白名單＝本機＋${[...ALLOW_HOSTS].filter((h) => !/^(127\.0\.0\.1|localhost)$/.test(h)).join('／')}；正式後端不在其中）`,
         external.length === 0,
-        external.length === 0 ? '非白名單請求 0 筆（暖機頁＋正式頁＋T9 兩頁合計）' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
+        external.length === 0 ? '非白名單請求 0 筆（暖機頁＋正式頁＋T9／T13／T14／T15 各自的頁面合計）' : `被擋 ${external.length} 個：${external.slice(0, 5).join(' , ')}`);
 
     const reloaded = loads > loadsAfterGoto;
 

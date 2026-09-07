@@ -88,6 +88,27 @@ export function buildCreateGamePayload(input: BuildCreateGamePayloadInput): Crea
     };
 }
 
+/**
+ * [A3-m] 把 payload 收窄成「第一段真的問過的東西」。
+ *
+ * 🔴 為什麼需要它：第一段送出就**建局並扣 120 點**，而 `buildCreateGamePayload`
+ *    是照 A3-a 的行為原封抽出來的 —— 它把 `...formData` 整包帶出去，其中
+ *    `rules`／`features`／`restrictions` 現在全部歸第二段。空的時候看不出差別，
+ *    但這三個欄位**有非空的實際路徑**：草稿還原（A3-m 之前的草稿，或使用者在
+ *    第二段填過又離開）。那條路上，使用者這一輪一個字都沒確認，
+ *    團局卻已經帶著那些內容公開招募了。
+ *
+ * 🔴 判準是「第二段有沒有機會確認」，不是「內容對不對」：
+ *    第二段可跳過 ⇒ 沒跳過的人會在那裡看到並按儲存，跳過的人就是選擇不宣告。
+ *    在第一段偷渡過去，兩種人都沒有做過那個選擇。
+ *
+ * ⚠️ `images` 用 `undefined` 而不是 `[]`：與 `buildCreateGamePayload` 的
+ *    「一張都沒有時是 undefined」同一個約定，不要在這裡自己另立一種空值。
+ */
+export function toStage1Payload(payload: CreateMahjongGamePayload): CreateMahjongGamePayload {
+    return { ...payload, rules: [], features: [], restrictions: [], images: undefined };
+}
+
 export interface ValidateCreateGameInput {
     formData: Pick<CreateMahjongGamePayload, 'startTime' | 'placeName' | 'location'>;
     coordinates: Coordinates;

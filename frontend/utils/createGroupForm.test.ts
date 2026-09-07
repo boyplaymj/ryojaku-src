@@ -13,6 +13,7 @@ import {
     isStartTimeInPast,
     refreshStaleStartTime,
     toDateTimeLocalString,
+    toStage1Payload,
     validateCreateGame,
     validateCreateGameStage1,
     validateCreateGameStage2,
@@ -496,4 +497,51 @@ test('A3j-07 🔴 反控：這三項若被 buildCreateGamePayload 送出去，�
     for (const ghost of ['無菸', '有電梯', '電動桌']) {
         assert.equal(payload.features.includes(ghost), false, `沒選卻送出了「${ghost}」`);
     }
+});
+
+// ───────────────────────── toStage1Payload（[A3-m]）─────────────────────────
+
+test('A3m-01 第一段的 payload 不帶第二段的 extras（rules／features／restrictions 清空、images 拿掉）', () => {
+    // 🔴 輸入刻意**三個都非空**。若寫成空的，這條與「函式整個是 identity」逐字相同。
+    const full = buildCreateGamePayload(buildInput({
+        formData: { ...baseForm(), rules: ['不准抽菸'], features: ['有冷氣'], restrictions: ['新手勿入'] },
+        imageItems: [{ url: 'https://x/1.jpg', status: 'done' }],
+    }));
+    // 正控：先確認那份「完整的」真的帶著東西 —— 少了它，下面的空可能只是輸入本來就空。
+    assert.equal(full.rules.length > 0 && full.features.length > 0 && full.restrictions.length > 0, true);
+    assert.equal(Array.isArray(full.images) && full.images.length > 0, true);
+
+    const stage1 = toStage1Payload(full);
+    assert.deepEqual(stage1.rules, []);
+    assert.deepEqual(stage1.features, []);
+    assert.deepEqual(stage1.restrictions, []);
+    assert.equal(stage1.images, undefined);
+});
+
+test('A3m-02 第一段真的問過的四件事一個都不能被清掉（反控）', () => {
+    // 這條問的是「它有沒有清過頭」。少了它，`() => ({} as any)` 也會讓 A3m-01 全綠。
+    const full = buildCreateGamePayload(buildInput({
+        formData: { ...baseForm(), rules: ['不准抽菸'], features: ['有冷氣'], restrictions: ['新手勿入'] },
+    }));
+    const stage1 = toStage1Payload(full);
+    assert.equal(stage1.startTime, full.startTime);
+    assert.equal(stage1.placeName, full.placeName);
+    assert.equal(stage1.location, full.location);
+    assert.equal(stage1.stakes, full.stakes);
+    assert.equal(stage1.needPlayers, full.needPlayers);
+    assert.equal(stage1.gameType, full.gameType);
+    assert.equal(stage1.latitude, full.latitude);
+    assert.equal(stage1.longitude, full.longitude);
+});
+
+test('A3m-03 不就地改寫傳進來的那份 —— 呼叫端還要拿它送第二段', () => {
+    // 🔴 這條不是潔癖：`submitStage2` 用的是同一組 state 重算出來的 payload，
+    //    若本函式就地清空，第二段會送出一份**空的** extras，而畫面上完全正常。
+    const full = buildCreateGamePayload(buildInput({
+        formData: { ...baseForm(), rules: ['不准抽菸'], features: ['有冷氣'], restrictions: ['新手勿入'] },
+    }));
+    toStage1Payload(full);
+    assert.deepEqual(full.rules, ['不准抽菸']);
+    assert.equal(full.features.includes('有冷氣'), true);
+    assert.deepEqual(full.restrictions, ['新手勿入']);
 });
