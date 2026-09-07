@@ -58,6 +58,10 @@ AUTHORIZER_PILOT = {
     "cancel-game",            # REST_V1 POST /cancel-game
     "cancel-registration",    # REST_V1 POST /cancel-registration
     "create-game",            # REST_V1 POST /create-game
+    # [A3-m] update-game：第二段「補充設定」的著陸點。依本名單那條教訓同步列舉 ——
+    # 只在 manifest 寫 auth:"user" 不會掛上任何閘門，而且漏列**零錯誤訊號**。
+    # ⚠️ 它自己也 fail-closed（AuthorizerUserID 為空即 401），掛 authorizer 是第二層。
+    "update-game",            # REST_V1 POST /update-game
     "game-register",          # REST_V1 POST /game-register
     "submit-rating",          # REST_V1 POST /submit-rating
     "accept-registration",    # HTTP_V2 POST /registrations/accept

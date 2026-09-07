@@ -404,6 +404,17 @@
       ]
     },
     {
+      "name": "update-game",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_web_update_game",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/update-game?",
+      "auth": "user",
+      "tables": [
+        "Games"
+      ]
+    },
+    {
       "name": "daily-bonus",
       "projectPath": "cmd/lambdas/apis/mahjongclub_daily_bonus",
       "apiType": "HTTP_V2",
@@ -927,8 +938,7 @@
       "tables": [
         "VoiceCorrections"
       ]
-    }
-,
+    },
     {
       "name": "ruleset",
       "projectPath": "cmd/lambdas/apis/mahjongclub_ruleset",
