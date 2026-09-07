@@ -97,7 +97,23 @@ async function main() {
     //    ⚠️ 這是把**與待驗行為無關的**時間漂移排除掉，不是把產品缺陷藏起來 ——
     //       那個缺陷是真的，見 README「順手量到的產品問題」。
     //    反控：`E2E_NO_CLOCK_FIX=1` 關掉它，假紅就會回來。
+    //
+    // 🔴🔴 **一頁一個固定時間是不夠的 —— 兩頁必須固定在同一個瞬間**（2026-09-07 量到）。
+    //    第一版對暖機頁與正式頁各呼叫一次 `setFixedTime(new Date())`，兩者相隔約 4 秒。
+    //    而 `CreateGroup` **每次掛載都會把草稿寫進 localStorage**（載入草稿那支 effect
+    //    宣告在自動存檔那支前面，它把 `isInitialMount` 設成 false ⇒ 自動存檔照跑），
+    //    暖機頁與正式頁又共用同一個 browser context ⇒ 正式頁讀回的
+    //    `startTime` 是**暖機頁那一分鐘**的。跨過分鐘邊界就紅。
+    //    ⇒ 假紅的窗只是從「開頁到 T4」縮成「暖機到正式頁」，沒有被消掉：
+    //      實測 20 輪紅 1 輪（≈5%，與 4 秒 / 60 秒相符）。
+    //    ⚠️ 這件事教的是：**修完要用「窗變小之後的機率」去設重跑次數**。
+    //      連跑 8 次全綠在 5% 之下有 66% 的機會發生 ⇒ 那 8 次不構成「修好了」的證據。
     const FIX_CLOCK = process.env.E2E_NO_CLOCK_FIX !== '1';
+    // 兩頁共用這一個瞬間。反控 `E2E_WARM_CLOCK_SKEW_S=60`：故意把暖機頁往前撥，
+    // 讓草稿帶著上一分鐘的 startTime 回來 —— 那會**每次**都紅，不必靠機率重現。
+    const FIXED_NOW = new Date();
+    const WARM_SKEW_S = Number(process.env.E2E_WARM_CLOCK_SKEW_S || 0);
+    const WARM_NOW = new Date(FIXED_NOW.getTime() - WARM_SKEW_S * 1000);
     // 🔴 `blocked` 由暖機頁與正式頁**共用**。第一版只有正式頁在記 ⇒ 暖機頁被擋的
     //    請求不會進清單，而 T8 卻宣稱「整趟」。攔截在兩頁都有效（安全性沒破口），
     //    但**宣稱的範圍**比量到的大 —— 那正是「量了 A 卻說成 B」。
@@ -110,7 +126,7 @@ async function main() {
     });
 
     const warm = await ctx.newPage();
-    if (FIX_CLOCK) await warm.clock.setFixedTime(new Date());
+    if (FIX_CLOCK) await warm.clock.setFixedTime(WARM_NOW);
     await guard(warm);
     await warm.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
     await warm.waitForSelector('text=團局種類', { timeout: 60000 });
@@ -118,7 +134,7 @@ async function main() {
     await warm.close();
 
     const page = await ctx.newPage();
-    if (FIX_CLOCK) await page.clock.setFixedTime(new Date());
+    if (FIX_CLOCK) await page.clock.setFixedTime(FIXED_NOW);
     const errs = [];
     let loads = 0;
     page.on('load', () => { loads += 1; });
@@ -241,10 +257,12 @@ async function main() {
     //       只有這一對的**對比**才分得出「原生擋的」與「程式閘擋的」。
     //       T3 自己對「按鈕根本沒作用」零鑑別力（實測：把下一步改成 type="button"，T3 照樣綠）。
     // 收掉 T3 留下的原生驗證氣泡再點（Escape + blur）。
-    // ⚠️ **這是一個未證實的預防措施，不是已查明的根因。** 假說是「氣泡開著時
+    // ⚠️ **這是一個未證實的預防措施，不是根因的修法。** 假說是「氣泡開著時
     //    下一次點擊會被拿去關掉它，那一下就不送出表單」；但把這三行拿掉之後
     //    連跑 5 次**沒有重現**假紅 ⇒ 假說沒有被證實（也沒被推翻，5 次太少）。
-    //    留著是因為它無害且便宜。**真正的根因目前不明** —— 見上方 T4 那段。
+    //    留著是因為它無害且便宜。
+    //    🔴 **已查明的根因是分鐘邊界跳出另一句 toast（見檔頭），修法是 FIX_CLOCK。**
+    //       這三行與那個根因無關，不要把它讀成「還在找原因」。
     await page.keyboard.press('Escape');
     await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
     await page.waitForTimeout(300);
