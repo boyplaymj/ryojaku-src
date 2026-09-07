@@ -7,8 +7,11 @@
 //
 // 🔴 界線（引用這份驗收結果時必須一起講）：
 //   - 它證明不了 `/create` 這條路由本身還通，也證明不了 `App.tsx` 的登入閘。
-//   - `user` 是假的，`onCreate` 直接回 `{ success: true }` ⇒ 送出之後的流程
-//     （個資檢查、API、推播引導、跳轉）**不在這份驗收的涵蓋範圍內**。
+//   - `user` 是假的，`onCreate` 直接回 `{ success: true }` ⇒ **`onCreate` 之後**的流程
+//     （真的建團、推播引導、跳轉）**不在這份驗收的涵蓋範圍內**。
+//     ⚠️ 但送出**邊界本身**在內：T10 斷言交給 `onCreate` 的那份 payload。
+//     ⚠️ 個資檢查（`api.getUserInfo` → `isProfileComplete`）**在**範圍內：
+//        T10 用 Playwright 對本機那個死路 URL 回一份完整假 profile 讓它過關。
 //   - 這支**只在 dev server 下被載入**（vite build 的入口只有 index.html），
 //     不會進 production bundle。
 import React from 'react';
@@ -34,7 +37,17 @@ if (!rootEl) throw new Error('harness: 找不到 #root');
 ReactDOM.createRoot(rootEl).render(
     <MemoryRouter>
         <ToastProvider>
-            <CreateGroup onCreate={async () => ({ success: true })} user={fakeUser} />
+            <CreateGroup
+                onCreate={async (gameData) => {
+                    // 🔴 這一行就是「送出邊界」的儀器（[A3-i] T10）。
+                    //    沒有它的話，「驗證放行了，而 payload 帶的還是那個過期的時間」
+                    //    在外面**完全不可觀測** —— 我一度把這件事寫成「沒有尺」，
+                    //    其實只是沒往這裡看。onCreate 本來就是可觀測的邊界。
+                    (window as any).__created = gameData;
+                    return { success: true };
+                }}
+                user={fakeUser}
+            />
         </ToastProvider>
     </MemoryRouter>
 );

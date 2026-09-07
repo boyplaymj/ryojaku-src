@@ -57,7 +57,7 @@ const isAllowed = (raw) => {
     }
 };
 
-const TOTAL_TESTS = 9;
+const TOTAL_TESTS = 10;
 const results = [];
 /** 一條測試紅了就**停在那裡**。 */
 class Failed extends Error {}
@@ -118,8 +118,24 @@ async function main() {
     //    請求不會進清單，而 T8 卻宣稱「整趟」。攔截在兩頁都有效（安全性沒破口），
     //    但**宣稱的範圍**比量到的大 —— 那正是「量了 A 卻說成 B」。
     const blocked = [];
-    const guard = (p) => p.route('**/*', (r) => {
+    // 🔴 `fakeProfile` 這條分支刻意寫在**同一支** handler 裡（見下方「只註冊一個」那段）。
+    //    它讓 T10 走得完 `confirmCreate` 的個資檢查閘 —— 那個閘會打
+    //    `${VITE_API_BASE_URL}/user-info`（本機死路，404）⇒ 不回一份完整 profile
+    //    就永遠到不了 `onCreate`。
+    //    ⚠️ 這是**假件**，它只證明「個資完整時走得下去」，不證明個資檢查本身對不對。
+    const FAKE_PROFILE = {
+        userId: 'e2e-harness-user', displayName: '實跑測試', gender: '男',
+        ageRange: '26-35', mahjongExperience: '中級', lineId: 'e2e-line',
+        hasClaimedPushBonus: true,   // 避開推播引導那條岔路（那不在本套件涵蓋範圍）
+    };
+    const guard = (p, opts = {}) => p.route('**/*', (r) => {
         const u = r.request().url();
+        if (opts.fakeProfile && u.includes('/user-info')) {
+            return r.fulfill({
+                status: 200, contentType: 'application/json',
+                body: JSON.stringify({ success: true, data: FAKE_PROFILE }),
+            });
+        }
         if (isAllowed(u)) return r.continue();
         blocked.push(u);
         return r.abort();
@@ -341,11 +357,13 @@ async function main() {
     //    🔴 為什麼要新開 context：草稿住在 localStorage。沿用正式頁那個 context 的話，
     //       裡面已經有一份 startTime = 現在（＝**不過期**）的草稿，
     //       T9 想造的場景會被它蓋掉 —— 而那樣 T9 會綠，且綠得毫無理由。
-    //    ⚠️ 執行順序與編號不同：T9 跑在 T8 前面，好讓 T8 的 `blocked` 也涵蓋這兩頁。
+    //    ⚠️ 執行順序與編號不同：T9／T10 跑在 T8 前面，好讓 T8 的 `blocked` 也涵蓋這兩頁。
     //       編號是斷言的身分，不是執行順序。
     const t9ctx = await browser.newContext({ viewport: { width: 390, height: 900 }, deviceScaleFactor: 2 });
     let t9pass = false;
     let t9detail = '';
+    let t10pass = false;
+    let t10detail = '';
     try {
         // ① 舊分鐘的那一頁：把時鐘往前撥 10 分鐘，按「填入測試資料」讓它寫一份草稿。
         const stalePage = await t9ctx.newPage();
@@ -362,7 +380,7 @@ async function main() {
 
         // ② 十分鐘後回來的那一頁：草稿一還原，startTime 必然是過去的。
         const freshPage = await t9ctx.newPage();
-        await guard(freshPage);
+        await guard(freshPage, { fakeProfile: true });
         if (FIX_CLOCK) await freshPage.clock.setFixedTime(FIXED_NOW);
         await freshPage.goto(URL_HARNESS, { waitUntil: 'domcontentloaded' });
         await freshPage.waitForSelector('text=團局種類', { timeout: 60000 });
@@ -385,11 +403,55 @@ async function main() {
         t9pass = restored === '測試場地' && wentOn === true && t9toast === false;
         t9detail = `草稿還原=${restored === '測試場地' ? '是' : `否(${restored})`} 草稿裡的開局時間=${staleStart} `
             + `進到第 2 步=${wentOn} 時間toast出現過=${t9toast}`;
+
+        // ── T10：**送出去的 payload** 帶的必須是刷新後的時間（[A3-i]，覆驗者提的）
+        //    🔴 這條補的是一發**存活過的突變**：`confirmCreate` 組 payload 時用回 state
+        //       裡的 `formData`（而不是 `withFreshStartTime()` 的回傳值）——
+        //       驗證照樣放行、畫面照樣往下走，只有送出去的那份帶著舊時間。
+        //    🔴 我一度把這件事寫成「沒有尺、要等整合測試」。**那是錯的**：
+        //       harness 的 `onCreate` 本來就是可觀測的送出邊界，我只是沒往那裡看。
+        //       ⇒ 宣告盲區之前要先把現有的縫都找過一遍。
+        if (wentOn) {
+            // 🔴 **在第 2 步之後才讓時間過期** —— 這一步是 T10 有沒有鑑別力的全部關鍵。
+            //    第一版沒有它：Stage1 閘門那一次 `withFreshStartTime()` 已經把 state
+            //    刷新過了，所以走到 `confirmCreate` 時 `formData` 本來就是新的 ⇒
+            //    「用 state」與「用回傳值」量出來**逐字相同**，突變照樣存活而 T10 全綠。
+            //    ⇒ 把時鐘往前撥 10 分鐘，state 裡那個值就餿了，兩者才分得開。
+            //    ⚠️ 這同時是一個真實情境：使用者在第 2 步慢慢填環境選項超過一分鐘。
+            if (FIX_CLOCK) await freshPage.clock.setFixedTime(new Date(FIXED_NOW.getTime() + 10 * 60 * 1000));
+            await freshPage.getByRole('button', { name: /確認發起團局/ }).click();
+            await freshPage.getByRole('button', { name: '確認同意' })
+                .waitFor({ state: 'visible', timeout: 20000 });
+            await freshPage.getByRole('button', { name: '確認同意' }).click();
+            const captured = await freshPage.waitForFunction(() => window.__created || null, null, { timeout: 20000 })
+                .then((h) => h.jsonValue(), () => null);
+            // 判準在頁內算，避免 node 端與瀏覽器端時區不一致
+            //    判準：payload 的那一分鐘必須等於**送出當下**的那一分鐘。
+            //    用「相等」不用「>=」的理由：`>=` 對「早了 10 分鐘」有鑑別力，
+            //    但對「晚了 10 分鐘」沒有 —— 而兩者都是錯的。
+            const verdict = captured ? await freshPage.evaluate((payload) => {
+                const floor = (t) => { const d = new Date(t); d.setSeconds(0); d.setMilliseconds(0); return d.getTime(); };
+                return {
+                    startTime: payload.startTime,
+                    payloadMinute: new Date(floor(payload.startTime)).toISOString(),
+                    nowMinute: new Date(floor(Date.now())).toISOString(),
+                    same: floor(payload.startTime) === floor(Date.now()),
+                };
+            }, captured) : null;
+            t10pass = !!verdict && verdict.same;
+            t10detail = verdict
+                ? `payload.startTime=${verdict.startTime}（=${verdict.payloadMinute}）送出當下=${verdict.nowMinute} 同一分鐘=${verdict.same}；草稿原本是 ${staleStart}`
+                : '沒有捕捉到 onCreate 的 payload（送出流程沒走完）';
+        } else {
+            t10detail = 'T9 沒進到第 2 步 ⇒ 這條沒有前提可跑';
+        }
     } catch (e) {
-        t9detail = `例外：${e && e.message ? e.message.split('\n')[0] : e}`;
+        const msg = `例外：${e && e.message ? e.message.split('\n')[0] : e}`;
+        if (!t9detail) t9detail = msg; else if (!t10detail) t10detail = msg;
     }
     await t9ctx.close();
     record('T9 草稿帶回過期的開局時間 ⇒ 沒碰過就自動推進，使用者一字未改也能過 Stage1', t9pass, t9detail);
+    record('T10 送出的 payload 帶的是刷新後的開局時間（不是草稿那個舊的）', t10pass, t10detail);
 
     // ── T8：暖機頁＋正式頁都不准發出**非白名單**請求。
     //    🔴 這條**一定要跑**（放在 try 外面）：它是安全性質，不是流程的一步。
@@ -410,7 +472,8 @@ async function main() {
     console.log('\n--- 頁面錯誤 ---');
     console.log(errs.length ? errs.join('\n') : '(無)');
     console.log(`\n截圖：${SHOT_DIR}`);
-    console.log('⚠️ 涵蓋範圍：只有 CreateGroup 這個元件。/create 路由、登入閘、送出之後的流程都不在內。');
+    console.log('⚠️ 涵蓋範圍：只有 CreateGroup 這個元件。/create 路由與登入閘不在內；'
+        + '送出邊界（交給 onCreate 的 payload）在內，onCreate 之後（真的建團／推播／跳轉）不在內。');
 
     await browser.close();
 
