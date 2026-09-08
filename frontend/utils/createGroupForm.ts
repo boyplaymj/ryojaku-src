@@ -45,18 +45,18 @@ export interface BuildCreateGamePayloadInput {
  * - `latitude`/`longitude` 取自 `coordinates`（formData 裡那兩個是 0，不可用）
  * - `images`：只收上傳成功且有 url 的；**一張都沒有時是 `undefined` 不是 `[]`**
  */
-export function buildCreateGamePayload(input: BuildCreateGamePayloadInput): CreateMahjongGamePayload {
-    const { formData, coordinates, options, imageItems } = input;
+/**
+ * [A3-p] 七個選項 ＋ 手填清單 → 存進 `venueFeatures` 的那個扁平陣列。
+ *
+ * 🔴 從 `buildCreateGamePayload` 原封抽出（順序與 `電動桌:型號` 的組法逐字不變）。
+ *    抽的理由是**編輯頁要用同一份**：兩邊各寫一次的話，改了其中一邊
+ *    就會讓「建局時的宣告」與「編輯後的宣告」長得不一樣，而那個差異
+ *    只有比對兩次寫入才看得出來。
+ * 🔴 `parseVenueFeatures` 是它的反向；兩者的往返性質由 `A3p-02`／`A3p-03` 釘住。
+ */
+export function buildVenueFeatures(options: VenueOptions, manualFeatures: string[]): string[] {
     const { smoking, parking, elevator, mahjongTable, tableModel, venueType, skillLevel } = options;
-
-    // Convert datetime-local to ISO 8601 format
-    const startTimeISO = new Date(formData.startTime).toISOString();
-
-    // Filter out empty strings from arrays
-    const cleanManualFeatures = formData.features.filter(f => f.trim() !== '');
-
-    // 整合新選項與場地特色
-    const cleanFeatures = [
+    return [
         smoking,
         ...parking,
         elevator,
@@ -65,8 +65,18 @@ export function buildCreateGamePayload(input: BuildCreateGamePayloadInput): Crea
             : mahjongTable,
         venueType,
         skillLevel,
-        ...cleanManualFeatures
+        ...manualFeatures.filter(f => f.trim() !== ''),
     ].filter(f => f && f.trim() !== '');
+}
+
+export function buildCreateGamePayload(input: BuildCreateGamePayloadInput): CreateMahjongGamePayload {
+    const { formData, coordinates, options, imageItems } = input;
+
+    // Convert datetime-local to ISO 8601 format
+    const startTimeISO = new Date(formData.startTime).toISOString();
+
+    // 整合新選項與場地特色（[A3-p] 抽成 buildVenueFeatures，見下）
+    const cleanFeatures = buildVenueFeatures(options, formData.features);
 
     const cleanRules = formData.rules.filter(r => r.trim() !== '');
     const cleanRestrictions = formData.restrictions.filter(r => r.trim() !== '');

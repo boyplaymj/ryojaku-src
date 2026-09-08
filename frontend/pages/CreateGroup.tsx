@@ -6,9 +6,10 @@ import type { CreateMahjongGamePayload, User } from '../types';
 import MapPicker from '../components/MapPicker';
 import ProfileIncompleteModal from '../components/ProfileIncompleteModal';
 import CreateGroupStage1 from '../components/CreateGroupStage1';
-import CreateGroupStage2, { type ImageItem } from '../components/CreateGroupStage2';
+import CreateGroupStage2 from '../components/CreateGroupStage2';
 import { isProfileComplete, getMissingProfileFields } from '../utils/profileUtils';
 import { saveCreateGameDraft, loadCreateGameDraft, clearCreateGameDraft } from '../utils/draftStorage';
+import { useEventImages } from '../hooks/useEventImages';
 import { buildCreateGamePayload, refreshStaleStartTime, toDateTimeLocalString, toStage1Payload, validateCreateGame, validateCreateGameStage1, validateCreateGameStage2 } from '../utils/createGroupForm';
 import { authService } from '../services/authService';
 import { api } from '../services/dataService';
@@ -60,8 +61,9 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
     const [isPushModalOpen, setIsPushModalOpen] = useState(false);
 
     // 照片上傳狀態
-    const [imageItems, setImageItems] = useState<ImageItem[]>([]);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    // [A3-p] 照片的上傳邏輯搬到 `useEventImages`，因為編輯頁要用**同一份**
+    //        （複製一份的話日後只會有一邊被修，而差別只有使用者才遇得到）。
+    const { imageItems, resetToUrls, fileInputRef, handleImageSelect, removeImage } = useEventImages(user?.userId);
 
     // 用於跳過初始載入時的自動儲存
     const isInitialMount = useRef(true);
@@ -188,62 +190,6 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
         setFormData({ ...formData, [field]: newList });
     };
 
-    const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0 && user) {
-            const newFiles = Array.from(e.target.files);
-
-            newFiles.forEach(async (file) => {
-                const id = Math.random().toString(36).substr(2, 9);
-                const preview = URL.createObjectURL(file);
-
-                // Add to state immediately
-                const newItem: ImageItem = { id, file, preview, status: 'uploading' };
-                setImageItems(prev => [...prev, newItem]);
-
-                try {
-                    // 1. Get Presigned URL
-                    const response = await apiService.getEventUploadUrl(user.userId, file.name, file.type);
-
-                    if (response.success && response.data) {
-                        const { uploadUrl, publicUrl } = response.data;
-
-                        // 2. Upload to S3
-                        await fetch(uploadUrl, {
-                            method: 'PUT',
-                            body: file,
-                            headers: {
-                                'Content-Type': file.type,
-                                'Cache-Control': 'public, max-age=31536000, immutable'
-                            }
-                        });
-
-                        // 3. Update state with URL
-                        setImageItems(prev => prev.map(item =>
-                            item.id === id ? { ...item, url: publicUrl, status: 'done' } : item
-                        ));
-                    } else {
-                        throw new Error('Failed to get upload URL');
-                    }
-                } catch (error) {
-                    console.error('Image upload failed:', error);
-                    setImageItems(prev => prev.map(item =>
-                        item.id === id ? { ...item, status: 'error' } : item
-                    ));
-                }
-            });
-        }
-        // Reset file input
-        if (fileInputRef.current) fileInputRef.current.value = '';
-    };
-
-    const removeImage = (id: string) => {
-        setImageItems(prev => {
-            const item = prev.find(i => i.id === id);
-            if (item) URL.revokeObjectURL(item.preview);
-            return prev.filter(i => i.id !== id);
-        });
-    };
-
     const handleLocationConfirm = (locationData: { address: string; lat: number; lng: number }) => {
         setFormData(prev => ({
             ...prev,
@@ -343,18 +289,9 @@ const CreateGroup: React.FC<CreateGroupProps> = ({ onCreate, user }) => {
             longitude: game.location.longitude
         });
 
-        // 引入圖片
-        if (game.images && game.images.length > 0) {
-            const historicalImages: ImageItem[] = game.images.map(url => ({
-                id: Math.random().toString(36).substr(2, 9),
-                preview: url,
-                url: url,
-                status: 'done'
-            }));
-            setImageItems(historicalImages);
-        } else {
-            setImageItems([]);
-        }
+        // 引入圖片（[A3-p] 改用 hook 的 resetToUrls —— 它做的就是這件事：
+        //          把已上傳過的 url 鋪成 status:'done' 的項目；空陣列即清空）
+        resetToUrls(game.images || []);
 
         setIsTemplateModalOpen(false);
         showToast('已成功引入歷史團局資料', 'success');
