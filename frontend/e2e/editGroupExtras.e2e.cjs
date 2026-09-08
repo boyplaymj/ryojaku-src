@@ -217,6 +217,20 @@ async function main() {
     /** 某個清單欄位現在的每一格文字（依 placeholder 定位）。 */
     const listValues = (p, placeholder) =>
         p.getByPlaceholder(placeholder).evaluateAll((els) => els.map((e) => e.value));
+    /**
+     * 型號輸入框的值。
+     * 🔴 它**只在麻將桌選了「電動桌」時才掛出來** ⇒ 直接 `inputValue()` 在
+     *    「選項沒還原」的情況下會 timeout 拋例外，而那個例外會讓整支變成
+     *    rc=2「腳本自己爆了」—— **把一次真的抓到的回歸講成設備故障**。
+     *    突變 M2（`parseVenueFeatures([])`，＝七個選項一個都沒還原）第一版就是這樣收場的：
+     *    rc=2、一條紅的都沒有，看起來像我的腳本壞了。
+     *    ⇒ 沒掛出來時回 `'無此欄位'`，讓 E1 正常地紅。
+     */
+    const modelValue = async (p) => {
+        const inp = p.getByPlaceholder('手動輸入型號 (例如：商密特 E500)');
+        if (await inp.count() === 0) return '無此欄位';
+        return inp.inputValue();
+    };
     const saveBtn = (p) => p.getByRole('button', { name: '儲存補充設定' });
     const photoSrcs = (p) =>
         p.locator('img[alt="Preview"]').evaluateAll((els) => els.map((e) => e.getAttribute('src')));
@@ -241,7 +255,7 @@ async function main() {
         table: await picked(page, '電動桌'),
         venueType: await picked(page, '麻將館'),
         skill: await picked(page, '快手'),
-        model: await page.getByPlaceholder('手動輸入型號 (例如：商密特 E500)').inputValue(),
+        model: await modelValue(page),
         features: await listValues(page, '例如：提供飲料、有冷氣'),
         rules: await listValues(page, '例如：不打請提前告知場主'),
         restrictions: await listValues(page, '例如：牌品不佳者勿入'),
