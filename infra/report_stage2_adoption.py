@@ -43,8 +43,14 @@
 
 🔴 **② 分母 0 不是 0%。** 沒有列可以算的時候本支**不印百分比**、rc=2。
    `OBSERVABILITY.md §1.1`：**查不到 ≠ 沒人用。**
-   ⚠️ 2026-09-08 現況：`A3-m`／`A3-p` **都還沒部署**，staging 的 `Games` 是 **0 筆**
-   ⇒ 現在跑它必然是 rc=2。那是**設計上的正確結果**，不是這支壞了。
+   ⚠️ 2026-09-08 現況：`A3-m` 已於 **2026-09-07 20:47 UTC** 部署、`A3-p` 於
+   **2026-09-08 06:37 UTC** 部署到我方 staging，但 `Games` 仍是 **0 筆**
+   （staging 只有 7 個測試使用者，沒有人真的開過局）⇒ 現在跑它仍然是 rc=2。
+   那是**設計上的正確結果**，不是這支壞了。
+   🔴 **本段第一版寫「`A3-m` 還沒部署」，是錯的。** 正典裡兩處說法相反
+   （§15.2 的 A3-m 標題寫「尚未部署」，而同節下面的 M6-c 部署紀錄寫著
+   已於 09-07 20:47 上線並附回讀證據）—— 我讀到的是**跟我當時要寫的東西一致**
+   的那一份。訂正留著當紀錄。
 
 🔴 **③ N1 回答不了 §4.4 那句「降低放棄率」。** 它問的是「第二段值不值得留」。
    §4.4 的直接指標是 N3（`建局數 ÷ 開表單人數`），而分母現在零紀錄。
@@ -222,7 +228,8 @@ def report(counts, since_epoch, now_epoch, complete, table, as_json):
         total = sum(counts.values())
         if total == 0:
             why = ("這張表**一列都沒有**。\n"
-                   "   ⚠️ 2026-09-08 現況：`A3-m`／`A3-p` 都還沒部署、staging Games 0 筆\n"
+                   "   ⚠️ 2026-09-08 現況：`A3-m`（09-07 20:47 UTC）與 `A3-p`（09-08 06:37 UTC）\n"
+                   "      都已部署到我方 staging，但那裡只有 7 個測試使用者、**沒有人開過局**\n"
                    "      ⇒ 現在跑出這個結果是**設計上正確的**，不是這支壞了。")
         elif counts[OUT_OF_WINDOW] and not counts[UNKNOWN]:
             why = (f"有 {total} 列，但**全部都在窗外**（`createdAt` 早於 --since）。\n"
@@ -324,7 +331,9 @@ def selftest():
 
 def main():
     ap = argparse.ArgumentParser(description="A3-n / N1 第二段採用率")
-    ap.add_argument("--since", help="A3-m 部署時刻（ISO8601 或 unix 秒）。**必填**，本支不給預設值")
+    ap.add_argument("--since",
+                    help="A3-m 部署時刻（ISO8601 或 unix 秒）。**必填**，本支不給預設值。"
+                         "我方 staging 是 2026-09-07T20:47:00Z")
     ap.add_argument("--table", default=TABLE)
     ap.add_argument("--json", action="store_true")
     # 🔴 只給**驗證分頁**用。整張表一頁掃得完的時候，`LastEvaluatedKey` 那條路
@@ -343,8 +352,9 @@ def main():
         print("🔴 rc=2：`--since` 沒給或看不懂。\n"
               "   它是 **A3-m 的部署時刻** —— 更早建的局兩段寫在同一次寫入裡，\n"
               "   把它們算進分母會得到一個「看起來完全正常」的錯數字。\n"
-              "   ⚠️ 2026-09-08：`A3-m` 還沒部署 ⇒ **這個值現在還不存在**，\n"
-              "      不要為了讓它跑起來而隨便填一個。", file=sys.stderr)
+              "   我方 staging 的值是 **2026-09-07T20:47:00Z**（`ryojaku-app-stg` 那次）。\n"
+              "   ⚠️ 換環境就要換這個值，不要照抄 —— 它是「那個環境什麼時候換成兩段流程」，\n"
+              "      不是一個全域常數。", file=sys.stderr)
         return 2
 
     items, complete = scan_games(a.table, a.page_limit)
