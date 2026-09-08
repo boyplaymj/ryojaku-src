@@ -17,7 +17,15 @@ PORT="${E2E_PORT:-5199}"
 # 🔴 只留一份真值：dev server 的 VITE_API_BASE_URL 與腳本要 stub 的那個 URL 是**同一個**。
 #    兩邊各寫一次的話，改了其中一邊 ⇒ T10 拿不到 profile、走不到 onCreate（會紅，不會靜默）。
 API_BASE="http://127.0.0.1:$PORT/__e2e_no_backend"
-GEN="$HERE/_generated.harness.html"
+# [A3-p] harness／spec 可由環境變數換掉，**預設值就是原本那一對** ——
+# 加第二支驗收（編輯頁）時不必複製整支 run.sh，而 `npm run e2e` 的行為逐字不變。
+# 🔴 生成檔名跟著 harness 走：兩支共用同一個 `_generated.harness.html` 的話，
+#    並行或連跑時後者會覆蓋前者，而症狀是「跑到了另一支的頁面」——
+#    畫面正常、斷言亂紅，最難查的那種。
+HARNESS="${E2E_HARNESS:-e2e/createGroupWizard.harness.tsx}"
+SPEC="${E2E_SPEC:-createGroupWizard.e2e.cjs}"
+HARNESS_BASE="$(basename "$HARNESS" .harness.tsx)"
+GEN="$HERE/_generated.$HARNESS_BASE.harness.html"
 VITE_LOG="$(mktemp -t ryojaku-e2e-vite-XXXXXX.log)"
 VITE_PID=""
 VITE_PORT_PIDS=""
@@ -96,8 +104,12 @@ if ! grep -q 'src="/index.tsx"' "$FRONTEND/index.html"; then
   echo "   請先確認新的入口路徑，再改本腳本的 sed 樣式。不敢猜就不敢跑。" >&2
   exit 4
 fi
-sed 's#src="/index.tsx"#src="/e2e/createGroupWizard.harness.tsx"#' "$FRONTEND/index.html" > "$GEN"
-grep -q 'e2e/createGroupWizard.harness.tsx' "$GEN" || { echo "❌ [設備] harness html 生成後找不到新入口。" >&2; exit 4; }
+if [ ! -f "$FRONTEND/$HARNESS" ]; then
+  echo "❌ [設備] 找不到 harness：$FRONTEND/$HARNESS" >&2
+  exit 4
+fi
+sed "s#src=\"/index.tsx\"#src=\"/$HARNESS\"#" "$FRONTEND/index.html" > "$GEN"
+grep -q "$HARNESS" "$GEN" || { echo "❌ [設備] harness html 生成後找不到新入口。" >&2; exit 4; }
 
 # ── 2. 找 playwright
 #    本機它住在 npx 快取裡（不在任何 node_modules），所以要自己找。
@@ -126,10 +138,10 @@ echo "[e2e] 起 dev server（port $PORT，log: $VITE_LOG）"
 VITE_PID=$!
 
 for _ in $(seq 1 60); do
-  if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/e2e/_generated.harness.html"; then break; fi
+  if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/e2e/$(basename "$GEN")"; then break; fi
   sleep 1
 done
-if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/e2e/_generated.harness.html"; then
+if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/e2e/$(basename "$GEN")"; then
   echo "❌ [設備] dev server 起不來（60 秒）。log：" >&2
   tail -20 "$VITE_LOG" >&2
   exit 4
@@ -139,7 +151,12 @@ VITE_STARTED=1
 
 # ── 4. 跑
 echo "[e2e] 開跑"
-NODE_PATH="$PW_NODE_PATH" E2E_PORT="$PORT" E2E_API_BASE="$API_BASE" node "$HERE/createGroupWizard.e2e.cjs"
+if [ ! -f "$HERE/$SPEC" ]; then
+  echo "❌ [設備] 找不到 spec：$HERE/$SPEC" >&2
+  exit 4
+fi
+NODE_PATH="$PW_NODE_PATH" E2E_PORT="$PORT" E2E_API_BASE="$API_BASE" \
+  E2E_HARNESS_URL="/e2e/$(basename "$GEN")" node "$HERE/$SPEC"
 RC=$?
 
 echo "[e2e] rc=$RC"

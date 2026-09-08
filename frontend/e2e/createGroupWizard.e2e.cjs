@@ -43,7 +43,12 @@ const BASE = `http://127.0.0.1:${PORT}`;
 //    T10 要 stub 的那個 `user-info` 就掛在它底下。單獨跑時退回預設值。
 const API_BASE = process.env.E2E_API_BASE || `${BASE}/__e2e_no_backend`;
 const PROFILE_STUB = new URL(`${API_BASE}/user-info`);
-const URL_HARNESS = `${BASE}/e2e/_generated.harness.html`;
+// [A3-p] harness 頁的檔名跟著 harness 走（run.sh 用 `_generated.<harness 名>.harness.html`
+// 現生），由 run.sh 傳進來。fallback 是「單獨跑這支」時用的，內容就是 run.sh
+// 以預設 harness 產生的那個名字 —— 兩邊各寫一次，改了 run.sh 那條命名規則要一起改。
+// ⚠️ 本段第一版寫的是「那個 fallback 現在對不上 run.sh 生出來的名字」，**是假的**：
+//    當時就已經對得上了。留著當紀錄 —— 那種註解與「規則真的漂掉了」逐字相同。
+const URL_HARNESS = `${BASE}${process.env.E2E_HARNESS_URL || '/e2e/_generated.createGroupWizard.harness.html'}`;
 const SHOT_DIR = process.env.E2E_SHOT_DIR || path.join(os.tmpdir(), 'a3c-shots');
 
 // 只放行本機與 index.html 本來就會抓的兩個 CDN；其餘一律 abort。
