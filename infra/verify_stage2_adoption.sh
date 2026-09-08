@@ -83,10 +83,23 @@ chk "E10（反控）--since 推到全部之後 ⇒ rc=2 量不到（尺不是恆
 # 🔴 E11：掃不完的時候必須 rc=2。這條在正常路徑上**永遠走不到**
 #    （表在、權限有、一次就掃完）⇒ 沒有它，「掃不完會擋下來」是純推理。
 #    拿一個不存在的表當刺激：aws 回錯 ⇒ scan_games 回 complete=False。
-python3 "$HERE/report_stage2_adoption.py" --since "$SINCE" \
-        --table "sml-a3n-NO-SUCH-TABLE-$$" >/dev/null 2>&1
-chk "E11（反控）掃不完 ⇒ rc=2 量不到（不是靜靜回一個低估的分母）" \
-    "$([ "$?" = "2" ] && echo 1 || echo 0)"
+# 🔴🔴 **只斷言 rc=2 是不夠的** —— 表不存在時 items 是空的，分母也會是 0，
+#    而分母 0 **同樣**回 rc=2 ⇒ 那條斷言對「掃不完有沒有被擋下來」**零鑑別力**。
+#    突變 N7（`return items, False` → `True`）第一版就這樣活下來了：rc 照樣是 2。
+#    ⇒ 必須連**理由**一起比：stderr 要出現「沒有掃完」，不是分母 0 那句。
+E11OUT="$(python3 "$HERE/report_stage2_adoption.py" --since "$SINCE" \
+          --table "sml-a3n-NO-SUCH-TABLE-$$" 2>&1 >/dev/null)"
+E11RC=$?
+chk "E11（反控）掃不完 ⇒ rc=2 **而且理由是「沒有掃完」**（不是分母 0 那條）" \
+    "$([ "$E11RC" = "2" ] && echo "$E11OUT" | grep -q '沒有掃完' && echo 1 || echo 0)"
+
+# 🔴 E13：`--since` 沒給必須擋下來。少了它，那道「不給預設值」的閘沒有任何尺
+#    —— 而拿掉它之後最可能的下場是 `created < None` 拋 TypeError，
+#    那個 rc 不是 2，訊息也不會提到 --since。
+E13OUT="$(python3 "$HERE/report_stage2_adoption.py" --table "$TBL" 2>&1 >/dev/null)"
+E13RC=$?
+chk "E13 --since 沒給 ⇒ rc=2 且講明它是必填（不可以靜靜當成 0）" \
+    "$([ "$E13RC" = "2" ] && echo "$E13OUT" | grep -q -- '--since' && echo 1 || echo 0)"
 
 # 🔴 E12：TTL 那道下緣要真的算進有效窗。--since 給的是 1970 年附近的假時刻，
 #    而 Games 的列 30 天後就被 TTL 刪掉 ⇒ 有效窗起點必須是 TTL 下緣、且標示被卡住。
@@ -95,5 +108,5 @@ chk "E12 有效窗被 TTL 卡住時要講出來（不然會把「被刪掉」讀
        && [ "$(j '["effective_window_start"]')" = "$(j '["ttl_floor"]')" ] && echo 1 || echo 0)"
 
 echo
-if [ "$fails" = "0" ]; then echo "=== 12/12 通過 ==="; exit 0; fi
-echo "=== $((12-fails))/12 通過 ==="; exit 1
+if [ "$fails" = "0" ]; then echo "=== 13/13 通過 ==="; exit 0; fi
+echo "=== $((13-fails))/13 通過 ==="; exit 1
