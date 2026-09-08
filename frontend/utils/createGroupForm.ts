@@ -109,6 +109,63 @@ export function toStage1Payload(payload: CreateMahjongGamePayload): CreateMahjon
     return { ...payload, rules: [], features: [], restrictions: [], images: undefined };
 }
 
+/**
+ * [A3-p] `venueFeatures` 的**逆向**解析：把存進 DB 的那個扁平字串陣列拆回
+ * 七個選項 ＋ 手填清單。
+ *
+ * 🔴 為什麼非有不可：`update-game` 是**整欄覆寫**（送什麼就是什麼）。
+ *    編輯頁若不先把既有的宣告還原到 UI 上，主揪按一次儲存就會把
+ *    「無菸／有電梯／電動桌」整組**靜靜洗掉** —— 而畫面上看起來只是存檔成功。
+ *
+ * 🔴 可逆的前提是**六組選項的詞彙互不重疊**（實查：菸 5 個／車位 3 個／電梯 3 個／
+ *    桌 2 個／場館 3 個／程度 3 個，兩兩無交集）。所以逐 token 查表就能歸位，
+ *    不需要順序或位置資訊 —— 而順序**確實靠不住**：production 的舊資料是
+ *    A3-j 之前的流程寫的。
+ *
+ * ⚠️ **已知的模糊處，不修**：手填欄若剛好填了選項詞（例如手打「無菸」），
+ *    它會被吸進 smoking 而不留在 manual。放著的理由是**內容不會變** ——
+ *    再 build 一次回去仍是同一個字串集合（`A3p-03` 釘的就是這個往返穩定性），
+ *    使用者看到的宣告不變。
+ * ⚠️ 順序可能變（build 的順序固定：菸→車位→電梯→桌→場館→程度→手填）。
+ *    釘的是**集合相等**，不是逐位相等。
+ * ⚠️ 電動桌的型號寫成 `電動桌:型號`，這裡要拆回 `mahjongTable='電動桌'` ＋ `tableModel`。
+ *    只認**第一個**冒號（型號本身可能含冒號）。
+ */
+const SMOKING_OPTS = ['無菸', '雀菸', '門外菸', '陽台菸', '桌上菸'];
+const PARKING_OPTS = ['無車位', '汽車停車位', '機車停車位'];
+const ELEVATOR_OPTS = ['有電梯', '無電梯', '一樓'];
+const VENUE_TYPE_OPTS = ['自家場', '麻將館', '代揪'];
+const SKILL_LEVEL_OPTS = ['快手', '中慢手', '新手'];
+
+export interface ParsedVenueFeatures extends VenueOptions {
+    /** 不屬於任何選項組的，就是主揪自己打的「場地特色」 */
+    manualFeatures: string[];
+}
+
+export function parseVenueFeatures(features: string[] | undefined): ParsedVenueFeatures {
+    const out: ParsedVenueFeatures = {
+        smoking: '', parking: [], elevator: '', mahjongTable: '',
+        tableModel: '', venueType: '', skillLevel: '', manualFeatures: [],
+    };
+    for (const raw of features || []) {
+        const f = String(raw || '').trim();
+        if (f === '') continue;
+        if (SMOKING_OPTS.includes(f)) { out.smoking = f; continue; }
+        if (PARKING_OPTS.includes(f)) { if (!out.parking.includes(f)) out.parking.push(f); continue; }
+        if (ELEVATOR_OPTS.includes(f)) { out.elevator = f; continue; }
+        if (VENUE_TYPE_OPTS.includes(f)) { out.venueType = f; continue; }
+        if (SKILL_LEVEL_OPTS.includes(f)) { out.skillLevel = f; continue; }
+        if (f === '手動桌' || f === '電動桌') { out.mahjongTable = f; continue; }
+        if (f.startsWith('電動桌:')) {
+            out.mahjongTable = '電動桌';
+            out.tableModel = f.slice('電動桌:'.length);   // 只切第一個冒號
+            continue;
+        }
+        out.manualFeatures.push(f);
+    }
+    return out;
+}
+
 export interface ValidateCreateGameInput {
     formData: Pick<CreateMahjongGamePayload, 'startTime' | 'placeName' | 'location'>;
     coordinates: Coordinates;

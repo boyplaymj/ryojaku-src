@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
     buildCreateGamePayload,
     isStartTimeInPast,
+    parseVenueFeatures,
     refreshStaleStartTime,
     toDateTimeLocalString,
     toStage1Payload,
@@ -544,4 +545,100 @@ test('A3m-03 不就地改寫傳進來的那份 —— 呼叫端還要拿它送�
     assert.deepEqual(full.rules, ['不准抽菸']);
     assert.equal(full.features.includes('有冷氣'), true);
     assert.deepEqual(full.restrictions, ['新手勿入']);
+});
+
+// ───────────────────────── parseVenueFeatures（[A3-p]）─────────────────────────
+
+test('A3p-01 六組選項各自歸位，其餘落到 manualFeatures', () => {
+    const got = parseVenueFeatures(['無菸', '汽車停車位', '機車停車位', '有電梯', '手動桌', '麻將館', '快手', '有冷氣', '近捷運']);
+    assert.equal(got.smoking, '無菸');
+    assert.deepEqual(got.parking, ['汽車停車位', '機車停車位']);
+    assert.equal(got.elevator, '有電梯');
+    assert.equal(got.mahjongTable, '手動桌');
+    assert.equal(got.venueType, '麻將館');
+    assert.equal(got.skillLevel, '快手');
+    assert.deepEqual(got.manualFeatures, ['有冷氣', '近捷運']);
+});
+
+test('A3p-02 🔴 往返①：build → parse 拿回原來的七個選項（順序無關）', () => {
+    // 🔴 這條是編輯頁不會靜靜洗掉宣告的**唯一**保證。
+    //    ⚠️ 輸入刻意**打亂順序** —— production 的舊資料是 A3-j 之前的流程寫的，
+    //       順序靠不住。照原順序餵的話，這條對「其實是按位置解析」零鑑別力。
+    const options: VenueOptions = {
+        smoking: '陽台菸', parking: ['機車停車位'], elevator: '一樓',
+        mahjongTable: '電動桌', tableModel: '大東 D-3', venueType: '自家場', skillLevel: '中慢手',
+    };
+    const built = buildCreateGamePayload(buildInput({
+        options,
+        formData: { ...baseForm(), features: ['有冷氣'] },
+    }));
+    const shuffled = [...built.features].reverse();
+    const got = parseVenueFeatures(shuffled);
+    assert.equal(got.smoking, options.smoking);
+    assert.deepEqual(got.parking, options.parking);
+    assert.equal(got.elevator, options.elevator);
+    assert.equal(got.mahjongTable, '電動桌');
+    assert.equal(got.tableModel, '大東 D-3');   // `電動桌:大東 D-3` 要拆得回來
+    assert.equal(got.venueType, options.venueType);
+    assert.equal(got.skillLevel, options.skillLevel);
+    assert.deepEqual(got.manualFeatures, ['有冷氣']);
+});
+
+test('A3p-03 🔴 往返②：parse → build 之後**集合相等**（編輯頁存一次不會改變內容）', () => {
+    // 🔴 這條問的是另一個方向：主揪打開編輯頁、什麼都不改就按儲存，
+    //    送回去的 venueFeatures 必須跟原本**一模一樣（集合）**。
+    //    ⚠️ 用集合不用逐位：build 的順序是固定的，而 DB 裡那份可能是舊流程寫的。
+    const original = ['有冷氣', '陽台菸', '一樓', '電動桌:大東', '自家場', '機車停車位', '中慢手'];
+    const p = parseVenueFeatures(original);
+    const rebuilt = buildCreateGamePayload(buildInput({
+        options: {
+            smoking: p.smoking, parking: p.parking, elevator: p.elevator,
+            mahjongTable: p.mahjongTable, tableModel: p.tableModel,
+            venueType: p.venueType, skillLevel: p.skillLevel,
+        },
+        formData: { ...baseForm(), features: p.manualFeatures },
+    })).features;
+    assert.deepEqual([...rebuilt].sort(), [...original].sort());
+});
+
+test('A3p-04 🔴 反控：拿掉任何一組的還原，A3p-03 就必須紅（用「少解析一組」模擬）', () => {
+    // 這條把「少還原一組」的後果直接寫出來：那一組會從 rebuilt 裡消失。
+    // 少了它，A3p-03 綠燈與「parse 其實把所有東西都丟進 manualFeatures」分不出來
+    // —— 後者也會讓集合相等（manual 原樣送回去）。
+    const original = ['陽台菸', '一樓', '自家場'];
+    const p = parseVenueFeatures(original);
+    // 正控：這三個**不在** manualFeatures 裡（＝真的被歸位了，不是原樣穿過去）
+    assert.deepEqual(p.manualFeatures, []);
+    // 蓄意漏掉 elevator 那一組，看集合是不是真的少一個
+    const broken = buildCreateGamePayload(buildInput({
+        options: {
+            smoking: p.smoking, parking: p.parking, elevator: '',
+            mahjongTable: p.mahjongTable, tableModel: p.tableModel,
+            venueType: p.venueType, skillLevel: p.skillLevel,
+        },
+        formData: { ...baseForm(), features: p.manualFeatures },
+    })).features;
+    assert.equal(broken.includes('一樓'), false, '漏掉一組時它應該消失 —— 沒消失代表 parse 根本沒歸位');
+    assert.equal(broken.length, original.length - 1);
+});
+
+test('A3p-05 空／undefined／純空白 都回一組乾淨的空值（編輯頁載入失敗時不可以炸）', () => {
+    for (const input of [undefined, [], ['', '   ']]) {
+        const got = parseVenueFeatures(input as string[] | undefined);
+        assert.equal(got.smoking, '');
+        assert.equal(got.mahjongTable, '');
+        assert.deepEqual(got.parking, []);
+        assert.deepEqual(got.manualFeatures, []);
+    }
+});
+
+test('A3p-06 電動桌型號含冒號時只切第一個', () => {
+    assert.equal(parseVenueFeatures(['電動桌:大東:D3']).tableModel, '大東:D3');
+    // 正控：沒有型號的「電動桌」不可以被當成有型號
+    assert.equal(parseVenueFeatures(['電動桌']).tableModel, '');
+    assert.equal(parseVenueFeatures(['電動桌']).mahjongTable, '電動桌');
+});
+
+test('A3p-07 車位重複出現只留一份（DB 裡的舊資料不保證乾淨）', () => {
+    assert.deepEqual(parseVenueFeatures(['汽車停車位', '汽車停車位']).parking, ['汽車停車位']);
 });
