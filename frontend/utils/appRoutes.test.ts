@@ -29,10 +29,13 @@ test('A2b1-12 原本白名單的八條一條不少', () => {
 });
 
 test('A2b1-13 前綴路由照舊；不相干的路徑沒殼', () => {
-    for (const p of ['/rate-game/abc', '/reviews/u1', '/event/e1', '/ledger?x=1', '/ledger/']) {
+    // [A3-p] `/edit-group/:id` 也是前綴路由。少了它那一頁是**沒殼的裸內容**，
+    //        而且不報任何錯（本檔開頭的「陷阱 2」）。
+    for (const p of ['/rate-game/abc', '/reviews/u1', '/event/e1', '/ledger?x=1', '/ledger/', '/edit-group/g1']) {
         assert.equal(hasMainNavShell(p), true, p);
     }
-    for (const p of ['/chat/r1', '/post/p1', '/rate-user', '/training/voice-tai', '/feed/', '/FEED', '/nope']) {
+    // 反控：`/edit-group` 少了尾斜線就不是那條前綴（它是帶 :id 的頁，裸的那個不存在）
+    for (const p of ['/chat/r1', '/post/p1', '/rate-user', '/training/voice-tai', '/feed/', '/FEED', '/nope', '/edit-group']) {
         assert.equal(hasMainNavShell(p), false, p);
     }
 });

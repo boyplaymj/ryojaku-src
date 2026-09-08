@@ -849,7 +849,11 @@ const EventDetail: React.FC<EventDetailProps> = ({ events, onJoin, user }) => {
                                                 className="w-full py-5 bg-neutral-900 text-white font-black rounded-lg shadow-xl hover:bg-black transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs"
                                             >
                                                 <Settings size="1.125rem" />
-                                                Modify Operation
+                                                {/* [A3-p] 原本寫 Modify Operation，而它導到的那條路由
+                                                    ①在 A3-p 之前根本不存在 ②現在存在了，但只能改
+                                                    補充設定（後端 update-game 的白名單只有四樣）。
+                                                    文案要講它真的做得到的事。 */}
+                                                編輯補充設定
                                             </button>
                                             {event.status !== 'cancelled' && (
                                                 <button

@@ -39,6 +39,7 @@ import MaintenanceNotice from './components/MaintenanceNotice';
 import { chatService } from './services/chatService';
 import { notificationService } from './services/notificationService';
 import { APP_ROUTES, hasMainNavShell } from './utils/appRoutes';
+import EditGroupExtras from './pages/EditGroupExtras';
 
 const Layout: React.FC<{ children: React.ReactNode; user: User | null }> = ({ children, user }) => {
   const location = useLocation();
@@ -307,6 +308,9 @@ function App() {
                 <Route path="/chat/:roomId" element={<ChatRoom />} />
                 <Route path="/create" element={<CreateGroup onCreate={handleCreateGame} user={user} />} />
                 <Route path="/event/:id" element={<EventDetail events={events} onJoin={handleJoinEvent} user={user} />} />
+                {/* [A3-p] 「可事後補」的那道門。在此之前 EventDetail 有一顆按鈕導到這裡，
+                    而這條路由不存在 ⇒ 按下去是空白頁、不報任何錯。 */}
+                <Route path="/edit-group/:id" element={<EditGroupExtras user={user} />} />
                 <Route path="/post/:id" element={<PostDetail user={user} />} />
                 <Route path="/profile" element={<Profile user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} inviterPoints={invitePoints.inviter} />} />
                 <Route path="/notifications" element={<Notifications />} />

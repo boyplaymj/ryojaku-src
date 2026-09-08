@@ -44,7 +44,7 @@ export type AppRoutePath = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 export const MAIN_NAV_ROUTES: readonly string[] = Object.values(APP_ROUTES);
 
 /** 前綴比對就畫殼的路徑（帶 :id 的頁）。 */
-export const MAIN_NAV_ROUTE_PREFIXES: readonly string[] = ['/rate-game/', '/reviews/', '/event/', '/ledger'];
+export const MAIN_NAV_ROUTE_PREFIXES: readonly string[] = ['/rate-game/', '/reviews/', '/event/', '/ledger', '/edit-group/'];
 
 /** 這個 pathname 要不要畫 TopBar／BottomNav 那層殼。 */
 export function hasMainNavShell(pathname: string): boolean {
