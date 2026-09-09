@@ -254,3 +254,30 @@ func TestHandleDetail_ResolvesIsDojo(t *testing.T) {
 		t.Fatalf("正控失敗：真的道館也沒亮：%s", resp2.Body)
 	}
 }
+
+// --- 地址授權的稽核行（§13 那個盲區的最小補法）---
+
+// T11 稽核行帶得出 reason 與 type，且**結構上**不可能帶出敏感值。
+func TestAddressAuditLine(t *testing.T) {
+	got := addressAuditLine(shared.AddressDenyGameOtherVenue, shared.VenueTypeHome)
+	if !strings.Contains(got, shared.AddressDenyGameOtherVenue) {
+		t.Fatalf("稽核行少了 reason：%s", got)
+	}
+	if !strings.Contains(got, shared.VenueTypeHome) {
+		t.Fatalf("稽核行少了 type：%s", got)
+	}
+	// 🔴 承重：**簽章就是守衛**。只吃兩個 string ⇒ 呼叫端沒辦法順手把
+	// venueId／地址／userId 傳進來。加第三個參數這條就紅。
+	//
+	// 為什麼不用「掃原始碼看有沒有 venueId」：那個函式上方的註解裡就有這個字，
+	// 文字偵測器分不出「提及」與「接線」。
+	ft := reflect.TypeOf(addressAuditLine)
+	if n := ft.NumIn(); n != 2 {
+		t.Fatalf("addressAuditLine 應該只吃 2 個參數，實際 %d ⇒ 有人把別的東西傳進稽核行了", n)
+	}
+	for i := 0; i < ft.NumIn(); i++ {
+		if ft.In(i).Kind() != reflect.String {
+			t.Fatalf("第 %d 個參數不是 string（%v）⇒ 可能是整個 venue 被傳進來了", i, ft.In(i))
+		}
+	}
+}

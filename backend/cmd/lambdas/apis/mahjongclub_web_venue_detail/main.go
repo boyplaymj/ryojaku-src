@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -100,6 +101,17 @@ func buildAddressEvidence(ctx context.Context, src evidenceSource, callerUserID,
 		ev.Registration = reg
 	}
 	return ev
+}
+
+// addressAuditLine 組出地址授權的稽核行。
+//
+// 🔴 抽成函式的理由是**簽章本身就是守衛**：它只吃兩個字串，
+// 呼叫端沒有辦法「順手」把 venueId／地址／userId 傳進來。
+// 用「掃原始碼看有沒有出現 venueId」當守衛在這裡行不通 ——
+// 上面那段註解裡就有 `venueId` 這個字，文字偵測器分不出「提及」與「接線」。
+// 有測試釘住參數個數：加第三個參數就紅。
+func addressAuditLine(reason, venueType string) string {
+	return fmt.Sprintf("[venue-address] reason=%s type=%s", reason, venueType)
 }
 
 // venueResponsePayload 是回應的單一出口（正典 §5.3 第 ② 條）。
@@ -255,7 +267,26 @@ func handleDetail(ctx context.Context, src fullSource, callerUserID string, req 
 		return respond(http.StatusNotFound, Response{Error: "找不到這個場地"})
 	}
 	ev := buildAddressEvidence(ctx, src, callerUserID, req.GameID)
-	return respond(http.StatusOK, Response{Success: true, Data: venueResponsePayload(v, ev, nowUnix)})
+	view := venueResponsePayload(v, ev, nowUnix)
+
+	// 🔴 記下**是哪一條規則**決定的（正典 §13 的盲區，2026-09-09 補）。
+	//
+	// 補它的理由不是「多埋一點總是好的」，是一次線上驗證直接撞到：
+	// 授權矩陣八格全過，而我**分不出** N4（拿另一局當通行證）是被
+	// `deny:game-not-at-venue` 擋的，還是被上一條規則順便擋掉的 ——
+	// 「被正確的規則擋下」與「被別條順便擋下」在回應上逐字相同，
+	// 而後者在那條規則被改壞時就會漏。
+	//
+	// 更長遠的理由（§13）：規則太嚴時玩家只看到「沒有地址」，不會回報，
+	// 也分不出是「還沒核准」還是「我們的規則寫錯」⇒
+	// **「正確擋下攻擊者」與「誤擋已核准的玩家」在線上長得一模一樣**，
+	// 而後者是 fail-closed 設計最可能的失敗形狀。
+	//
+	// ⚠️ 只記 reason 與 venue type，**不記 venueId、不記地址、不記 userId**
+	//    （§13 明訂）——「誰在看哪一個場地」是行為資料，不是排錯需要的東西。
+	log.Print(addressAuditLine(view.AddressReason, v.Type))
+
+	return respond(http.StatusOK, Response{Success: true, Data: view})
 }
 
 func main() {
