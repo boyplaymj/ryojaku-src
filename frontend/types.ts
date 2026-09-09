@@ -279,18 +279,20 @@ export interface VenueDetail {
   venueId: string;
   type: string;
   name: string;
+  /** 🔴 後端**只對 `hall`／`event` 回這兩個**（`shared.VenueContactIsPublic`）。自建場的電話是屋主私人號碼。 */
   phone?: string;
   businessHours?: string;
   approxLocation: VenueLocation;
   features?: string[];
-  ownerId: string;
-  dojoPaidUntil?: number;
-  certifiedRefereeCount: number;
+  /**
+   * 🔴 這是**伺服器算的布林，取代了 `ownerId`**（[B5-b]，`ryojaku-src eaf2ba7`）。
+   * 前端需要知道「這是不是我的場地」，但不需要知道是誰的 —— `ownerId` 洩出去
+   * 等於把「誰家開放給人打牌」變成可枚舉的（§5.3 講 `PublicVenueCard` 時就寫過）。
+   */
+  isOwner: boolean;
   isDojo: boolean;
   ratingPositive: number;
   ratingCount: number;
-  createdAt: number;
-  updatedAt: number;
   status: string;
   exactAddress?: string;
 }

@@ -55,8 +55,13 @@ const DETAIL_FIXTURES = {
         createdAt: 1, updatedAt: 1, status: 'active',
         exactAddress: HALL_ADDR,
     },
-    // 自建場・沒授權：沒有 exactAddress 鍵。⚠️ phone 有值 —— 那是後端真的會回的
-    //（2026-09-09 實測），V4 就是在驗畫面不要把它畫出來。
+    // 自建場・沒授權：沒有 exactAddress 鍵。
+    // 🔴 **phone／ownerId 有值是刻意的手寫假件，不是現況**（訂正於 [B5-b]）：
+    //    2026-09-09 上午後端真的會回它們，同日下午改成白名單型別
+    //    `shared.VenueDetailView` 之後**不再回**（phone 只對 hall/event，
+    //    ownerId 整個換成 isOwner）。⇒ V4 現在驗的是**縱深**：
+    //    「就算有一天又送來了，畫面也不畫」。
+    // ⚠️ 這個區別要寫出來 —— 否則下一個人會把這份假件讀成「後端目前的回應長這樣」。
     V_E2E_HOME_DENY: {
         venueId: 'V_E2E_HOME_DENY', type: 'home', name: '小明家',
         phone: HOME_PHONE,
@@ -205,7 +210,7 @@ async function main() {
             `等核准=${saysWaitApproval}／誤說沒填=${t2.includes('還沒有填寫詳細地址')}`);
 
         // ── V4 自建場的電話**不**顯示（後端會回，畫面不畫）
-        ok('V4 自建場的電話沒有畫出來（後端仍會回它 —— 這只是畫面上的取捨）',
+        ok('V4 自建場的電話沒有畫出來（縱深：後端 [B5-b] 之後已不回它，這條驗「就算送來也不畫」）',
             !t2.includes(HOME_PHONE), `畫面含 ${HOME_PHONE}=${t2.includes(HOME_PHONE)}`);
 
         // ── V7b 零則評價：畫「尚無評價」，畫面上不可以有 0%

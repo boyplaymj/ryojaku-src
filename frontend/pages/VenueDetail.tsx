@@ -12,13 +12,16 @@
 //    ⇒ withheld-home 那一格在今天的 App 裡**走不到**。留著這條參數不是預留，
 //    是因為它是後端合約的一部分；接得起來要等「開局時選場地」那塊（§15 的 [B2]）。
 //
-// ⚠️ **本頁不顯示自建場的電話與 ownerId。**
-//    這是**畫面上的取捨，不是修好了**：`venue-detail` 回的是整個 Venue，
-//    只有 exactAddress 被授權閘門管著 —— phone／ownerId 對任何登入者一律回傳
-//    （2026-09-09 實測 shared 套件：路人拿到 `deny:no-registration`、
-//    沒有 exactAddress，而 `"phone":"0912345678"`／`"ownerId":"U_OWNER"` 都在）。
-//    ⇒ **不要把「畫面上看不到」讀成「拿不到」**，任何人打那支 API 都拿得到。
-//    真正的修法在後端（窄的回應 DTO），記在 §5.3。
+// ✅ **本頁不顯示自建場的電話（[B5-b] 之後後端也不回了）。**
+//    這一段原本寫的是「畫面上的取捨，不是修好了」—— 那句在 2026-09-09 當天是對的：
+//    `venue-detail` 回的是整個 `Venue`，只有 exactAddress 被授權閘門管著，
+//    phone／ownerId 對任何登入者一律回傳（實測路人拿到 `deny:no-registration`、
+//    沒有 exactAddress，而 `"phone"`／`"ownerId"` 都在）。
+//    **同一天後端已改成白名單型別 `shared.VenueDetailView`**（`ryojaku-src eaf2ba7`）：
+//    phone／businessHours 只對 hall／event 回，`ownerId` 整個換成伺服器算的 `isOwner`。
+//    ⇒ 現在是**兩層都擋**。本頁這一層留著是縱深，不是唯一那道。
+//    ⚠️ 但也因此：**這一層現在沒有辦法單獨被證明有效** —— 後端不再送 phone 過來，
+//    e2e 那條（V4）餵的是手寫假件，它驗的是「就算送來也不畫」。
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, MapPin, Phone, Clock, Lock } from 'lucide-react';

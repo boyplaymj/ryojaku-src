@@ -246,9 +246,8 @@ test('B1j-27 venueHeadline 把四件事一次算好', () => {
     const h = venueHeadline({
         venueId: 'V1', type: 'hall', name: '  大安麻將館  ',
         approxLocation: { latitude: 25.03, longitude: 121.54 },
-        ownerId: 'U1', certifiedRefereeCount: 0, isDojo: false,
-        ratingPositive: 9, ratingCount: 10,
-        createdAt: 1, updatedAt: 1, status: 'active',
+        isOwner: false, isDojo: false,
+        ratingPositive: 9, ratingCount: 10, status: 'active',
         exactAddress: '台北市大安區某路 1 號',
     });
     assert.equal(h.emoji, '🏛');
