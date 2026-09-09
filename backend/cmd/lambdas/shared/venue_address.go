@@ -93,7 +93,7 @@ func CanSeeExactAddress(v *Venue, ev AddressEvidence) (bool, string) {
 	if ev.CallerUserID == "" {
 		return false, AddressDenyAnonymous
 	}
-	if v.OwnerID != "" && v.OwnerID == ev.CallerUserID {
+	if IsVenueOwner(v, ev.CallerUserID) {
 		return true, AddressAllowOwner
 	}
 	if v.Status != VenueStatusActive {
@@ -107,6 +107,26 @@ func CanSeeExactAddress(v *Venue, ev AddressEvidence) (bool, string) {
 	default:
 		return false, AddressDenyUnknownType
 	}
+}
+
+// IsVenueOwner 是 owner 比對的**第二道**空字串守衛，抽成獨立函式是為了讓它有尺。
+//
+// 🔴 這不是重構潔癖。它原本內聯在 CanSeeExactAddress 裡寫成
+// `v.OwnerID != "" && v.OwnerID == ev.CallerUserID`，而那個 `!= ""` 是**等價突變**：
+// 匿名守衛排在它前面，所以在目前的規則順序下，沒有任何輸入到得了「caller 為空」
+// 那一格 ⇒ 拔掉它，全部測試照樣綠（實測過）。
+//
+// 而它承重的時機是「有人調換規則順序」—— 那一維也沒有尺（把 owner 比對搬到匿名
+// 守衛之前，全部測試同樣照樣綠，也實測過）。兩個各自無害的改動疊起來就是
+// **匿名者拿到 OwnerID 為空的自建場地址**。
+//
+// ⇒ 抽成獨立函式之後，測試可以**直接打它**，不必繞過上游的規則順序。
+// 這把尺盯的是「第二道防線本身還在不在」，與規則順序無關。
+func IsVenueOwner(v *Venue, userID string) bool {
+	if v == nil || v.OwnerID == "" || userID == "" {
+		return false
+	}
+	return v.OwnerID == userID
 }
 
 // canSeeHomeAddress 是矩陣第 6 條。抽出來只是為了讓每一格的 return 各自獨立、

@@ -327,3 +327,32 @@ func TestVenueView_SingleJSONPathToAddress(t *testing.T) {
 		t.Fatalf("帶地址的 JSON 路徑應該恰好 1 條，實際 %d", paths)
 	}
 }
+
+// --- [B1-b 補] 第二道空字串守衛的獨立尺 ---
+//
+// 🔴 為什麼要單獨測 IsVenueOwner，而不是透過 CanSeeExactAddress 測：
+// 透過上層測的話，匿名守衛（規則 2）永遠先命中 ⇒ 第二道那格**結構上求值不到**，
+// 於是「第二道在」與「第二道被刪掉」在所有測試上逐字相同（實測：拔掉 OwnerID != ""
+// 全綠；把 owner 比對搬到匿名守衛之前也全綠）。兩者疊起來才是真的洩漏。
+func TestIsVenueOwner_EmptyStringNeverMatches(t *testing.T) {
+	cases := []struct {
+		name   string
+		venue  *Venue
+		userID string
+		want   bool
+	}{
+		{"nil venue", nil, "U1", false},
+		{"🔴 兩邊都空：匿名者不可以變成 owner", &Venue{OwnerID: ""}, "", false},
+		{"venue 沒有 owner，呼叫者有身分", &Venue{OwnerID: ""}, "U1", false},
+		{"venue 有 owner，呼叫者匿名", &Venue{OwnerID: "U1"}, "", false},
+		{"不同人", &Venue{OwnerID: "U1"}, "U2", false},
+		{"正控：同一人", &Venue{OwnerID: "U1"}, "U1", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsVenueOwner(c.venue, c.userID); got != c.want {
+				t.Fatalf("IsVenueOwner = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
