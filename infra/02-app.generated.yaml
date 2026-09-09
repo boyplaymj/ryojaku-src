@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  両雀 Ryōjaku — 計算層 (61 Lambda + REST/HTTP/WebSocket API)。
+  両雀 Ryōjaku — 計算層 (Lambda + REST/HTTP/WebSocket API；**支數刻意不寫死**，寫死的數目會隨新增自動說謊)。
   由 gen_app_template.py 從 functions.manifest.json 生成，勿手改此檔。
   機密由 SSM 注入；DynamoDB 表由 01-tables.yaml 先建。
 
