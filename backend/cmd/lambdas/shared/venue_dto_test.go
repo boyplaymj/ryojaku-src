@@ -160,3 +160,19 @@ func TestCreateVenueRequest_Validate(t *testing.T) {
 		t.Fatal("nil 請求的 Validate 不可以回 nil（且不可 panic）")
 	}
 }
+
+// 表名跟著 TABLE_PREFIX 走，不可以寫死。
+// 🔴 這條有實際代價：實查這個 AWS 帳號（380931373365）只有 MahjongClubStg_* 那一套，
+// 而 tablePrefix() 的預設是 "MahjongClub_"（prod）⇒ 寫死或漏讀 env 的話，
+// lambda 會去打一張不存在的表，而錯誤訊息是 ResourceNotFound，不是「你環境搞錯了」。
+func TestVenuesTableName_FollowsPrefix(t *testing.T) {
+	t.Setenv("TABLE_PREFIX", "MahjongClubStg_")
+	if got := VenuesTableName(); got != "MahjongClubStg_Venues" {
+		t.Fatalf("VenuesTableName = %q", got)
+	}
+	// 反控：換一個 prefix 要跟著變。少了它，直接 return 常數字串也會讓上面那條變綠。
+	t.Setenv("TABLE_PREFIX", "ZZZ_")
+	if got := VenuesTableName(); got != "ZZZ_Venues" {
+		t.Fatalf("換 prefix 之後 VenuesTableName = %q ⇒ 它是寫死的", got)
+	}
+}

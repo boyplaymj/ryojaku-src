@@ -105,3 +105,13 @@ func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, n
 		UpdatedAt: nowUnix,
 	}
 }
+
+// venuesTable 回傳 venue 主表名。表名慣例與既有表一致（複數）：
+// MahjongClub_Venues／MahjongClubStg_Venues。
+//
+// ⚠️ 它用的是 shared 既有的 tablePrefix()，與 Users／AuthTokens 同一個來源 ——
+// 不要在這裡另外讀一次 env，否則 stg／prod 的判斷會有兩個地方，而它們遲早會不一致。
+func venuesTable() string { return tablePrefix() + "Venues" }
+
+// VenuesTableName 是給 lambda 用的匯出版本（shared 內部用小寫那個）。
+func VenuesTableName() string { return venuesTable() }
