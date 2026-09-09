@@ -144,8 +144,8 @@ func TestB5b_DetailView_PhoneOnlyForPublicTypes(t *testing.T) {
 			if c.want && (!strings.Contains(raw, dvPhone) || !strings.Contains(raw, dvHours)) {
 				t.Fatalf("公開場的電話／營業時間值不對：%s", raw)
 			}
-			if VenueContactIsPublic(c.typ) != c.want {
-				t.Fatalf("VenueContactIsPublic(%q) 與行為不一致", c.typ)
+			if VenueContactIsPublic(c.typ, v.Status) != c.want {
+				t.Fatalf("VenueContactIsPublic(%q,%q) 與行為不一致", c.typ, v.Status)
 			}
 		})
 	}
@@ -243,4 +243,56 @@ func TestB5b_DetailView_NilVenue(t *testing.T) {
 	if NewVenueDetailView(nil, AddressEvidence{CallerUserID: dvOwner}, 1) != nil {
 		t.Fatal("nil venue 要回 nil view")
 	}
+}
+
+
+// [B5-b2] 收 Codex 覆驗：聯絡資訊也要等 status==active。
+//
+// 🔴 這不是新的產品決定，是把既有的套用一致：§5.3 給 hall 訂 pending 的理由是
+// 「未審核的店填的**地址**不該被當成真實店家地址發給玩家」，而地址那條**早就**
+// 要求 active（CanSeeExactAddress 規則 4）。同一份未審核資料，地址擋住、電話照出，
+// 兩者不一致沒有理由。
+func TestB5b2_ContactRequiresActiveStatus(t *testing.T) {
+	for _, st := range []string{VenueStatusPending, VenueStatusSuspended, VenueStatusRejected, "", "ACTIVE"} {
+		t.Run("status="+st, func(t *testing.T) {
+			v := dvHomeVenue()
+			v.Type = VenueTypeHall
+			v.Status = st
+			raw, m := dvMarshal(t, NewVenueDetailView(v, AddressEvidence{CallerUserID: "U-路人"}, 1000))
+			if _, ok := m["phone"]; ok {
+				t.Errorf("status=%q 不該有 phone：%s", st, raw)
+			}
+			if _, ok := m["businessHours"]; ok {
+				t.Errorf("status=%q 不該有 businessHours：%s", st, raw)
+			}
+			if VenueContactIsPublic(VenueTypeHall, st) {
+				t.Errorf("VenueContactIsPublic(hall,%q) 應為 false", st)
+			}
+		})
+	}
+	// 🔴 反控：active 的 hall **要**有 —— 少了它，「一律不給聯絡資訊」也會讓上面全綠，
+	//    而那會讓麻將館的詳情頁永遠看不到電話（症狀是「店家沒填」，不是「被擋」）。
+	t.Run("active_hall_still_has_contact", func(t *testing.T) {
+		v := dvHomeVenue()
+		v.Type = VenueTypeHall
+		v.Status = VenueStatusActive
+		raw, m := dvMarshal(t, NewVenueDetailView(v, AddressEvidence{CallerUserID: "U-路人"}, 1000))
+		if _, ok := m["phone"]; !ok {
+			t.Fatalf("active 的 hall 必須有 phone：%s", raw)
+		}
+		if _, ok := m["businessHours"]; !ok {
+			t.Fatalf("active 的 hall 必須有 businessHours：%s", raw)
+		}
+	})
+	// 🔴 第二道反控：owner **不**特別放行（本函式不看呼叫者）。
+	//    寫出來是因為「放行 owner」是很自然的下一步，而它會讓上面那批對 owner 全部失效。
+	t.Run("owner_gets_no_special_pass", func(t *testing.T) {
+		v := dvHomeVenue()
+		v.Type = VenueTypeHall
+		v.Status = VenueStatusPending
+		_, m := dvMarshal(t, NewVenueDetailView(v, AddressEvidence{CallerUserID: dvOwner}, 1000))
+		if _, ok := m["phone"]; ok {
+			t.Error("pending 的 hall 對 owner 也不給聯絡資訊（刻意的取捨，見函式註解）")
+		}
+	})
 }

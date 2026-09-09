@@ -24,6 +24,7 @@ import {
     VENUE_PAGE_ROUND_CAP,
     shouldKeepScanning,
     validateCreateVenue,
+    contactIsPublic,
     type VenueAddressState,
 } from './venueView.ts';
 
@@ -150,6 +151,105 @@ test('B1j-16 ⛩ 道館徽章只在 isDojo === true 時出現', () => {
     assert.deepEqual(venueBadges({ isDojo: 'true' as unknown }), []);
     assert.deepEqual(venueBadges({ isDojo: 1 as unknown }), []);
     assert.deepEqual(venueBadges({}), []);
+});
+
+// ─── ⑤ 聯絡資訊（[B5-b2]，2026-09-09 收 Codex 縱深覆驗）─────────────────────
+//
+// 🔴 這一節的四條對著**兩個不同的洞**，不要當成同一件事的四種寫法：
+//   - 38／39：判準本身（type 一維、status 一維）。
+//   - 40：**判準有沒有蓋住整節** —— Codex 抓到的原始形狀是「守衛只蓋住我命名的
+//     那一個欄位」（變數叫 `showPhone`，而 `businessHours` 在旁邊直接畫）。
+//     38／39 對那個洞**零鑑別力**：函式回對的值，畫面照樣漏。
+//   - 41：前後端判準有沒有漂開。
+
+test('B1j-38 [B5-b2] 聯絡資訊只給 hall／event（type 維度，fail-closed）', () => {
+    assert.equal(contactIsPublic('hall', 'active'), true);
+    assert.equal(contactIsPublic('event', 'active'), true);
+    // 自建場的電話是屋主私人號碼（§5.1）。
+    assert.equal(contactIsPublic('home', 'active'), false);
+    // 認不得的 type 一律 false —— 我們不知道那是誰的電話。
+    assert.equal(contactIsPublic('dojo', 'active'), false);
+    assert.equal(contactIsPublic('', 'active'), false);
+    assert.equal(contactIsPublic(undefined, 'active'), false);
+    assert.equal(contactIsPublic(null, 'active'), false);
+});
+
+test('B1j-39 [B5-b2] 🔴 status 不是 active 就不給 —— 未審核的店填的電話不是店家電話', () => {
+    // §5.3 給 hall 訂初始 pending 的理由原文講的是**地址**，而那句換成「電話」逐字成立；
+    // 地址那條早就要求 active（readAddressState 的 withheld-review）。兩者不一致沒有理由。
+    for (const st of ['pending', 'suspended', 'rejected', '', 'ACTIVE', 'Active']) {
+        assert.equal(contactIsPublic('hall', st), false, `status=${st} 竟然放行`);
+    }
+    assert.equal(contactIsPublic('hall', undefined), false);
+    assert.equal(contactIsPublic('hall', null), false);
+    // 🔴 反控：active 那一格必須是 true —— 少了它，把整支改成 `return false`
+    //    也會讓上面全綠，而那會讓麻將館的詳情頁永遠看不到電話
+    //    （症狀是「店家沒填」，不是「被擋」，兩者在畫面上逐字相同）。
+    assert.equal(contactIsPublic('hall', 'active'), true, '反控：active 的麻將館要看得到電話');
+});
+
+test('B1j-40 [B5-b2] 🔴 兩個欄位共用同一個閘（掃 VenueDetail.tsx 的區塊，不是掃字串）', () => {
+    // 🔴 這條是本節**承重**的那一條，理由是它咬得住 38／39 咬不到的失效模式：
+    //    判準寫對了、也真的被呼叫了，而「聯絡與時間」那一節裡的第二個欄位
+    //    畫在閘門外面。那個形狀在畫面上與正常運作只差一行，而且只有 hall 以外
+    //    的場地看得出來 —— 也就是**測不到的人不會發現**。
+    const here = dirname(fileURLToPath(import.meta.url));
+    const stripComments = (src: string) =>
+        src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+    // 從 `needle` 那個 `{` 起做大括號配對，回傳 [區塊內, 區塊外]。
+    const splitBlock = (src: string, needle: string): [string, string] => {
+        const start = src.indexOf(needle);
+        assert.ok(start >= 0, `找不到 ${needle} —— 閘門不見了或改名了`);
+        let depth = 0, end = -1;
+        for (let i = start; i < src.length; i++) {
+            if (src[i] === '{') depth++;
+            else if (src[i] === '}' && --depth === 0) { end = i; break; }
+        }
+        assert.ok(end > start, `${needle} 的區塊沒有閉合`);
+        return [src.slice(start, end + 1), src.slice(0, start) + src.slice(end + 1)];
+    };
+
+    const src = stripComments(readFileSync(join(here, '..', 'pages', 'VenueDetail.tsx'), 'utf8'));
+    const [inside, outside] = splitBlock(src, '{canShowContact');
+    assert.ok(src.includes('contactIsPublic('), 'VenueDetail.tsx 沒有呼叫 contactIsPublic()');
+    assert.ok(inside.includes('v.phone'), '電話不在閘門內');
+    assert.ok(inside.includes('v.businessHours'), '營業時間不在閘門內');
+    // 🔴 承重的兩句：閘門**外面**一個都不准有。少了這兩句，把 businessHours
+    //    搬回外面（＝Codex 抓到的原始缺陷）不會有任何測試紅。
+    assert.equal(/v\.phone/.test(outside), false, '電話畫在閘門外面');
+    assert.equal(/v\.businessHours/.test(outside), false, '營業時間畫在閘門外面 —— 這正是 Codex 抓到的那個洞');
+    // 🔴 而且變數名不可以再叫 showPhone：名字把守衛的作用域說小了，
+    //    下一個人在旁邊加第三個欄位時會照著它的字面意思走。
+    assert.equal(src.includes('showPhone'), false, '閘門又叫回 showPhone 了');
+
+    // 🔴 splitBlock 自己的正反控（合成輸入，不依賴任何真檔的長相）：
+    //    少了這幾句，把它改成 `s => [s, '']` 會讓上面兩句「外面沒有」恆綠。
+    const [in1, out1] = splitBlock('前面 A {G && (<p>{x}</p>)} 後面 B', '{G');
+    assert.ok(in1.includes('x') && !in1.includes('B'), 'splitBlock 的區塊內取錯');
+    assert.ok(out1.includes('A') && out1.includes('B') && !out1.includes('x'), 'splitBlock 的區塊外取錯');
+    assert.throws(() => splitBlock('沒有那個字', '{G'), '找不到 needle 時必須判紅，不可以靜靜回空字串');
+});
+
+test('B1j-41 [B5-b2] 🔴 前端判準與後端 VenueContactIsPublic 同步（簽章 ＋ status 條件）', () => {
+    // 這一層是**縱深不是唯一那道**：後端 [B5-b] 之後根本不送 phone 過來，
+    // ⇒ 前端這條無法被線上證明有效。它能證明的只有一件事：後端改了判準時，
+    // 這裡會紅。⚠️ 界線：掃的是**簽章與條件的形狀**，不是語意等價 ——
+    // 後端把 active 換成別的常數名它抓得到，把 hall 換成 club 抓不到（那由 B1j-15 那類守）。
+    const here = dirname(fileURLToPath(import.meta.url));
+    const goPath = join(here, '..', '..', 'backend', 'cmd', 'lambdas', 'shared', 'venue_detail_view.go');
+    let go: string;
+    try {
+        go = readFileSync(goPath, 'utf8');
+    } catch (e) {
+        // fail-closed：讀不到判紅。「讀不到」與「後端把這支刪了」必須不同。
+        assert.fail(`讀不到後端判準檔（${goPath}）：${(e as Error).message}`);
+    }
+    const sig = /func VenueContactIsPublic\(([^)]*)\) bool/.exec(go!);
+    assert.ok(sig, '後端找不到 VenueContactIsPublic');
+    assert.equal(sig![1].replace(/\s+/g, ' ').trim(), 'venueType, status string',
+        '後端的參數變了（多一維？）⇒ 前端這支鏡射已經漂開');
+    assert.ok(/status\s*!=\s*VenueStatusActive/.test(go!), '後端的 status 閘不見了');
 });
 
 // ─── ② 評價 ──────────────────────────────────────────────────────────────

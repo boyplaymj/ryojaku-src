@@ -92,6 +92,20 @@ MUTANTS = [
      'const loc = { approxLocation: { latitude: exact.latitude, longitude: exact.longitude }, blurred: false };', {37}),
     # 🔴 這一發打的是**註解**：B1j-37 若沒把註解剝掉，改註解就會讓它綠得莫名其妙；
     #    剝掉之後改註解**不該**有任何影響 ⇒ 預期存活。它是 P1~P3 的反控。
+    # ── [B5-b2] 聯絡資訊：判準兩維 ＋ 閘門有沒有蓋住整節 ──
+    ('view', 'M18', 'contactIsPublic 忽略 status（pending 的麻將館也給電話）',
+     "    if (status !== 'active') return false;\n", '', {39}),
+    ('view', 'M19', '反過來：一律不給聯絡資訊（active 的麻將館也看不到電話）',
+     "    return type === 'hall' || type === 'event';", '    return false;', {38, 39}),
+    # 🔴 P5 是 Codex 抓到的**原始缺陷形狀**：判準寫對了、也真的呼叫了，
+    #    而第二個欄位畫在閘門外面。M18／M19 對它零鑑別力。
+    ('pg_detail', 'P5', '🔴 businessHours 搬回閘門外面（＝Codex 抓到的原始洞）',
+     '                {canShowContact && (v.phone || v.businessHours) && (',
+     '                {v.businessHours && <p>{v.businessHours}</p>}\n                {canShowContact && (v.phone || v.businessHours) && (',
+     {40}),
+    ('pg_detail', 'P6', '整個閘門拿掉（聯絡資訊對任何 type／status 都畫）',
+     '{canShowContact && (v.phone || v.businessHours) && (',
+     '{(v.phone || v.businessHours) && (', {40}),
     ('pg_detail', 'P4', '只動註解（預期存活：接線尺不該被註解左右）',
      '// pages/VenueDetail.tsx — 場地頁（[B1-j2]）',
      '// pages/VenueDetail.tsx — 場地頁（[B1-j2]）venueHeadline( addressCopy( isAddressVisible(', set()),

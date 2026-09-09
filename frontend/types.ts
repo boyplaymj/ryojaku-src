@@ -279,7 +279,13 @@ export interface VenueDetail {
   venueId: string;
   type: string;
   name: string;
-  /** 🔴 後端**只對 `hall`／`event` 回這兩個**（`shared.VenueContactIsPublic`）。自建場的電話是屋主私人號碼。 */
+  /**
+   * 🔴 後端**只在 `hall`／`event` ＋ `status === 'active'` 時才回這兩個**
+   * （`shared.VenueContactIsPublic`，兩個條件都要成立）。自建場的電話是屋主私人號碼；
+   * 而未審核（`pending`）的店填的電話不該被當成店家電話發出去 —— 地址那條早就要求
+   * active 了（[B5-b2]，2026-09-09）。⚠️ 所以「沒有 phone」有**三種**成因：
+   * 型別不對／還沒審核／店家真的沒填，前端一律不要據此推論是哪一種。
+   */
   phone?: string;
   businessHours?: string;
   approxLocation: VenueLocation;

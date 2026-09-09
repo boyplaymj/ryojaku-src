@@ -19,6 +19,8 @@
 //    沒有 exactAddress，而 `"phone"`／`"ownerId"` 都在）。
 //    **同一天後端已改成白名單型別 `shared.VenueDetailView`**（`ryojaku-src eaf2ba7`）：
 //    phone／businessHours 只對 hall／event 回，`ownerId` 整個換成伺服器算的 `isOwner`。
+//    **[B5-b2]（同日，收 Codex 覆驗）再加一條：`status === 'active'` 才回** ——
+//    未審核的店填的電話不該被當成店家電話發出去（地址那條早就要求 active 了）。
 //    ⇒ 現在是**兩層都擋**。本頁這一層留著是縱深，不是唯一那道。
 //    ⚠️ 但也因此：**這一層現在沒有辦法單獨被證明有效** —— 後端不再送 phone 過來，
 //    e2e 那條（V4）餵的是手寫假件，它驗的是「就算送來也不畫」。
@@ -29,6 +31,7 @@ import { AppButton } from '../components/ui/CommonUI';
 import { getVenueDetail } from '../services/apiService';
 import {
     addressCopy,
+    contactIsPublic,
     isAddressVisible,
     venueHeadline,
     venueTypeMeta,
@@ -133,9 +136,12 @@ const VenueDetailPage: React.FC = () => {
     const v = load.venue;
     const head = venueHeadline(v);
     const meta = venueTypeMeta(v.type);
-    // 🔴 自建場的電話不畫（見檔頭）。認不得的 type 也不畫 —— fail-closed：
-    //    我們不知道那是誰的電話。
-    const showPhone = meta.known && v.type !== 'home' && !!v.phone;
+    // 🔴 **一個閘蓋住整節**，不是一個欄位一個旗標（2026-09-09 收 Codex 覆驗）。
+    //    這裡原本叫 `showPhone`，而「聯絡與時間」那一節有兩個欄位 ——
+    //    電話被擋住了，營業時間卻是 `{v.businessHours && …}` 直接畫。
+    //    **守衛只蓋住我命名的那一個**，而我在檔頭宣稱的是「兩層都擋」。
+    //    判準搬到 utils/venueView.ts 的 contactIsPublic()（鏡射後端，那裡有尺）。
+    const canShowContact = contactIsPublic(v.type, v.status);
 
     return (
         <div>
@@ -184,10 +190,10 @@ const VenueDetailPage: React.FC = () => {
                     <AddressBlock state={head.addressState} address={v.exactAddress} />
                 </section>
 
-                {(showPhone || v.businessHours) && (
+                {canShowContact && (v.phone || v.businessHours) && (
                     <section className="space-y-2">
                         <h3 className="text-xs font-black text-neutral-400 tracking-wider">聯絡與時間</h3>
-                        {showPhone && (
+                        {v.phone && (
                             <a href={`tel:${v.phone}`} className="flex items-center gap-2 text-sm text-neutral-800">
                                 <Phone size="1rem" className="text-[#c5a059]" />{v.phone}
                             </a>

@@ -340,6 +340,32 @@ mut "M29b create handler 把每個呼叫者當屋主" "$MAIN_GO" \
 '	return shared.NewVenueDetailView(v, shared.AddressEvidence{CallerUserID: v.OwnerID}, nowUnix)' \
 "$PKG_HANDLER" TestB5b_Payload_StrangerSeesNoPrivateData
 
+# ── [B5-b2] 收 Codex 覆驗：聯絡資訊也要看 status ──
+mut "M30 VenueContactIsPublic 忽略 status（pending 的 hall 也給電話）" "$DETAIL_GO" \
+  '	if status != VenueStatusActive {
+		return false
+	}
+' \
+  '' \
+  $PKG_SHARED TestB5b2_ContactRequiresActiveStatus
+
+mut "M31 反過來：一律不給聯絡資訊（active 的 hall 也看不到電話）" "$DETAIL_GO" \
+  '	case VenueTypeHall, VenueTypeEvent:
+		return true
+	default:
+		return false
+	}
+}
+
+// NewVenueDetailView' \
+  '	default:
+		return false
+	}
+}
+
+// NewVenueDetailView' \
+  $PKG_SHARED TestB5b2_ContactRequiresActiveStatus
+
 restore
 echo
 echo "── 還原後回歸（三套件全部測試，不只 B5）──"

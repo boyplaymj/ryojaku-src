@@ -56,9 +56,26 @@ var venueDetailForbiddenFields = []string{
 
 // VenueContactIsPublic 決定 phone／businessHours 可不可以隨詳情送出。
 //
-// 🔴 只有 hall／event 為 true。home 的電話是屋主私人電話；
-// 認不得的 type 一律 false（fail-closed）—— 與 IsPubliclyListable 同一個形狀。
-func VenueContactIsPublic(venueType string) bool {
+// 🔴 兩個條件都要成立：
+//  1. type 是 hall／event —— home 的電話是屋主私人電話；認不得的 type 一律 false
+//     （fail-closed，與 IsPubliclyListable 同一個形狀）。
+//  2. status == active。
+//
+// 🔴 第 2 條是 2026-09-09 收 Codex 覆驗後補的，而**它不是新的產品決定，是把既有的
+// 決定套用一致**：§5.3 給 hall 訂初始 status=pending 的理由原文是「付費 ≠ 是真店主，
+// 未審核的店填的**地址**不該被當成真實店家地址發給玩家」——
+// 那句話換成「電話」逐字成立。而地址那條**早就**要求 active 了
+// （CanSeeExactAddress 規則 4），聯絡資訊卻沒有 ⇒ 同一份未審核資料，
+// 地址擋住、電話照出。兩者不一致沒有理由。
+//
+// ⚠️ 代價寫清楚：麻將館在審核通過**之前**，連館方自己打開詳情頁也看不到自己填的電話
+// （本函式不特別放行 owner）。可接受 —— 那是他自己填進去的，不是他需要從這裡讀回的東西。
+// ⚠️ 界線：這一支只管「隨詳情送不送」。它**不管曝光**（那是 IsPubliclyListable），
+// 也不管地址（那是 CanSeeExactAddress）。三支各自獨立，不要互相推論。
+func VenueContactIsPublic(venueType, status string) bool {
+	if status != VenueStatusActive {
+		return false
+	}
 	switch venueType {
 	case VenueTypeHall, VenueTypeEvent:
 		return true
@@ -87,7 +104,7 @@ func NewVenueDetailView(v *Venue, ev AddressEvidence, nowUnix int64) *VenueDetai
 		Status:         v.Status,
 		IsOwner:        IsVenueOwner(v, ev.CallerUserID),
 	}
-	if VenueContactIsPublic(v.Type) {
+	if VenueContactIsPublic(v.Type, v.Status) {
 		view.Phone = v.Phone
 		view.BusinessHours = v.BusinessHours
 	}

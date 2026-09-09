@@ -149,6 +149,29 @@ export function venueBadges(v: { isDojo?: unknown }): string[] {
     return v && v.isDojo === true ? ['⛩ 道館'] : [];
 }
 
+/**
+ * 聯絡資訊（電話／營業時間）可不可以畫出來。**鏡射後端 `shared.VenueContactIsPublic`。**
+ *
+ * 🔴 這條抽出來的直接理由是一個真的被覆驗抓到的洞（2026-09-09，Codex）：
+ *    這一段原本寫在 `VenueDetail.tsx` 裡，叫 `showPhone`，而「聯絡與時間」那一節
+ *    有**兩個**欄位。電話被擋住了，`businessHours` 卻是 `{v.businessHours && …}`
+ *    直接畫 —— **守衛只蓋住我命名的那一個**。
+ *    ⚠️ 這正是「修一個形狀的那一刻，最容易在旁邊複製它」那個坑：兩個欄位緊鄰、
+ *      寫在同一個 section 裡，而變數名把守衛的作用域說小了。
+ *    ⇒ 判準改成一支函式、一個名字（**不叫 showPhone**），兩個欄位共用。
+ *
+ * 🔴 `status !== 'active'` 也不給：§5.3 給 hall 訂初始 `pending` 的理由是
+ *    「未審核的店填的**地址**不該被當成真實店家地址發給玩家」—— 那句換成「電話」
+ *    逐字成立，而地址那條早就要求 active 了。
+ *
+ * ⚠️ 界線：這是**縱深，不是唯一那道**。後端 [B5-b]／[B5-b2] 之後也不會送過來 ⇒
+ *    這一層現在無法單獨被線上證明有效，只能靠手寫假件驗「就算送來也不畫」。
+ */
+export function contactIsPublic(type: unknown, status: unknown): boolean {
+    if (status !== 'active') return false;
+    return type === 'hall' || type === 'event';
+}
+
 // ─── ② 評價 ──────────────────────────────────────────────────────────────
 
 export interface RatingDisplay {
