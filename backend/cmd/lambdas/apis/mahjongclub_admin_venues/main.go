@@ -81,10 +81,36 @@ func validateToken(authHeader string) (jwt.MapClaims, error) {
 	return nil, fmt.Errorf("invalid claims")
 }
 
+// adminVenueView 是**後台專用**的形狀：把 exactAddress 明確加回來。
+//
+// 🔴 為什麼需要它（做前端時才發現，B1-f2 已經提交之後）：
+// shared.Venue.ExactAddress 標 `json:"-"`，那是對**玩家端**的 fail-closed 預設。
+// 但後台審核麻將館時，「地址是不是亂填的」正是判斷它是不是真店的主要依據 ——
+// 沒有地址的審核頁，審核者只能看店名點核准，那道閘就退化成蓋章。
+// 實測過：直接 marshal []*shared.Venue，回應裡完全沒有 exactAddress。
+//
+// ⚠️ 這**不是**把 json:"-" 拿掉。玩家端那條路徑完全沒動 ——
+// 這裡是一條**已經過 adminrole.Allows** 的獨立路徑，在它自己的型別上明確加回來。
+// 差別在於：拿掉 tag 是全域放行，這樣做是逐路徑授權。
+type adminVenueView struct {
+	shared.Venue
+	// ExactAddress 遮蔽嵌入的那個（嵌入的是 json:"-"，所以不會有兩個鍵）。
+	ExactAddress string `json:"exactAddress"`
+}
+
+// newAdminVenueView 是後台回應的單一出口（同兩支玩家端端點的規矩）。
+func newAdminVenueView(v *shared.Venue, nowUnix int64) adminVenueView {
+	if v == nil {
+		return adminVenueView{}
+	}
+	v.ResolveIsDojo(nowUnix)
+	return adminVenueView{Venue: *v, ExactAddress: v.ExactAddress}
+}
+
 type listResponse struct {
-	Success bool            `json:"success"`
-	Venues  []*shared.Venue `json:"venues"`
-	Error   string          `json:"error,omitempty"`
+	Success bool             `json:"success"`
+	Venues  []adminVenueView `json:"venues"`
+	Error   string           `json:"error,omitempty"`
 }
 
 type reviewResponse struct {
@@ -107,7 +133,7 @@ func respond(status int, body interface{}) (events.APIGatewayProxyResponse, erro
 // ⚠️ 用 Scan ＋ FilterExpression：venue 表沒有 GSI（§12 記了判準：
 // 筆數 > 500 或單次 Scan > 20 RCU 時才回來加）。後台用量本來就低。
 // ⚠️ FilterExpression 是**取回之後才篩**，所以計費看的是掃過的量不是回傳的量。
-func listByStatus(ctx context.Context, status string) ([]*shared.Venue, error) {
+func listByStatus(ctx context.Context, status string) ([]adminVenueView, error) {
 	out, err := dynamoClient.Scan(ctx, &dynamodb.ScanInput{
 		TableName:                aws.String(shared.VenuesTableName()),
 		FilterExpression:         aws.String("#s = :s"),
@@ -119,16 +145,16 @@ func listByStatus(ctx context.Context, status string) ([]*shared.Venue, error) {
 	if err != nil {
 		return nil, err
 	}
-	venues := make([]*shared.Venue, 0, len(out.Items))
+	now := time.Now().Unix()
+	venues := make([]adminVenueView, 0, len(out.Items))
 	for _, item := range out.Items {
 		var v shared.Venue
 		if err := attributevalue.UnmarshalMap(item, &v); err != nil {
 			log.Printf("unmarshal venue failed: %v", err)
 			continue
 		}
-		// 🔴 後台要看得到 isDojo 的**當下**值（它不落地）。
-		v.ResolveIsDojo(time.Now().Unix())
-		venues = append(venues, &v)
+		// newAdminVenueView 裡會 ResolveIsDojo（isDojo 不落地，後台要看當下值）。
+		venues = append(venues, newAdminVenueView(&v, now))
 	}
 	return venues, nil
 }

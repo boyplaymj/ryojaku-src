@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -99,5 +100,60 @@ func TestReviewRequest_NoForbiddenFields(t *testing.T) {
 	}
 	if !got["venueid"] || !got["action"] {
 		t.Fatalf("正控失敗：連 venueId／action 都沒掃到（%v）", got)
+	}
+}
+
+// --- 後台看得到地址（與玩家端方向相反的一條）---
+
+const adminAddr = "台北市大安區某路99號5樓"
+
+// S6 🔴 承重：後台的審核列表**必須**帶 exactAddress。
+// 沒有它，審核者只能看店名點核准，那道閘就退化成蓋章。
+func TestAdminVenueView_CarriesExactAddress(t *testing.T) {
+	v := &shared.Venue{VenueID: "V1", Type: shared.VenueTypeHall, Name: "某某館",
+		Status: shared.VenueStatusPending, ExactAddress: adminAddr}
+	b, err := json.Marshal(listResponse{Success: true, Venues: []adminVenueView{newAdminVenueView(v, 1000)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), adminAddr) {
+		t.Fatalf("後台看不到精確地址 ⇒ 審核只能看店名蓋章：%s", b)
+	}
+	// 只能有一個 exactAddress 鍵（嵌入那個是 json:"-"，不該冒出第二個）。
+	if n := strings.Count(string(b), `"exactAddress"`); n != 1 {
+		t.Fatalf(`"exactAddress" 出現 %d 次，want 1：%s`, n, b)
+	}
+}
+
+// S7 🔴 反控（方向相反）：**玩家端**那條路徑完全沒被這次改動影響。
+// 少了這條，「把 json:"-" 拿掉」這種全域放行的作法也會讓 S6 變綠 ——
+// 而那會讓每個玩家都拿到每一間自建場的地址。
+func TestPlayerFacingVenueStillHidesAddress(t *testing.T) {
+	v := &shared.Venue{VenueID: "V1", Type: shared.VenueTypeHome, Name: "某人家",
+		Status: shared.VenueStatusActive, ExactAddress: adminAddr}
+	b, err := json.Marshal(v) // 直接 marshal 領域模型，就是玩家端最寬鬆的那條路
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), adminAddr) {
+		t.Fatalf("玩家端路徑洩漏地址 ⇒ json:\"-\" 被拿掉了：%s", b)
+	}
+	// 正控：確認這份 venue 真的被序列化了，不是整個空的。
+	if !strings.Contains(string(b), "某人家") {
+		t.Fatalf("正控失敗：連 name 都沒出現 ⇒ 上面那條證明不了任何事：%s", b)
+	}
+}
+
+// S8 後台列表也要重算 isDojo（它不落地）。
+func TestAdminVenueView_ResolvesIsDojo(t *testing.T) {
+	v := &shared.Venue{VenueID: "V1", Type: shared.VenueTypeHall,
+		DojoPaidUntil: 2000, CertifiedRefereeCount: 1}
+	if !newAdminVenueView(v, 1000).IsDojo {
+		t.Fatal("後台看不到道館徽章")
+	}
+	// 反控：汙染值要被改掉，不是照抄。
+	v2 := &shared.Venue{VenueID: "V2", Type: shared.VenueTypeHome, IsDojo: true}
+	if newAdminVenueView(v2, 1000).IsDojo {
+		t.Fatal("汙染的 isDojo 被原樣帶進後台")
 	}
 }
