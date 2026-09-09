@@ -71,6 +71,35 @@ func (r *CreateVenueRequest) Validate() error {
 	return nil
 }
 
+// initialVenueStatus 決定新建 venue 的初始狀態（✅ 2026-09-09 使用者拍板選項 B）。
+//
+// 🔴 這條規則的效果**只有一個**：pending 的 venue，非 owner 拿不到它的
+// `exactAddress`（CanSeeExactAddress 規則 4）。它**擋不住「出現在地圖上」**——
+// 那是列表端點的事，而 status 目前在生產程式裡只被授權判斷讀。
+// 不要把 pending 讀成「這間店不會被看到」。
+//
+//   - hall  → pending：麻將館是付費建立的，但**付費 ≠ 是真店主**。
+//     未審核的店填的地址不該被當成真實店家地址發給玩家。
+//     ⚠️ 代價是館方付了錢之後功能是壞的，直到有人去審 ⇒ 審核介面是這個選擇的
+//     **前提**，不是配套。少了它，這一格就是「收了錢不給用」。
+//   - home  → active：自建場免費、量會多，人工審每一個不可行；
+//     而且它的地址已經有第二道閘（只有報名核准的玩家拿得到，§5.1）。
+//   - event → active：官方建的，沒有審的對象。
+//
+// default 走 pending 是 fail-closed。⚠️ 它在**目前的呼叫路徑上是死碼**
+// （Validate 已經擋掉不合法 type），留著是為了「有人忘了先 Validate」那條路徑；
+// 測試直接打這個函式，所以它不是沒有尺的死碼。
+func initialVenueStatus(venueType string) string {
+	switch venueType {
+	case VenueTypeHome, VenueTypeEvent:
+		return VenueStatusActive
+	case VenueTypeHall:
+		return VenueStatusPending
+	default:
+		return VenueStatusPending
+	}
+}
+
 // NewVenueFromCreateRequest 把驗證過的請求變成 Venue。
 //
 // 🔴 ownerID 與 venueID 是**參數**，不是從 r 讀 —— 呼叫端必須從 authorizer
@@ -98,11 +127,9 @@ func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, n
 		// 評價彙總：從零開始，§7 的寫入端維護。
 		RatingPositive: 0,
 		RatingCount:    0,
-		// 🔴 新建一律 pending，不是 active。非 owner 看不到 pending 的場地
-		// （CanSeeExactAddress 第 4 條），所以未審核的資料不會外流。
-		Status:    VenueStatusPending,
-		CreatedAt: nowUnix,
-		UpdatedAt: nowUnix,
+		Status:         initialVenueStatus(r.Type),
+		CreatedAt:      nowUnix,
+		UpdatedAt:      nowUnix,
 	}
 }
 

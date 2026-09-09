@@ -55,8 +55,12 @@ func TestCreateVenueRequest_NoServerOwnedFields(t *testing.T) {
 // C2 端到端：前端硬塞伺服器自有欄位，全部要被丟掉。
 // 這條與 C1 是兩把不同的尺：C1 看**型別形狀**，C2 看**實際 decode 的結果**。
 func TestCreateVenueRequest_InjectedFieldsAreDropped(t *testing.T) {
+	// 🔴 type 用 hall 不是 home：新規則下 home 的初始狀態**本來就是** active
+	// ⇒ 拿 home 測「status 有沒有被前端指定成 active」會恆真地失去鑑別力
+	// （就算前端真的指定得了，結果也一樣）。hall 的規則是 pending，
+	// 而 body 說 active ⇒ 兩者相反，這條斷言才有東西可分辨。
 	body := `{
-		"type":"home","name":"某人家","exactAddress":"台北市某路9號",
+		"type":"hall","name":"某某館","exactAddress":"台北市某路9號",
 		"approxLocation":{"latitude":25.0,"longitude":121.5},
 		"venueId":"V-偽造","ownerId":"別人的帳號","status":"active",
 		"isDojo":true,"dojoPaidUntil":9999999999,"certifiedRefereeCount":99,
@@ -72,7 +76,7 @@ func TestCreateVenueRequest_InjectedFieldsAreDropped(t *testing.T) {
 	v := NewVenueFromCreateRequest(&r, "V-伺服器產生的", "U-來自JWT", 1000)
 
 	// 正控先行：確認 body 真的被解析了。少了它，Unmarshal 整個沒作用也會全綠。
-	if v.Name != "某人家" || v.ExactAddress != "台北市某路9號" {
+	if v.Name != "某某館" || v.ExactAddress != "台北市某路9號" {
 		t.Fatalf("正控失敗：合法欄位沒讀進來（name=%q addr=%q）", v.Name, v.ExactAddress)
 	}
 
@@ -174,5 +178,47 @@ func TestVenuesTableName_FollowsPrefix(t *testing.T) {
 	t.Setenv("TABLE_PREFIX", "ZZZ_")
 	if got := VenuesTableName(); got != "ZZZ_Venues" {
 		t.Fatalf("換 prefix 之後 VenuesTableName = %q ⇒ 它是寫死的", got)
+	}
+}
+
+// 初始 status 依 type（✅ 2026-09-09 拍板選項 B）。
+//
+// 🔴 這條的效果只有一個：pending 的 venue，非 owner 拿不到 exactAddress。
+// 它**擋不住曝光** —— status 目前在生產程式裡只被授權判斷讀。
+func TestInitialVenueStatus(t *testing.T) {
+	cases := []struct {
+		venueType string
+		want      string
+		why       string
+	}{
+		{VenueTypeHall, VenueStatusPending, "付費 ≠ 是真店主，未審核的店地址不該被當真"},
+		{VenueTypeHome, VenueStatusActive, "自建場免費量大、人工審不可行；地址另有報名核准那道閘"},
+		{VenueTypeEvent, VenueStatusActive, "官方建的，沒有審的對象"},
+		{"dojo", VenueStatusPending, "不認得的 type 一律 fail-closed"},
+		{"", VenueStatusPending, "空 type 也是 fail-closed"},
+	}
+	for _, c := range cases {
+		if got := initialVenueStatus(c.venueType); got != c.want {
+			t.Errorf("initialVenueStatus(%q) = %q, want %q（%s）", c.venueType, got, c.want, c.why)
+		}
+	}
+	// 反控：三種合法 type 不可以全部回同一個值 —— 全 pending 或全 active
+	// 都會讓上面那五格裡的一半自動成立，而「規則沒分辨 type」正是要防的。
+	if initialVenueStatus(VenueTypeHall) == initialVenueStatus(VenueTypeHome) {
+		t.Fatal("hall 與 home 的初始狀態相同 ⇒ 這條規則沒有在分辨 type")
+	}
+}
+
+// 端到端：建立 hall 拿到 pending、建立 home 拿到 active。
+// 這條與上面那條分開，因為上面測純函式、這條測它真的被 NewVenueFromCreateRequest 用到
+// —— 函式寫對但沒接上，在上面那條是看不出來的。
+func TestNewVenueFromCreateRequest_StatusFollowsType(t *testing.T) {
+	hall := &CreateVenueRequest{Type: VenueTypeHall, Name: "館"}
+	if got := NewVenueFromCreateRequest(hall, "V1", "U1", 1).Status; got != VenueStatusPending {
+		t.Fatalf("hall 建立後 status = %q，want pending", got)
+	}
+	home := &CreateVenueRequest{Type: VenueTypeHome, Name: "家", ExactAddress: "x"}
+	if got := NewVenueFromCreateRequest(home, "V2", "U1", 1).Status; got != VenueStatusActive {
+		t.Fatalf("home 建立後 status = %q，want active", got)
 	}
 }
