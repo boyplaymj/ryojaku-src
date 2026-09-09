@@ -32,6 +32,13 @@
 #    兩個使用者是必要的 —— 「屋主看得到」與「路人看不到」要在同一輪裡分開量，
 #    只有一個身分的話 isOwner 那一維沒有鑑別力。
 #
+# 🔴 **兩個 base 都要打。** App 實際烘進 bundle 的是自訂網域
+#    `https://ryojaku-api.boyplaymj.com`（frontend/deploy-stg.sh），而 SAM 部署的是
+#    execute-api 那一個。只驗後者的話，「自訂網域的 base path mapping 指到舊 stage」
+#    會讓探針全綠而玩家吃到舊行為 —— **生產端執行時讀的是哪一份，就要量哪一份**。
+#    ⇒ 用 `RYOJAKU_API_BASE=<url>` 覆寫本支要打的 base，兩個各跑一次。
+#    （這條是 verify_ruleset_live.py 用同一個坑換來的，不是我推測的。）
+#
 # ⚠️ 寫入面積（跑完全部刪掉並 read-back 確認）：
 #    Users 兩列、Venues 最多四列（P1 一列、P3 兩列、P4b 一列，
 #    外加**部署前**那次 P4a 會意外建成的一列 —— 那正是它紅的方式）。
@@ -42,6 +49,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -198,15 +206,20 @@ def main():
     users = [owner_uid, stranger_uid]
 
     print("══ 前置 ══")
-    rc, out, err = sh(["aws", "cloudformation", "describe-stacks", "--stack-name", STACK,
-                       "--region", REGION, "--query",
-                       "Stacks[0].Outputs[?OutputKey=='RestApiUrl'].OutputValue",
-                       "--output", "text"])
-    api = out.strip()
-    if rc != 0 or not api or api == "None":
-        die(f"拿不到 RestApiUrl（stack={STACK}）：{err.strip()[:200]}")
-    api = api.rstrip("/")
-    print(f"  API：{api}")
+    override = os.environ.get("RYOJAKU_API_BASE", "").strip()
+    if override:
+        api = override.rstrip("/")
+        print(f"  API：{api}（RYOJAKU_API_BASE 覆寫 —— 這一輪量的是自訂網域那一份）")
+    else:
+        rc, out, err = sh(["aws", "cloudformation", "describe-stacks", "--stack-name", STACK,
+                           "--region", REGION, "--query",
+                           "Stacks[0].Outputs[?OutputKey=='RestApiUrl'].OutputValue",
+                           "--output", "text"])
+        api = out.strip()
+        if rc != 0 or not api or api == "None":
+            die(f"拿不到 RestApiUrl（stack={STACK}）：{err.strip()[:200]}")
+        api = api.rstrip("/")
+        print(f"  API：{api}（SAM 部署的那一份）")
     secret = ssm("/ryojaku/stg/JWT_SECRET")
 
     for uid in users:
@@ -370,8 +383,9 @@ def main():
         print("   要看的是 C1／C2／C3 有沒有綠（綠＝我確實打到了對的端點）。")
         print("   部署後仍然紅才是真的有問題。")
         return 1
-    print("✅ 全部通過。⚠️ 界線：這證明的是**這一刻**線上那版的行為，")
-    print("   不證明別的路徑（後台 admin-venues、venue-list）也擋著。")
+    print(f"✅ 全部通過（base={api}）。⚠️ 界線：這證明的是**這一刻**、**這個 base** 的行為，")
+    print("   不證明另一個 base（自訂網域／execute-api，看你剛剛跑的是哪個）也一樣，")
+    print("   也不證明別的路徑（後台 admin-venues、venue-list）也擋著。")
     return 0
 
 
