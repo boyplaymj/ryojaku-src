@@ -29,23 +29,50 @@ API=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION
 echo "API: $API"
 
 fail=0
+# 🔴 重試存在的理由是一次**實測到的假紅**（2026-09-09）：
+#    CloudFormation 回報 stack 更新完成（rc=0）之後，API Gateway 的 stage
+#    還要幾秒才會指向新的 deployment。實測：deploy 結束時打 venue-list 是 403，
+#    stage 的 lastUpdatedDate 是 10:21:36，而我的驗證跑在那之前 —— 路由**存在**
+#    （get-resources 查得到 GET /venue-list），只是 stage 還沒換過去。
+#    ⇒ 不重試的話，每次部署後第一次驗證都會誤報，而假警報訓練出來的忽略不可逆。
+#
+# 🔴 但重試會讓「真的沒部署」也變成「再等一下就好」⇒ 兩道防線：
+#    ① 次數上限（RETRIES × RETRY_SLEEP 秒），超過就照樣判紅
+#    ② **靠重試才過的一定印出來**。若某一項每次都要重試滿才過，那不是瞬時延遲，
+#       是另一個問題 —— 只印「通過」會把它藏起來。
+RETRIES="${RETRIES:-6}"
+RETRY_SLEEP="${RETRY_SLEEP:-5}"
+
 hit() { # $1 路徑  $2 期望碼  $3 說明  [$4 method，預設 POST]
-  local body code method
+  local body code method attempt
   method="${4:-POST}"
   body=$(mktemp)
-  if [ "$method" = "GET" ]; then
-    code=$(curl -s -o "$body" -w '%{http_code}' "$API/$1" --max-time 20)
-  else
-    code=$(curl -s -o "$body" -w '%{http_code}' -X POST "$API/$1" \
-             -H 'Content-Type: application/json' -d '{}' --max-time 20)
-  fi
+  attempt=0
+  while :; do
+    if [ "$method" = "GET" ]; then
+      code=$(curl -s -o "$body" -w '%{http_code}' "$API/$1" --max-time 20)
+    else
+      code=$(curl -s -o "$body" -w '%{http_code}' -X POST "$API/$1" \
+               -H 'Content-Type: application/json' -d '{}' --max-time 20)
+    fi
+    [ "$code" = "$2" ] && break
+    [ "$attempt" -ge "$RETRIES" ] && break
+    attempt=$((attempt+1))
+    sleep "$RETRY_SLEEP"
+  done
   if [ -z "$code" ] || [ "$code" = "000" ]; then
     echo "🔴 [設備] 打不到 $1（curl 沒有回應碼）"; rm -f "$body"; return 2
   fi
   if [ "$code" = "$2" ]; then
-    printf '  ✅ %-34s %s  %s\n' "$1" "$code" "$3"
+    if [ "$attempt" -gt 0 ]; then
+      printf '  ✅ %-34s %s  %s  ⚠️ 等了 %d 次（%d 秒）才對 —— 若每次都這樣就不是瞬時延遲\n' \
+             "$1" "$code" "$3" "$attempt" "$((attempt*RETRY_SLEEP))"
+    else
+      printf '  ✅ %-34s %s  %s\n' "$1" "$code" "$3"
+    fi
   else
-    printf '  ❌ %-34s %s（期望 %s）%s\n     回應：%s\n' "$1" "$code" "$2" "$3" "$(head -c 120 "$body")"
+    printf '  ❌ %-34s %s（期望 %s，已重試 %d 次共 %d 秒）%s\n     回應：%s\n' \
+           "$1" "$code" "$2" "$attempt" "$((attempt*RETRY_SLEEP))" "$3" "$(head -c 120 "$body")"
     fail=$((fail+1))
   fi
   rm -f "$body"
@@ -79,7 +106,14 @@ hit definitely-not-a-route-xyz 403 "不存在的路徑"
 # venue-list 沒有 authorizer ⇒ 請求會一路打進 lambda ⇒ 它的 body 是唯一的證據。
 echo "── L1 lambda 真的執行了嗎（body，不只是狀態碼）"
 lbody=$(mktemp)
-lcode=$(curl -s -o "$lbody" -w '%{http_code}' "$API/venue-list" --max-time 20)
+lattempt=0
+while :; do
+  lcode=$(curl -s -o "$lbody" -w '%{http_code}' "$API/venue-list" --max-time 20)
+  { [ "$lcode" = "200" ] && grep -q '"success":true' "$lbody"; } && break
+  [ "$lattempt" -ge "$RETRIES" ] && break
+  lattempt=$((lattempt+1)); sleep "$RETRY_SLEEP"
+done
+[ "$lattempt" -gt 0 ] && echo "   ⚠️ 等了 $lattempt 次（$((lattempt*RETRY_SLEEP)) 秒）"
 if [ "$lcode" != "200" ]; then
   printf '  ❌ venue-list 回 %s，拿不到 body ⇒ 這一項無法判斷\n' "$lcode"
   fail=$((fail+1))
