@@ -221,6 +221,29 @@ export function nextPageDecision(
     return 'fetch';
 }
 
+/** 一次「載入」希望湊到幾張卡片才停手。湊不到就繼續翻（見 shouldKeepScanning）。 */
+export const VENUE_PAGE_TARGET = 20;
+
+/**
+ * 還要不要繼續掃下一頁。
+ *
+ * 🔴 這條的存在理由與 nextPageDecision 是同一個坑的兩半：那支說「還有沒有下一頁」，
+ *    這支說「我們要不要去拿」。**卡片數是後者的輸入，不是前者的**——
+ *    把筆數塞進終止條件（`venues.length === 0 ⇒ 停`）就是 §5.3 點名的那個錯，
+ *    而在這裡用筆數是對的：湊夠了就不要再打無閘門的 Scan（成本）。
+ *
+ * ⚠️ 湊不夠**不是**錯誤：一整頁都被 IsPubliclyListable 篩掉是正常的
+ *    （自建場永遠不進公開列表），此時 collected 是 0 而底下還有幾百筆。
+ */
+export function shouldKeepScanning(
+    collected: number,
+    decision: VenuePageDecision,
+    target: number = VENUE_PAGE_TARGET,
+): boolean {
+    if (decision !== 'fetch') return false;
+    return collected < target;
+}
+
 /**
  * 列表的空狀態要說哪一句。
  *
@@ -266,4 +289,47 @@ export function venueHeadline(v: VenueDetail | null | undefined) {
         rating: formatRating(v ?? {}),
         addressState: readAddressState(v),
     };
+}
+
+// ─── 建立表單的驗證 ──────────────────────────────────────────────────────
+
+/** 玩家在 App 裡能建的 type。🔴 `event`（活動場）是官方建的，不給玩家選（§5.1）。 */
+export const CREATABLE_VENUE_TYPES = ['hall', 'home'] as const;
+
+/**
+ * 建立場地的前端驗證。**鏡射**後端 `CreateVenueRequest.Validate()` 的四條。
+ *
+ * 🔴 這不是安全邊界 —— 後端那四條才是（前端可以被繞過）。它的價值是
+ *    「不要讓人填完一整頁才被打回來」，以及**四條各自不同的訊息**：
+ *    合成一句「資料不正確」的話，使用者不知道要改哪一格，而那與
+ *    「表單壞了」在他眼裡是同一件事。
+ *
+ * 🔴 `event` 不在 CREATABLE_VENUE_TYPES 裡，但**後端收**（它的 Validate 接受 event）。
+ *    ⇒ 這是畫面上的限制，不是規則。任何人直接打 API 都建得出活動場。
+ *    記在設計冊 §5.3。
+ */
+export function validateCreateVenue(v: {
+    type?: string;
+    name?: string;
+    latitude?: number;
+    longitude?: number;
+    exactAddress?: string;
+}): string | null {
+    if (!(CREATABLE_VENUE_TYPES as readonly string[]).includes(v.type ?? '')) {
+        return '請選擇場地類型';
+    }
+    if (!(v.name ?? '').trim()) return '請填場地名稱';
+    const lat = v.latitude;
+    const lng = v.longitude;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
+        (lat as number) < -90 || (lat as number) > 90 ||
+        (lng as number) < -180 || (lng as number) > 180) {
+        return '請在地圖上選一個位置';
+    }
+    // 🔴 自建場沒有精確地址的話，報名核准之後也沒東西可以給玩家 ——
+    //    而那個失敗會發生在「玩家已經被核准、正要出門」的時候，不是建立的時候。
+    if (v.type === 'home' && !(v.exactAddress ?? '').trim()) {
+        return '自建場一定要填完整地址（只有你核准的玩家看得到）';
+    }
+    return null;
 }

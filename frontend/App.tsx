@@ -5,6 +5,9 @@ import TopBar from './components/TopBar';
 import PullToRefresh from './components/PullToRefresh';
 import Home from './pages/Home';
 import SearchPage from './pages/Search';
+import VenueListPage from './pages/VenueList';
+import VenueDetailPage from './pages/VenueDetail';
+import CreateVenuePage from './pages/CreateVenue';
 import Matchmaking from './pages/Matchmaking';
 import CreateGroup from './pages/CreateGroup';
 import EventDetail from './pages/EventDetail';
@@ -319,6 +322,12 @@ function App() {
                 <Route path="/rate-user" element={<RateUser />} />
                 <Route path="/ledger" element={<Ledger />} />
                 <Route path="/training/voice-tai" element={<TrainingVoiceTai />} />
+                {/* [B1-j2/j3/j4] 場地。`/venue/:id` 吃 `?gameId=`（自建場地址授權的憑據）。
+                    ⚠️ 目前沒有畫面會帶著 gameId 導過來：create-game 從來不寫 Game.VenueID
+                    ⇒ 自建場那條授權路徑在今天的 App 裡走不到（設計冊 §5.3）。 */}
+                <Route path={APP_ROUTES.venues} element={<VenueListPage />} />
+                <Route path={APP_ROUTES.createVenue} element={<CreateVenuePage />} />
+                <Route path="/venue/:id" element={<VenueDetailPage />} />
               </Routes>
               {/* Daily Bonus Modal Overlay */}
               <DailyBonusModal

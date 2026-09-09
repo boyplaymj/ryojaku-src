@@ -36,6 +36,9 @@ export const APP_ROUTES = {
     create: '/create',
     notifications: '/notifications',
     ledger: '/ledger',
+    // [B1-j3] 公開場地列表。`/venue/:id`（單一場地）是**前綴**路由，見下面那份名單。
+    venues: '/venues',
+    createVenue: '/create-venue',
 } as const;
 
 export type AppRoutePath = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
@@ -44,7 +47,7 @@ export type AppRoutePath = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 export const MAIN_NAV_ROUTES: readonly string[] = Object.values(APP_ROUTES);
 
 /** 前綴比對就畫殼的路徑（帶 :id 的頁）。 */
-export const MAIN_NAV_ROUTE_PREFIXES: readonly string[] = ['/rate-game/', '/reviews/', '/event/', '/ledger', '/edit-group/'];
+export const MAIN_NAV_ROUTE_PREFIXES: readonly string[] = ['/rate-game/', '/reviews/', '/event/', '/ledger', '/edit-group/', '/venue/'];
 
 /** 這個 pathname 要不要畫 TopBar／BottomNav 那層殼。 */
 export function hasMainNavShell(pathname: string): boolean {

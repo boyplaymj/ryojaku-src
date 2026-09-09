@@ -22,6 +22,8 @@ import {
     mergeVenuePages,
     venueHeadline,
     VENUE_PAGE_ROUND_CAP,
+    shouldKeepScanning,
+    validateCreateVenue,
     type VenueAddressState,
 } from './venueView.ts';
 
@@ -262,4 +264,43 @@ test('B1j-28 名字是空白時退回「未命名場地」，不是空字串', (
     assert.equal(h.name, '未命名場地');
     // 而且無效輸入不會把地址判成 granted。
     assert.equal(h.addressState, 'withheld-review');
+});
+
+test('B1j-29 湊夠卡片就停手，湊不夠而且還有下一頁就繼續（成本：無閘門的 Scan）', () => {
+    assert.equal(shouldKeepScanning(0, 'fetch', 20), true);
+    assert.equal(shouldKeepScanning(19, 'fetch', 20), true);
+    assert.equal(shouldKeepScanning(20, 'fetch', 20), false);
+});
+
+test('B1j-30 🔴 沒有下一頁時，卡片再少也不繼續掃（否則會空轉打 API）', () => {
+    // 反控方向：B1j-29 只證明「湊夠會停」，這條證明「沒得拿也會停」。
+    assert.equal(shouldKeepScanning(0, 'done', 20), false);
+    assert.equal(shouldKeepScanning(0, 'cap-reached', 20), false);
+});
+
+test('B1j-31 建立表單四條驗證各自回**不同**的訊息', () => {
+    const ok = { type: 'hall', name: '大安館', latitude: 25, longitude: 121, exactAddress: '' };
+    assert.equal(validateCreateVenue(ok), null);
+    const msgs = [
+        validateCreateVenue({ ...ok, type: 'event' }),   // 玩家不能建活動場
+        validateCreateVenue({ ...ok, name: '  ' }),
+        validateCreateVenue({ ...ok, latitude: 999 }),
+        validateCreateVenue({ type: 'home', name: 'x', latitude: 25, longitude: 121, exactAddress: '' }),
+    ];
+    for (const m of msgs) assert.ok(m && m.trim() !== '', `缺訊息：${JSON.stringify(msgs)}`);
+    // 合成一句「資料不正確」的話，使用者不知道要改哪一格。
+    assert.equal(new Set(msgs).size, msgs.length, `訊息重複：${JSON.stringify(msgs)}`);
+});
+
+test('B1j-32 🔴 自建場必填完整地址；麻將館可以不填（B1j-31 的反控）', () => {
+    // 少了後半句，「一律要求填地址」也會讓 B1j-31 綠。
+    assert.ok(validateCreateVenue({ type: 'home', name: 'x', latitude: 25, longitude: 121, exactAddress: '' }));
+    assert.equal(validateCreateVenue({ type: 'home', name: 'x', latitude: 25, longitude: 121, exactAddress: '台北市…' }), null);
+    assert.equal(validateCreateVenue({ type: 'hall', name: 'x', latitude: 25, longitude: 121 }), null);
+});
+
+test('B1j-33 座標缺漏／NaN 也會被擋（不是只擋超出範圍）', () => {
+    for (const bad of [{}, { latitude: NaN, longitude: 121 }, { latitude: 25, longitude: 181 }, { latitude: -91, longitude: 0 }]) {
+        assert.ok(validateCreateVenue({ type: 'hall', name: 'x', ...bad }), JSON.stringify(bad));
+    }
 });

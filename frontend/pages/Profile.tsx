@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Settings, User as UserIcon, Zap, Award, Clock, Smartphone, Fingerprint, Camera, Save, X, ChevronRight, ChevronDown, AlertTriangle, Edit3, Loader2, Star, Crop, FileText, Activity, Users, Layers, Gift, BellRing, CheckCircle, Info, Coins, Newspaper } from 'lucide-react';
+import { Settings, User as UserIcon, Zap, Award, Clock, Smartphone, Fingerprint, Camera, Save, X, ChevronRight, ChevronDown, AlertTriangle, Edit3, Loader2, Star, Crop, FileText, Activity, Users, Layers, Gift, BellRing, CheckCircle, Info, Coins, Newspaper, Building2 } from 'lucide-react';
 import { User } from '../types';
 import { updateUserProfile, getUserInfo, redeemCode, getUploadUrl, claimPushBonus } from '../services/apiService';
 import { api } from '../services/dataService';
@@ -857,6 +857,30 @@ const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUserUpdate, inviter
                                 <h3 className="text-md font-black text-neutral-900 tracking-tight">社群動態</h3>
                             </div>
                             <p className="text-[0.625rem] text-neutral-300 font-bold">全域貼文牆：看看雀友在說什麼、發一篇自己的。</p>
+                        </div>
+                        <ChevronRight size="1rem" className="text-neutral-200 group-hover:text-[#c5a059] transition-colors" />
+                    </div>
+                </div>
+            </div>
+
+            {/* 場地入口（[B1-j3]）。§5 把場地升成一級實體，而正典把它的瀏覽面設計在
+                「揪咖 → 地圖」那個 tab —— 那個 tab 因為圖磚計費（§9）還沒做。
+                🔴 這裡是**二級入口**，刻意不動底欄與揪咖的 tab 列：那是 IA 決定，要人拍板。
+                但也不可以讓 /venues 變成沒有入口的孤兒頁（§1 缺陷 #5 就是那個形狀）。 */}
+            <div className="px-4 mb-4">
+                <div
+                    onClick={() => navigate('/venues')}
+                    className="group relative bg-white rounded-lg border border-black/[0.04] p-4 cursor-pointer active:scale-[0.98] overflow-hidden transition-all shadow-sm"
+                >
+                    <div className="flex items-center gap-4 relative z-10">
+                        <div className="w-12 h-12 rounded-lg bg-neutral-900 flex items-center justify-center text-[#c5a059] shadow-lg group-hover:scale-105 transition-all duration-500">
+                            <Building2 size="1.25rem" strokeWidth={2.5} />
+                        </div>
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-0.5">
+                                <h3 className="text-md font-black text-neutral-900 tracking-tight">場地</h3>
+                            </div>
+                            <p className="text-[0.625rem] text-neutral-300 font-bold">找麻將館與活動場，或登錄自己的場地。</p>
                         </div>
                         <ChevronRight size="1rem" className="text-neutral-200 group-hover:text-[#c5a059] transition-colors" />
                     </div>

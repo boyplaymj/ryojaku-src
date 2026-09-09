@@ -52,7 +52,7 @@ const MIN = [22, 18, 0];
 const DEFAULT_TARGETS = [
     // [A3-a] 2026-09-06 加了 createGroupForm.test.ts（26 條）⇒ min 3→4（檔數那道跟著抬）。
     //   ⚠️ minTests **維持 20**，刻意不動：見下面那列單檔 target。
-    { glob: 'utils/*.test.ts', min: 5, minTests: 20 },
+    { glob: 'utils/*.test.ts', min: 6, minTests: 20 },
     // [A3-a] 2026-09-06 新增這一列，取代「把全域 minTests 抬到 270」那個作法。
     //   要擋的風險是「createGroupForm.test.ts 這份回歸網整個消失／被清空」——
     //   而全域總數對它幾乎沒有鑑別力：當時 291 條，抬到 270 只留 21 條餘裕，
@@ -69,6 +69,8 @@ const DEFAULT_TARGETS = [
     //   四個「兩種情況長得一樣」的坑（地址／評價／分頁／type），
     //   而全域 minTests 20 對「這 28 條被整個清空」零鑑別力（其他檔加起來遠超過 20）。
     { glob: 'utils/venueView.test.ts', min: 1, minTests: 24 },
+    // [B1-j4] 自建場座標模糊化（§5.1 的硬規則）。10 條。
+    { glob: 'utils/venueLocation.test.ts', min: 1, minTests: 8 },
     // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）
     { glob: 'engine/*.test.ts', min: 2, minTests: 9 },
 ];
