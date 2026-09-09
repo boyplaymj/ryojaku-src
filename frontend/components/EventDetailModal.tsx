@@ -7,6 +7,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../contexts/ToastContext';
+import { buildMemberSlots, memberSlotIcon, memberCountLabel } from '../utils/memberSlots';
 import CyberpunkConfirmModal from './CyberpunkConfirmModal';
 import UserReviewsModal from './UserReviewsModal';
 import { GroupEvent, Game, UserStats } from '../types';
@@ -449,13 +450,18 @@ const EventDetailModal: React.FC<EventDetailModalProps> = ({ eventId, events, cl
                     {/* Status Bar */}
                     <div className="grid grid-cols-2 gap-px bg-black/[0.03]">
                         <div className="bg-white p-4 pb-2 flex flex-col items-center justify-center min-h-[7.5rem]">
-                            <span className="text-[0.5625rem] text-neutral-400 uppercase mb-2 font-black tracking-widest">目前人數</span>
+                            <span className="text-[0.5625rem] text-neutral-400 uppercase mb-2 font-black tracking-widest">{memberCountLabel(event.maxMembers, event.currentMembers)}</span>
                             <div className="flex-1 flex items-center justify-center w-full">
+                                {/* 格數由 maxMembers 決定，不是固定四格 —— 規則在 utils/memberSlots.ts。 */}
                                 <div className="flex items-center gap-[0.0625rem]">
-                                    <img src="/userJoin/icon-watiing_lightMode_selfIcon-No1@3x.png" alt="P1" className="w-[2.5rem] object-contain" />
-                                    <img src={event.currentMembers >= 2 ? "/userJoin/icon-userJoined-No2@3x.png" : "/userJoin/icon-userEmpty-No2@3x.png"} alt="P2" className="w-[2.5rem] object-contain" />
-                                    <img src={event.currentMembers >= 3 ? "/userJoin/icon-userJoined-No3@3x.png" : "/userJoin/icon-userEmpty-No3@3x.png"} alt="P3" className="w-[2.5rem] object-contain" />
-                                    <img src={event.currentMembers >= 4 ? "/userJoin/icon-userJoined-No4@3x.png" : "/userJoin/icon-userEmpty-No4@3x.png"} alt="P4" className="w-[2.5rem] object-contain" />
+                                    {buildMemberSlots(event.maxMembers, event.currentMembers).map(slot => (
+                                        <img
+                                            key={slot.seat}
+                                            src={memberSlotIcon(slot)}
+                                            alt={`P${slot.seat}`}
+                                            className="w-[2.5rem] object-contain"
+                                        />
+                                    ))}
                                 </div>
                             </div>
                         </div>

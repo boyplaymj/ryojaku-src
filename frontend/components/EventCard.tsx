@@ -2,6 +2,7 @@ import React from 'react';
 import { GroupEvent, Category } from '../types';
 import { MapPin, Users, Coins, Clock, Gamepad2, ArrowRight, ScrollText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { buildMemberSlots, memberSlotIcon, memberCountLabel } from '../utils/memberSlots';
 
 interface EventCardProps {
     event: GroupEvent;
@@ -196,12 +197,24 @@ const EventCard: React.FC<EventCardProps> = ({ event, onEventClick, highlightTer
 
                     <div className="flex items-center gap-3">
                         {/* 人數圖片顯示：使用固定高度容器，圖片稍微溢出以放大視覺效果 */}
-                        <div className="relative h-8 flex items-center">
-                            <div className="flex items-center gap-[0.0625rem] transform -translate-y-0.5">
-                                <img src="/userJoin/icon-watiing_lightMode_selfIcon-No1@3x.png" alt="P1" className="w-[1.25rem] object-contain" />
-                                <img src={event.currentMembers >= 2 ? "/userJoin/icon-userJoined-No2@3x.png" : "/userJoin/icon-userEmpty-No2@3x.png"} alt="P2" className="w-[1.25rem] object-contain" />
-                                <img src={event.currentMembers >= 3 ? "/userJoin/icon-userJoined-No3@3x.png" : "/userJoin/icon-userEmpty-No3@3x.png"} alt="P3" className="w-[1.25rem] object-contain" />
-                                <img src={event.currentMembers >= 4 ? "/userJoin/icon-userJoined-No4@3x.png" : "/userJoin/icon-userEmpty-No4@3x.png"} alt="P4" className="w-[1.25rem] object-contain" />
+                        {/* 人數格子：格數由 maxMembers 決定（容量＝缺幾人＋1＝2～4），**不是固定四格**。
+                            規則全在 utils/memberSlots.ts —— 這裡不要再寫第二份「第幾格用哪張圖」。
+                            §4.2 的「已報名 N/4」已訂正為「已加入 N/maxMembers」（報名只建 pending，核准才進人數）。 */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-[0.625rem] font-black text-neutral-400 tabular-nums">
+                                {memberCountLabel(event.maxMembers, event.currentMembers)}
+                            </span>
+                            <div className="relative h-8 flex items-center">
+                                <div className="flex items-center gap-[0.0625rem] transform -translate-y-0.5">
+                                    {buildMemberSlots(event.maxMembers, event.currentMembers).map(slot => (
+                                        <img
+                                            key={slot.seat}
+                                            src={memberSlotIcon(slot)}
+                                            alt={`P${slot.seat}`}
+                                            className="w-[1.25rem] object-contain"
+                                        />
+                                    ))}
+                                </div>
                             </div>
                         </div>
                         <div className="w-8 h-8 rounded-lg bg-neutral-900 flex items-center justify-center text-white shadow-md active:scale-95 transition-all group-hover:bg-[#c5a059]">
