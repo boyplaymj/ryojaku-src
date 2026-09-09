@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
     MIN_CAPACITY,
     MAX_CAPACITY,
@@ -118,19 +118,40 @@ test('A2s4-8 文案是「已加入 N/M」，不是「已報名」', () => {
     assert.ok(!memberCountLabel(4, 2).includes('已報名'));
 });
 
-test('A2s4-9 兩個元件真的用了這一份（接線，不是宣稱）', () => {
-    // 🔴 為什麼要掃原始碼：純函式全綠而元件仍然硬寫四個 <img> 時，
-    //    上面八條測試一條都不會紅 —— 「算得對」與「畫面用了它」在單元層逐字相同。
-    for (const rel of ['../components/EventCard.tsx', '../components/EventDetailModal.tsx']) {
-        const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
-        // 🔴 收 Codex 覆驗：原本只查識別字出現 ⇒ 留一個沒用到的 import 或註解也會綠。
-        //    改成比對**呼叫式**（含左括號），而且要求它出現在 JSX 的 .map( 之前。
-        assert.match(src, /buildMemberSlots\s*\(/, `${rel} 沒有**呼叫** buildMemberSlots（只有名字不算）`);
-        assert.match(src, /buildMemberSlots\s*\([^)]*\)\s*\.map\s*\(/, `${rel} 有呼叫但沒有拿它的結果去畫格子`);
-        // 硬寫的 No4 圖檔路徑必須已經消失（那是「四格寫死」的指紋）
-        assert.ok(
-            !src.includes('icon-userEmpty-No4@3x.png') && !src.includes('icon-userJoined-No4@3x.png'),
-            `${rel} 仍然有硬寫的 No4 圖檔路徑 ⇒ 還是四格寫死`
-        );
+test('A2s4-9 🔴 **機械掃描**全 components/ + pages/：不准有硬寫的座位圖（接線，不是宣稱）', () => {
+    // 🔴 這條原本是**手打的兩個檔名清單**，而清單漏了 pages/EventDetail.tsx ——
+    //    於是它全綠，第三處的四格硬寫原封不動地上線了。
+    //    抓到它的不是任何檢查，是**部署後比對 bundle 指紋時數字不符**。
+    //    ⇒ 判準改成「掃過每一個檔」，不是「掃我想得到的那幾個」。
+    //    新增第四處元件時，這條會自動涵蓋它 —— 不需要有人記得回來加檔名。
+    const roots = ['../components', '../pages'];
+    const files: string[] = [];
+    const walk = (dir: URL) => {
+        for (const ent of readdirSync(dir, { withFileTypes: true })) {
+            const child = new URL(`${ent.name}${ent.isDirectory() ? '/' : ''}`, dir);
+            if (ent.isDirectory()) walk(child);
+            else if (ent.name.endsWith('.tsx')) files.push(child.pathname);
+        }
+    };
+    for (const r of roots) walk(new URL(`${r}/`, import.meta.url));
+
+    // 反控：掃描本身要真的走到檔案 —— 空清單會讓下面的迴圈變成同義反覆。
+    assert.ok(files.length >= 20, `只掃到 ${files.length} 個檔，掃描器壞了`);
+
+    const offenders: string[] = [];
+    const users: string[] = [];
+    for (const f of files) {
+        const src = readFileSync(f, 'utf8');
+        // 「硬寫座位圖」的指紋：直接把 No2/No3/No4 的檔名寫在原始碼裡。
+        if (/icon-user(Joined|Empty)-No[234]@3x\.png/.test(src)) offenders.push(f);
+        if (/buildMemberSlots\s*\(/.test(src)) users.push(f);
+    }
+    assert.deepEqual(offenders, [], `這些檔還在硬寫座位圖，沒有走 memberSlots：\n${offenders.join('\n')}`);
+
+    // 正控：真的有元件在用這份純函式（否則「零違規」也可能是因為大家都不畫格子了）
+    assert.ok(users.length >= 3, `只有 ${users.length} 個檔呼叫 buildMemberSlots，預期至少 3`);
+    for (const f of users) {
+        const src = readFileSync(f, 'utf8');
+        assert.match(src, /buildMemberSlots\s*\([^)]*\)\s*\.map\s*\(/, `${f} 有呼叫但沒拿結果去畫格子`);
     }
 });
