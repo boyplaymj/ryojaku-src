@@ -1,5 +1,7 @@
 package shared
 
+import "encoding/json"
+
 // Venue 是場地主表（正典：PLAYER_APP_REDESIGN.md §5）。
 //
 // 🔴 三個結構上的決定，各自擋掉一種「外觀正常但錯了」的失效模式：
@@ -127,6 +129,33 @@ func EvaluateIsDojo(v *Venue, nowUnix int64) bool {
 		return false
 	}
 	return true
+}
+
+// UnmarshalJSON 是 IsDojo 的**第二道**：把外部 JSON 送進來的 isDojo 一律丟掉。
+//
+// 🔴 為什麼需要它（Codex 覆驗 2026-09-09 指出，我實測確認）：
+// 第一道 `dynamodbav:"-"` 擋的是**落地**，擋不住「這一次回應」。IsDojo 仍是
+// `json:"isDojo"` 的公開欄位 ⇒ 端點若直接把 request body decode 進 Venue，
+// `{"isDojo":true}` 會留在記憶體，再被原樣 marshal 回去。實測過：
+// 一個 type=home、三條認證一條都不成立的 venue，回應裡是 "isDojo":true。
+//
+// ⇒ 我原本寫的「直接把 isDojo 寫成 true 在結構上不可能」**範圍寫過頭了**。
+// 那句話只對「持久層」成立。這道補上「傳輸層」那一半。
+//
+// ⚠️ 這不取代窄 DTO（端點本來就不該直接 decode 領域模型）。兩道各自獨立：
+// 忘了用窄 DTO 時這道還在，而這道被拿掉時窄 DTO 還在。
+func (v *Venue) UnmarshalJSON(data []byte) error {
+	// venueJSON 是 Venue 的別名，沒有 UnmarshalJSON 方法 ⇒ 走預設解析、不會無限遞迴。
+	type venueJSON Venue
+	var raw venueJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = Venue(raw)
+	// 🔴 不論外面送什麼，IsDojo 一律歸零。它只能由 EvaluateIsDojo 產生。
+	// fail-closed 的方向：漏了 ResolveIsDojo 的後果是「徽章不亮」，不是「亂亮」。
+	v.IsDojo = false
+	return nil
 }
 
 // ResolveIsDojo 把求值結果寫進 v.IsDojo。

@@ -236,3 +236,44 @@ func TestGameVenueID_MarshalRoundTrip(t *testing.T) {
 		t.Fatalf("venueId 落地成了 %#v", av)
 	}
 }
+
+// --- [B1-a 補・收 Codex 覆驗] inbound isDojo（傳輸層那一半）---
+//
+// 🔴 `dynamodbav:"-"` 擋的是**落地**，擋不住「這一次回應」。IsDojo 仍是
+// json:"isDojo" 的公開欄位 ⇒ 端點若直接把 request body decode 進 Venue，
+// {"isDojo":true} 會留在記憶體再被原樣送回去。實測確認過（見 commit 訊息）。
+func TestVenueUnmarshalJSON_DropsInboundIsDojo(t *testing.T) {
+	var v Venue
+	body := `{"venueId":"V1","type":"home","name":"某人家","isDojo":true,"certifiedRefereeCount":0}`
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.IsDojo {
+		t.Fatal("請求裡的 isDojo:true 被留下來了 ⇒ 它會被原樣回傳，而這個 venue 三條認證一條都不成立")
+	}
+	// 正控（兩條）：證明這份 body 真的被解析了，不是 UnmarshalJSON 把整個物件丟掉。
+	// 少了它們，`func (v *Venue) UnmarshalJSON(...) error { return nil }` 也會全綠。
+	if v.VenueID != "V1" {
+		t.Fatalf("正控失敗：venueId 沒讀進來（%q）⇒ 上面那條斷言證明不了任何事", v.VenueID)
+	}
+	if v.Name != "某人家" {
+		t.Fatalf("正控失敗：name 沒讀進來（%q）", v.Name)
+	}
+}
+
+// 送 isDojo:false 也一樣（不是只擋 true —— 這條讓「照抄輸入」與「一律歸零」分得出來）。
+func TestVenueUnmarshalJSON_ResolveStillWorksAfterDecode(t *testing.T) {
+	var v Venue
+	body := `{"venueId":"V1","type":"hall","isDojo":true,"dojoPaidUntil":2000,"certifiedRefereeCount":2}`
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.IsDojo {
+		t.Fatal("decode 之後應該一律是 false")
+	}
+	// 三條原料都讀進來了 ⇒ 求值之後才會是 true。這條盯的是「歸零」沒有連原料一起清掉。
+	v.ResolveIsDojo(1000)
+	if !v.IsDojo {
+		t.Fatal("原料齊全時 ResolveIsDojo 應該算出 true —— 若這裡是 false，代表歸零把原料也清掉了")
+	}
+}

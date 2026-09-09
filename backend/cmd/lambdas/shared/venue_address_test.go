@@ -356,3 +356,24 @@ func TestIsVenueOwner_EmptyStringNeverMatches(t *testing.T) {
 		})
 	}
 }
+
+// --- [B1-b 補・收 Codex 覆驗] VenueView 不可被 unmarshal ---
+//
+// 釘住那個「響亮失敗」的決定：Venue.UnmarshalJSON 會被提升成 VenueView 的方法，
+// 於是外層 exactAddress 靜靜讀不進來（實測：加之前讀得到「台北市某路9號」，加之後 nil）。
+// 與其少讀一個欄位，不如報錯。
+func TestVenueView_UnmarshalIsRefused(t *testing.T) {
+	var vw VenueView
+	err := json.Unmarshal([]byte(`{"venueId":"V1","exactAddress":"台北市某路9號"}`), &vw)
+	if err == nil {
+		t.Fatal("VenueView 應該拒絕被 unmarshal —— 沉默地少讀 exactAddress 會讓人去懷疑授權壞了")
+	}
+	if !strings.Contains(err.Error(), "輸出專用") {
+		t.Fatalf("錯誤訊息要說得出原因，得到：%v", err)
+	}
+	// 反控：確認它不是連 marshal 都壞了 —— 輸出方向必須照常。
+	b, mErr := json.Marshal(NewVenueView(&Venue{VenueID: "V1"}, AddressEvidence{CallerUserID: "U1"}))
+	if mErr != nil || !strings.Contains(string(b), `"venueId":"V1"`) {
+		t.Fatalf("正控失敗：輸出方向也壞了（err=%v, out=%s）", mErr, b)
+	}
+}
