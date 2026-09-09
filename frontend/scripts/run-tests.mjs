@@ -52,7 +52,7 @@ const MIN = [22, 18, 0];
 const DEFAULT_TARGETS = [
     // [A3-a] 2026-09-06 加了 createGroupForm.test.ts（26 條）⇒ min 3→4（檔數那道跟著抬）。
     //   ⚠️ minTests **維持 20**，刻意不動：見下面那列單檔 target。
-    { glob: 'utils/*.test.ts', min: 4, minTests: 20 },
+    { glob: 'utils/*.test.ts', min: 5, minTests: 20 },
     // [A3-a] 2026-09-06 新增這一列，取代「把全域 minTests 抬到 270」那個作法。
     //   要擋的風險是「createGroupForm.test.ts 這份回歸網整個消失／被清空」——
     //   而全域總數對它幾乎沒有鑑別力：當時 291 條，抬到 270 只留 21 條餘裕，
@@ -64,6 +64,11 @@ const DEFAULT_TARGETS = [
     //   ⚠️ 檔被整個刪掉時走的是 min 那道：expandTarget 對不含 * 的字面路徑回 []，
     //      0 < 1 ⇒ rc=2（不是靠 minTests）。
     { glob: 'utils/createGroupForm.test.ts', min: 1, minTests: 20 },
+    // [B1-j1] 2026-09-09 新增 venueView.test.ts（28 條）⇒ 上面那條的 min 4→5。
+    //   照本檔「誰的下限就數誰」的原則另立一列：這份守的是 venue 那條路徑上
+    //   四個「兩種情況長得一樣」的坑（地址／評價／分頁／type），
+    //   而全域 minTests 20 對「這 28 條被整個清空」零鑑別力（其他檔加起來遠超過 20）。
+    { glob: 'utils/venueView.test.ts', min: 1, minTests: 24 },
     // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）
     { glob: 'engine/*.test.ts', min: 2, minTests: 9 },
 ];

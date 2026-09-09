@@ -9,6 +9,7 @@ import { clientPlatformHeader } from '../utils/clientPlatform';
 import { authParamFor } from '../utils/authParam';
 import type { CorrectionPayload } from '../utils/voiceCorrection';
 import type { MetricEventPayload } from '../utils/voiceTaiMetrics';
+import type { CreateVenuePayload } from '../types';
 import {
   MAINTENANCE_EVENT,
   MAINTENANCE_CLEAR_EVENT,
@@ -975,4 +976,60 @@ export async function postVoiceTaiEvent(payload: MetricEventPayload) {
 
 export async function getRuleset(): Promise<ApiResponse> {
   return apiRequest('/ruleset', { method: 'GET' });
+}
+
+
+// ============ 場地 venue（[B1-j1]）============
+// 正典 /opt/sml/repo/tools/ryojaku-webapp/PLAYER_APP_REDESIGN.md §5.3。
+//
+// 🔴 這三支刻意是**薄的**：不解釋回應、不合併形狀、不做任何「沒有地址就顯示…」
+//    的判斷。理由與 getRuleset() 那條相同 —— `services/` 不在 run-tests.mjs 的
+//    glob 裡，寫在這裡的判斷沒有尺量得到。判讀一律在 utils/venueView.ts。
+//
+// 🔴 三支的 authorizer **不一樣**，不要看成同一組：
+//    - venue-list   : 公開，**刻意沒有** authorizer（回白名單型別 PublicVenueCard）
+//    - venue-detail : 要登入。它的全部價值在 CanSeeExactAddress，而那個判斷的
+//                     第一個輸入就是 caller userId ⇒ 沒有 authorizer 時每個人都
+//                     被判成匿名，連已核准的玩家都拿不到地址（§5.3 那段紅字）。
+//    - create-venue : 要登入（ownerId 從 JWT 取，body 上根本沒有那個欄位）。
+
+/**
+ * 公開場地列表。`nextToken` 為空才代表掃完了 ——
+ * 🔴 **不要**用 `venues.length === 0` 當終止條件（§5.3）。翻頁決策走
+ * utils/venueView.ts 的 `nextPageDecision()`，那裡有尺。
+ */
+export async function listVenues(params: { limit?: number; nextToken?: string } = {}): Promise<ApiResponse> {
+  const q = new URLSearchParams();
+  if (params.limit) q.append('limit', String(params.limit));
+  if (params.nextToken) q.append('nextToken', params.nextToken);
+  const qs = q.toString();
+  return apiRequest(`/venue-list${qs ? `?${qs}` : ''}`, { method: 'GET' });
+}
+
+/**
+ * 單一場地。`gameId` 是**自建場地址授權**的憑據：後端會拿它去讀那一局的 venueId
+ * 與你的報名狀態（AddressEvidence），不帶就一定拿不到自建場的地址。
+ *
+ * ⚠️ 麻將館／活動場不需要帶 —— 它們走 `allow:public-venue` 那條。
+ * ⚠️ 回應的 `exactAddress` **鍵不存在就是沒授權**（值可能是空字串且那是另一回事）。
+ */
+export async function getVenueDetail(venueId: string, gameId?: string): Promise<ApiResponse> {
+  return apiRequest('/venue-detail', {
+    method: 'POST',
+    body: JSON.stringify(gameId ? { venueId, gameId } : { venueId }),
+  });
+}
+
+/**
+ * 建立場地。
+ *
+ * ⚠️ 建出來的 `status` **由後端依 type 決定**，不是這裡送的：
+ *    hall → `pending`（要人審，後台 https://ryojaku-console.boyplaymj.com）／
+ *    home・event → `active`。前端不要自己預測那個值，讀回應裡的 status。
+ */
+export async function createVenue(payload: CreateVenuePayload): Promise<ApiResponse> {
+  return apiRequest('/create-venue', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

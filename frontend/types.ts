@@ -220,3 +220,88 @@ export interface CreatePostPayload {
   images?: string[];
   tags?: string[];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Venue（場地）—— [B1-j1]。正典：tools/ryojaku-webapp/PLAYER_APP_REDESIGN.md §5
+//
+// 🔴 這裡刻意分成**兩個**型別，對應後端**兩條不同的路徑**，不要合併：
+//   - `PublicVenueCard`  ← GET  /venue-list  （公開，無 authorizer）
+//   - `VenueDetail`      ← POST /venue-detail（要登入，地址授權在這裡）
+//
+// 後端 `shared.PublicVenueCard` 是**白名單型別**（獨立宣告、不嵌入 Venue），
+// 結構上不含 exactAddress／ownerId／phone／status。前端若把兩者合成一個型別，
+// 「列表沒有 status」這件事就變成 optional 欄位，而 `status === undefined`
+// 與「這筆真的是 pending」在畫面上會長得一樣。⇒ 分開宣告，少一種要分辨的形狀。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** §5.1 三分類。🔴 **沒有 dojo** —— 道館是 hall 的一種狀態（§5.2），不是第四種 type。 */
+export type VenueType = 'hall' | 'home' | 'event';
+
+/** §5.3。`rejected`（審核不通過）與 `suspended`（上線後停權）刻意分開。 */
+export type VenueStatus = 'pending' | 'active' | 'rejected' | 'suspended';
+
+export interface VenueLocation {
+  latitude: number;
+  longitude: number;
+  /** 可公開的稱呼（店名／「大安區」），**不是**門牌。 */
+  placeName?: string;
+  geohash?: string;
+}
+
+/** GET /venue-list 的一張卡片。欄位一對一對應後端 `shared.PublicVenueCard`。 */
+export interface PublicVenueCard {
+  venueId: string;
+  /** 後端回的是字串；不宣告成 VenueType 是因為它可能是我們還不認得的值。 */
+  type: string;
+  name: string;
+  approxLocation: VenueLocation;
+  features?: string[];
+  isDojo: boolean;
+  ratingPositive: number;
+  ratingCount: number;
+}
+
+/** GET /venue-list 的一頁。`nextToken` 為空才是「掃完了」（見 utils/venueView.ts）。 */
+export interface VenueListPage {
+  venues: PublicVenueCard[];
+  nextToken?: string;
+}
+
+/**
+ * POST /venue-detail 的 data。對應後端 `shared.VenueView`（Venue ＋ 外層 exactAddress）。
+ *
+ * 🔴 `exactAddress` 是 optional **而且那個 optional 本身就是授權訊號**：
+ * 後端在沒授權時讓整個鍵不存在、放行時鍵一定存在（即使值是空字串）。
+ * ⇒ 不要用 `if (!v.exactAddress)` 判斷 —— 那會把「被擋」與「主揪還沒填」
+ * 合成同一格。判讀一律走 `utils/venueView.ts` 的 `readAddressState()`。
+ */
+export interface VenueDetail {
+  venueId: string;
+  type: string;
+  name: string;
+  phone?: string;
+  businessHours?: string;
+  approxLocation: VenueLocation;
+  features?: string[];
+  ownerId: string;
+  dojoPaidUntil?: number;
+  certifiedRefereeCount: number;
+  isDojo: boolean;
+  ratingPositive: number;
+  ratingCount: number;
+  createdAt: number;
+  updatedAt: number;
+  status: string;
+  exactAddress?: string;
+}
+
+/** POST /create-venue 的請求。對應後端窄 DTO `shared.CreateVenueRequest`。 */
+export interface CreateVenuePayload {
+  type: VenueType;
+  name: string;
+  phone?: string;
+  businessHours?: string;
+  approxLocation: VenueLocation;
+  exactAddress?: string;
+  features?: string[];
+}
