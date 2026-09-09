@@ -85,9 +85,16 @@ const (
 )
 
 // VenueStatus constants
+//
+// 🔴 `rejected` 是 [B1-f2] 新增的，與 `suspended` **刻意分開**：
+// 「審核不通過」與「曾經上線後來被停權」對玩家的效果相同（都拿不到地址），
+// 但對營運是兩件事 —— 前者要看的是「我們的審核標準是不是太嚴」，
+// 後者要看的是「上線之後出了什麼事」。合成一個值的話，後台兩者逐字相同，
+// 而那個區別事後補不回來（沒有欄位記得它曾經是哪一種）。
 const (
 	VenueStatusPending   = "pending"
 	VenueStatusActive    = "active"
+	VenueStatusRejected  = "rejected"
 	VenueStatusSuspended = "suspended"
 )
 
