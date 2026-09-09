@@ -2,7 +2,9 @@ package shared
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -375,5 +377,43 @@ func TestVenueView_UnmarshalIsRefused(t *testing.T) {
 	b, mErr := json.Marshal(NewVenueView(&Venue{VenueID: "V1"}, AddressEvidence{CallerUserID: "U1"}))
 	if mErr != nil || !strings.Contains(string(b), `"venueId":"V1"`) {
 		t.Fatalf("正控失敗：輸出方向也壞了（err=%v, out=%s）", mErr, b)
+	}
+}
+
+// 白名單與常數必須同步。
+//
+// 🔴 掃的是**常數定義行**（`\tAddressXxx = "`），不是「哪裡提到這個字」——
+// 註解以 // 開頭，不會長成這個形狀，所以這裡沒有「提及 vs 接線」那個問題。
+// 反控在下面：掃不到任何定義就判紅（regex 漂掉與「真的沒有常數」逐字相同）。
+func TestAddressReasons_WhitelistMatchesConstants(t *testing.T) {
+	src, err := os.ReadFile("venue_address.go")
+	if err != nil {
+		t.Fatalf("讀不到原始碼（設備問題，不是通過）：%v", err)
+	}
+	re := regexp.MustCompile(`(?m)^\tAddress(?:Allow|Deny)[A-Za-z]+\s+= "`)
+	n := len(re.FindAllString(string(src), -1))
+	if n == 0 {
+		t.Fatal("掃不到任何 reason 常數定義 ⇒ 這把尺失明了（regex 漂掉？）")
+	}
+	if n != AddressReasonCount() {
+		t.Fatalf("常數有 %d 個，白名單有 %d 個 ⇒ 新增 reason 忘了加進 addressReasons，"+
+			"它會被稽核行記成 unknown 而靜靜失去資訊", n, AddressReasonCount())
+	}
+	// 正控：每一個常數都真的在白名單裡（數目對不代表內容對）。
+	for _, r := range []string{
+		AddressAllowOwner, AddressAllowPublicVenue, AddressAllowAcceptedReg,
+		AddressDenyNilVenue, AddressDenyAnonymous, AddressDenyVenueNotActive,
+		AddressDenyUnknownType, AddressDenyNoRegistration, AddressDenyRegNotCaller,
+		AddressDenyRegOtherGame, AddressDenyGameOtherVenue, AddressDenyRegNotAccepted,
+	} {
+		if !IsKnownAddressReason(r) {
+			t.Errorf("常數 %q 不在白名單裡", r)
+		}
+	}
+	// 反控：不是 reason 的東西不可以通過。
+	for _, bad := range []string{"", "allow", "台北市某路9號", "allow:owner\n偽造"} {
+		if IsKnownAddressReason(bad) {
+			t.Errorf("%q 不該被當成合法 reason", bad)
+		}
 	}
 }

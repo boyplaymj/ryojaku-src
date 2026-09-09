@@ -105,12 +105,26 @@ func buildAddressEvidence(ctx context.Context, src evidenceSource, callerUserID,
 
 // addressAuditLine 組出地址授權的稽核行。
 //
-// 🔴 抽成函式的理由是**簽章本身就是守衛**：它只吃兩個字串，
-// 呼叫端沒有辦法「順手」把 venueId／地址／userId 傳進來。
-// 用「掃原始碼看有沒有出現 venueId」當守衛在這裡行不通 ——
-// 上面那段註解裡就有 `venueId` 這個字，文字偵測器分不出「提及」與「接線」。
-// 有測試釘住參數個數：加第三個參數就紅。
+// 🔴 **訂正（收 Codex 覆驗，2026-09-09）**：這裡原本寫「簽章本身就是守衛，
+// 呼叫端沒辦法順手把 venueId／地址／userId 傳進來」—— **那句話是錯的**。
+// 兩個參數都是 `string`，`addressAuditLine(v.ExactAddress, v.Type)` 照樣編譯，
+// 而那條「只吃 2 個 string 參數」的反射測試照樣綠（實測 FAIL=0）。
+// **參數個數對「傳錯東西」零鑑別力。**
+//
+// ⇒ 真正承擔「不記敏感值」的是**值域白名單**：兩個欄位都必須落在已知集合裡，
+// 否則記成 `unknown`。所以就算有人把地址傳進來，寫出去的也只是 `unknown`。
+// 順帶擋掉日誌注入 —— 含換行的值不在白名單裡。
+//
+// ⚠️ 代價：新增 reason 常數而忘了加進 shared 的 map，這裡會把它記成 `unknown`
+//
+//	（fail-safe 方向，但會失去資訊）⇒ shared 那邊有一條測試掃常數定義比對大小。
 func addressAuditLine(reason, venueType string) string {
+	if !shared.IsKnownAddressReason(reason) {
+		reason = "unknown"
+	}
+	if !shared.IsValidVenueType(venueType) {
+		venueType = "unknown"
+	}
 	return fmt.Sprintf("[venue-address] reason=%s type=%s", reason, venueType)
 }
 

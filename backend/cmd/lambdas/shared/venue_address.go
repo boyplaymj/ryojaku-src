@@ -56,6 +56,43 @@ const (
 	AddressDenyRegNotAccepted = "deny:registration-not-accepted"
 )
 
+// addressReasons 是 reason 的**完整值域**（白名單）。
+//
+// 🔴 它存在的理由是一次覆驗抓到的缺陷（Codex，2026-09-09）：
+// 端點那邊原本有一個 `addressAuditLine(reason, venueType string)`，我宣稱
+// 「簽章本身就是守衛，呼叫端沒辦法把敏感值傳進來」—— **那句話是錯的**。
+// 兩個參數都是 `string`，`addressAuditLine(v.ExactAddress, v.Type)` 照樣編譯，
+// 而我那條「只吃 2 個 string 參數」的反射測試照樣綠（實測 FAIL=0）。
+// 參數**個數**對「傳錯東西」零鑑別力。
+//
+// ⇒ 真正能承擔「不記敏感值」的守衛是**值域白名單**：不在這裡面的一律記成
+// `unknown`，所以就算有人把地址傳進去，出去的也只是 `unknown`。
+// 順帶擋掉日誌注入（含換行的值不在白名單裡）。
+//
+// ⚠️ 這份 map 是手打的 ⇒ 有測試掃原始碼數常數定義的行數，與 map 大小比對；
+//
+//	新增 reason 常數而忘了加進來，那條會紅。
+var addressReasons = map[string]bool{
+	AddressAllowOwner:         true,
+	AddressAllowPublicVenue:   true,
+	AddressAllowAcceptedReg:   true,
+	AddressDenyNilVenue:       true,
+	AddressDenyAnonymous:      true,
+	AddressDenyVenueNotActive: true,
+	AddressDenyUnknownType:    true,
+	AddressDenyNoRegistration: true,
+	AddressDenyRegNotCaller:   true,
+	AddressDenyRegOtherGame:   true,
+	AddressDenyGameOtherVenue: true,
+	AddressDenyRegNotAccepted: true,
+}
+
+// IsKnownAddressReason 回報 s 是不是合法的 reason 值。
+func IsKnownAddressReason(s string) bool { return addressReasons[s] }
+
+// AddressReasonCount 是值域大小，給「map 與常數同步」那條測試用。
+func AddressReasonCount() int { return len(addressReasons) }
+
 // registrationStatusAccepted 對應 models.go 裡 Registration.Status 的 "accepted"。
 // models.go 只在註解列出四種值、沒有常數；這裡不去動既有檔，只在本檔用一份。
 const registrationStatusAccepted = "accepted"

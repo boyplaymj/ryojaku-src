@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"reflect"
 	"strings"
@@ -257,27 +259,89 @@ func TestHandleDetail_ResolvesIsDojo(t *testing.T) {
 
 // --- 地址授權的稽核行（§13 那個盲區的最小補法）---
 
-// T11 稽核行帶得出 reason 與 type，且**結構上**不可能帶出敏感值。
-func TestAddressAuditLine(t *testing.T) {
-	got := addressAuditLine(shared.AddressDenyGameOtherVenue, shared.VenueTypeHome)
-	if !strings.Contains(got, shared.AddressDenyGameOtherVenue) {
-		t.Fatalf("稽核行少了 reason：%s", got)
+// T11 🔴 訂正（收 Codex 覆驗）：舊版斷言「只吃 2 個 string 參數」，而那對
+// 「傳錯東西」**零鑑別力** —— venueId／userId／地址全都是 string，
+// `addressAuditLine(v.ExactAddress, v.Type)` 照樣編譯、那條測試照樣綠（實測 FAIL=0）。
+// 換成 sentinel：真的把敏感值餵進去，斷言它出不來。
+func TestAddressAuditLine_SanitisesUnknownValues(t *testing.T) {
+	const secret = "台北市大安區某路99號5樓"
+
+	// 🔴 承重：把精確地址當 reason 傳進去，輸出不可以含它。
+	got := addressAuditLine(secret, shared.VenueTypeHome)
+	if strings.Contains(got, secret) {
+		t.Fatalf("敏感值被寫進稽核行：%s", got)
 	}
-	if !strings.Contains(got, shared.VenueTypeHome) {
-		t.Fatalf("稽核行少了 type：%s", got)
+	if !strings.Contains(got, "unknown") {
+		t.Fatalf("不在白名單的值應該記成 unknown，得到：%s", got)
 	}
-	// 🔴 承重：**簽章就是守衛**。只吃兩個 string ⇒ 呼叫端沒辦法順手把
-	// venueId／地址／userId 傳進來。加第三個參數這條就紅。
-	//
-	// 為什麼不用「掃原始碼看有沒有 venueId」：那個函式上方的註解裡就有這個字，
-	// 文字偵測器分不出「提及」與「接線」。
+	// type 那一欄同理（venueId、userId 也都是 string，一樣走這條）。
+	got2 := addressAuditLine(shared.AddressAllowOwner, "V_偷渡的venueId")
+	if strings.Contains(got2, "V_偷渡的venueId") {
+		t.Fatalf("type 欄沒有被白名單擋下：%s", got2)
+	}
+
+	// 🔴 日誌注入：含換行的值會偽造出第二行日誌。
+	got3 := addressAuditLine("allow:owner\n[venue-address] reason=allow:owner type=hall", shared.VenueTypeHall)
+	if strings.Count(got3, "\n") != 0 {
+		t.Fatalf("稽核行含換行 ⇒ 可以偽造日誌：%q", got3)
+	}
+
+	// 正控（兩個方向都要）：合法值必須**原樣**出現，否則上面全部可以靠
+	// 「一律回 unknown」通過，而那會讓這條日誌完全沒有資訊。
+	ok := addressAuditLine(shared.AddressDenyGameOtherVenue, shared.VenueTypeHome)
+	if !strings.Contains(ok, shared.AddressDenyGameOtherVenue) {
+		t.Fatalf("合法 reason 沒有原樣出現：%s", ok)
+	}
+	if !strings.Contains(ok, shared.VenueTypeHome) {
+		t.Fatalf("合法 type 沒有原樣出現：%s", ok)
+	}
+	if strings.Contains(ok, "unknown") {
+		t.Fatalf("合法值不該被記成 unknown：%s", ok)
+	}
+
+	// ⚠️ 參數個數那條保留，但它守的**只是**「有人加第三個參數」，
+	//    不守「傳錯東西」—— 兩者是不同的失效模式，別再把它當後者的尺。
 	ft := reflect.TypeOf(addressAuditLine)
 	if n := ft.NumIn(); n != 2 {
-		t.Fatalf("addressAuditLine 應該只吃 2 個參數，實際 %d ⇒ 有人把別的東西傳進稽核行了", n)
+		t.Fatalf("addressAuditLine 應該只吃 2 個參數，實際 %d", n)
 	}
-	for i := 0; i < ft.NumIn(); i++ {
-		if ft.In(i).Kind() != reflect.String {
-			t.Fatalf("第 %d 個參數不是 string（%v）⇒ 可能是整個 venue 被傳進來了", i, ft.In(i))
-		}
+}
+
+// T12 🔴 對應 Codex 那一發：測的是**生產路徑實際寫出去的日誌**，不是函式本身。
+//
+// T11 守的是「函式被餵到敏感值時不會吐出來」，但那一發改的是**呼叫端**
+// （`addressAuditLine(v.ExactAddress, v.Type)`）—— 呼叫端傳什麼，T11 看不到。
+// 這條捕獲 handleDetail 真正寫進 log 的每一個字元。
+func TestHandleDetail_LogNeverContainsAddress(t *testing.T) {
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(old); log.SetFlags(log.LstdFlags) })
+
+	v := homeVenue() // ExactAddress = homeAddr
+	s := &spySource{venueToReturn: v, gameVenueID: "V1", regToReturn: acceptedReg("U-玩家", "G1")}
+	if _, err := handleDetail(context.Background(), s, "U-玩家",
+		VenueDetailRequest{VenueID: "V1", GameID: "G1"}, 1000); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, homeAddr) {
+		t.Fatalf("🔴 精確地址被寫進日誌：%q", out)
+	}
+	if strings.Contains(out, "U-屋主") || strings.Contains(out, "U-玩家") {
+		t.Fatalf("🔴 userId 被寫進日誌：%q", out)
+	}
+	if strings.Contains(out, "V1") {
+		t.Fatalf("🔴 venueId 被寫進日誌：%q", out)
+	}
+	// 正控：日誌**確實有寫東西**，而且是我們要的那一行。
+	// 少了它，「handler 根本沒 log」也會讓上面三條全綠。
+	if !strings.Contains(out, "[venue-address]") {
+		t.Fatalf("正控失敗：稽核行根本沒寫出來 ⇒ 上面三條證明不了任何事：%q", out)
+	}
+	if !strings.Contains(out, shared.AddressAllowAcceptedReg) {
+		t.Fatalf("正控失敗：日誌裡沒有預期的 reason：%q", out)
 	}
 }
