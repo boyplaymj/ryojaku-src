@@ -70,9 +70,31 @@ echo "── C2 反控：不存在的路徑必須是 403，不是 401"
 echo "   （若它也回 401，代表 401 沒有鑑別力，上面全部作廢）"
 hit definitely-not-a-route-xyz 403 "不存在的路徑"
 
+# ── 唯一能在沒有 token 的情況下證明「lambda 真的執行了」的一項 ──
+#
+# 🔴 上面每一項驗到的其實都只是 **API Gateway**：401 是 authorizer 回的、
+#    403 是 gateway 說「沒這條路由」—— 兩者都**沒有呼叫到 lambda**。
+#    也就是說前面全綠時，函式本身仍然可能是壞的（panic、缺環境變數、讀不到表）。
+#
+# venue-list 沒有 authorizer ⇒ 請求會一路打進 lambda ⇒ 它的 body 是唯一的證據。
+echo "── L1 lambda 真的執行了嗎（body，不只是狀態碼）"
+lbody=$(mktemp)
+lcode=$(curl -s -o "$lbody" -w '%{http_code}' "$API/venue-list" --max-time 20)
+if [ "$lcode" != "200" ]; then
+  printf '  ❌ venue-list 回 %s，拿不到 body ⇒ 這一項無法判斷\n' "$lcode"
+  fail=$((fail+1))
+elif grep -q '"success":true' "$lbody"; then
+  printf '  ✅ body 含 "success":true ⇒ 函式跑起來、也讀得到 DDB\n     %s\n' "$(head -c 160 "$lbody")"
+else
+  printf '  ❌ 200 但 body 不是我們的格式 ⇒ 可能是 gateway 的預設回應或函式錯誤\n     %s\n' "$(head -c 200 "$lbody")"
+  fail=$((fail+1))
+fi
+rm -f "$lbody"
+
 if [ "$fail" -eq 0 ]; then
-  echo "✅ 6/6 通過：四支路由已建上；三支的 authorizer 在擋，venue-list 刻意開放。"
-  echo "⚠️ 界線：這**沒有**驗到業務邏輯、DDB 讀寫、或地址授權判斷 —— 那些要真 token。"
+  echo "✅ 7/7 通過：四支路由已建上；三支的 authorizer 在擋，venue-list 刻意開放且函式確實執行。"
+  echo "⚠️ 界線：三支帶閘的端點**只驗到 gateway**（401 是 authorizer 回的，lambda 沒被呼叫）；"
+  echo "   只有 venue-list 證明了函式執行。業務邏輯與地址授權判斷仍然要真 token 才驗得到。"
   exit 0
 fi
 echo "❌ $fail 項不符"
