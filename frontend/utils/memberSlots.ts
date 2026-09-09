@@ -37,11 +37,40 @@ export function resolveCapacity(maxMembers: unknown): number {
     return maxMembers;
 }
 
-/** 已加入人數：夾在 [0, capacity]。負數與非整數當 0，超過容量的夾到容量。 */
-export function resolveJoined(currentMembers: unknown, capacity: number): number {
-    if (typeof currentMembers !== 'number' || !Number.isFinite(currentMembers)) return 0;
+/** 已加入人數的下限。主揪本人 —— 見 `reportedJoined` 的兩條理由。 */
+export const MIN_JOINED = 1;
+
+/**
+ * 「已加入幾人」——**給文字看的**，只有下限沒有上限。
+ *
+ * 🔴 **下限是 1，而且這是有兩個獨立理由的，不是保守取整**：
+ * ① **後端不變式**：建局時就設 `CurrentPlayers: 1`（`create_game/main.go:366`），
+ *    主揪本人必計入 ⇒ 合法資料不可能是 0。
+ * ② 🔴 **圖層結構上表達不出「主揪不在」**：`public/userJoin/` 只有
+ *    `icon-watiing_lightMode_selfIcon-No1@3x.png`，**座位 1 沒有 empty 圖**
+ *    ⇒ 第一格永遠畫得出人。若文字說「已加入 0/2」而圖上主揪明明在，
+ *    那是**畫面自己跟自己矛盾**，比「把一個 0 蓋掉」更糟。
+ * ⚠️ **代價寫清楚**：`currentMembers = 0`（壞資料）會被顯示成 1，**這一格是被遮住的**。
+ *    遮它是因為另一個選項（讓文字與圖打架）沒有更好，不是因為 0 不重要。
+ *
+ * 🔴 **沒有上限**：`已加入 9/4` 這種數字**要讓它露出來**。
+ *    夾成 `4/4` 會把「資料壞了」顯示成「這局滿了」—— 那是把異常偽裝成正常。
+ *    （後端在核准時擋 `>= PlayersNeeded+1`（`web_register/main.go:501`），
+ *    所以超容量本來就代表某處出錯了，不該被畫面吸收掉。）
+ */
+export function reportedJoined(currentMembers: unknown): number {
+    if (typeof currentMembers !== 'number' || !Number.isFinite(currentMembers)) return MIN_JOINED;
     const n = Math.floor(currentMembers);
-    if (n < 0) return 0;
+    return n < MIN_JOINED ? MIN_JOINED : n;
+}
+
+/**
+ * 要畫幾格是滿的 —— **給圖看的**，夾在 `[MIN_JOINED, capacity]`。
+ * 🔴 與 `reportedJoined` 分成兩支是刻意的：**畫不出第 9 格**，但**說得出「9」**。
+ *    合成一支的話，上限就會同時吃掉文字那一邊，異常又被藏回去。
+ */
+export function slotFillCount(currentMembers: unknown, capacity: number): number {
+    const n = reportedJoined(currentMembers);
     return n > capacity ? capacity : n;
 }
 
@@ -60,7 +89,7 @@ export interface MemberSlot {
  */
 export function buildMemberSlots(maxMembers: unknown, currentMembers: unknown): MemberSlot[] {
     const capacity = resolveCapacity(maxMembers);
-    const joined = resolveJoined(currentMembers, capacity);
+    const joined = slotFillCount(currentMembers, capacity);
     return Array.from({ length: capacity }, (_, i) => {
         const seat = i + 1;
         return { seat, filled: seat <= joined, isHost: seat === 1 };
@@ -81,6 +110,6 @@ export function memberSlotIcon(slot: MemberSlot): string {
  *    報名只建 pending，核准才進人數。寫「已報名」會讓主揪以為待審的人已經算進去了。
  */
 export function memberCountLabel(maxMembers: unknown, currentMembers: unknown): string {
-    const capacity = resolveCapacity(maxMembers);
-    return `已加入 ${resolveJoined(currentMembers, capacity)}/${capacity}`;
+    // 文字用 reportedJoined（無上限），不是 slotFillCount —— 見 reportedJoined 的說明。
+    return `已加入 ${reportedJoined(currentMembers)}/${resolveCapacity(maxMembers)}`;
 }

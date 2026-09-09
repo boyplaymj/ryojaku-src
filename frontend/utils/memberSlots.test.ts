@@ -10,7 +10,9 @@ import {
     MAX_CAPACITY,
     CAPACITY_FALLBACK,
     resolveCapacity,
-    resolveJoined,
+    reportedJoined,
+    slotFillCount,
+    MIN_JOINED,
     buildMemberSlots,
     memberSlotIcon,
     memberCountLabel,
@@ -59,14 +61,44 @@ test('A2s4-5 合法容量原樣回來（反控：上面那條不是把所有輸�
     assert.equal(MAX_CAPACITY, 4);
 });
 
-test('A2s4-6 joined 夾在 [0, capacity]', () => {
-    assert.equal(resolveJoined(-5, 4), 0);
-    assert.equal(resolveJoined(0, 4), 0);
-    assert.equal(resolveJoined(9, 4), 4, '超過容量要夾住，否則畫不出來的人會消失得沒有徵兆');
-    assert.equal(resolveJoined(3, 2), 2);
-    assert.equal(resolveJoined(NaN, 4), 0);
-    assert.equal(resolveJoined(undefined as unknown, 4), 0);
-    assert.equal(resolveJoined(2.7, 4), 2, '非整數往下取');
+test('A2s4-6 畫幾格滿：夾在 [1, capacity]', () => {
+    assert.equal(slotFillCount(-5, 4), 1);
+    assert.equal(slotFillCount(9, 4), 4, '畫不出第 9 格');
+    assert.equal(slotFillCount(3, 2), 2);
+    assert.equal(slotFillCount(NaN, 4), 1);
+    assert.equal(slotFillCount(undefined as unknown, 4), 1);
+    assert.equal(slotFillCount(2.7, 4), 2, '非整數往下取');
+    assert.equal(slotFillCount(3, 4), 3, '反控：不是所有輸入都被夾成 1 或 capacity');
+});
+
+test('A2s4-10 主揪必計入：currentMembers=0／壞值 → 已加入至少 1（收 Codex 覆驗）', () => {
+    // 🔴 兩個獨立理由：①後端建局就設 CurrentPlayers:1
+    //    ②public/userJoin/ 沒有座位 1 的 empty 圖 ⇒ 圖上主揪永遠在，
+    //      文字說 0 就是畫面自己跟自己矛盾。
+    // ⚠️ 這條同時釘住「壞資料的 0 被遮住」這個已知代價 —— 那是刻意的，不是漏看。
+    for (const bad of [0, -1, NaN, undefined, null, 'x', {}]) {
+        assert.equal(reportedJoined(bad as unknown), 1, JSON.stringify(bad));
+    }
+    assert.equal(MIN_JOINED, 1);
+    assert.equal(memberCountLabel(2, 0), '已加入 1/2', '不可以是 0/2');
+    // 第一格必須是滿的（否則圖與文字又打架）
+    assert.equal(buildMemberSlots(2, 0)[0].filled, true);
+});
+
+test('A2s4-11 反控：reportedJoined 不是「什麼都回 1」', () => {
+    // 少了這條，reportedJoined 直接 `return 1` 也會讓 A2s4-10 全綠。
+    assert.equal(reportedJoined(2), 2);
+    assert.equal(reportedJoined(4), 4);
+    assert.equal(reportedJoined(9), 9);
+});
+
+test('A2s4-12 超過容量的數字**要露出來**，不可以夾成 N/N（收 Codex 覆驗）', () => {
+    // 🔴 原本 label 會把 9/4 夾成 4/4 ——「資料壞了」被顯示成「這局滿了」。
+    //    我原本的測試註解還宣稱夾住是為了「不讓人消失得沒有徵兆」，那句話是反的。
+    assert.equal(memberCountLabel(4, 9), '已加入 9/4');
+    assert.equal(memberCountLabel(2, 5), '已加入 5/2');
+    // 但格子仍然只畫 capacity 個（畫不出第 9 格）
+    assert.equal(buildMemberSlots(4, 9).length, 4);
 });
 
 test('A2s4-7 圖檔路徑：主揪那格用 selfIcon，其餘依 filled 分兩組', () => {
@@ -91,7 +123,10 @@ test('A2s4-9 兩個元件真的用了這一份（接線，不是宣稱）', () =
     //    上面八條測試一條都不會紅 —— 「算得對」與「畫面用了它」在單元層逐字相同。
     for (const rel of ['../components/EventCard.tsx', '../components/EventDetailModal.tsx']) {
         const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
-        assert.ok(src.includes('buildMemberSlots'), `${rel} 沒有用 buildMemberSlots`);
+        // 🔴 收 Codex 覆驗：原本只查識別字出現 ⇒ 留一個沒用到的 import 或註解也會綠。
+        //    改成比對**呼叫式**（含左括號），而且要求它出現在 JSX 的 .map( 之前。
+        assert.match(src, /buildMemberSlots\s*\(/, `${rel} 沒有**呼叫** buildMemberSlots（只有名字不算）`);
+        assert.match(src, /buildMemberSlots\s*\([^)]*\)\s*\.map\s*\(/, `${rel} 有呼叫但沒有拿它的結果去畫格子`);
         // 硬寫的 No4 圖檔路徑必須已經消失（那是「四格寫死」的指紋）
         assert.ok(
             !src.includes('icon-userEmpty-No4@3x.png') && !src.includes('icon-userJoined-No4@3x.png'),
