@@ -9,6 +9,11 @@ import io, re, shutil, subprocess, sys, os
 FILES = {
     'view': ('utils/venueView.ts', 'utils/venueView.test.ts', '/tmp/venueView.ts.pristine', 'B1j'),
     'loc': ('utils/venueLocation.ts', 'utils/venueLocation.test.ts', '/tmp/venueLocation.ts.pristine', 'B1jL'),
+    # 頁面層：突變的是 pages/*.tsx，而咬它的尺（B1j-37 接線掃描）住在 venueView.test.ts。
+    # 🔴 這三個 key 存在的理由：純函式的 36 條對「頁面有沒有用它們」零鑑別力。
+    'pg_detail': ('pages/VenueDetail.tsx', 'utils/venueView.test.ts', '/tmp/VenueDetail.tsx.pristine', 'B1j'),
+    'pg_list': ('pages/VenueList.tsx', 'utils/venueView.test.ts', '/tmp/VenueList.tsx.pristine', 'B1j'),
+    'pg_create': ('pages/CreateVenue.tsx', 'utils/venueView.test.ts', '/tmp/CreateVenue.tsx.pristine', 'B1j'),
 }
 
 MUTANTS = [
@@ -75,6 +80,21 @@ MUTANTS = [
      'const MIN_COS_LAT = 0.01;', 'const MIN_COS_LAT = 0;', {6}),
     ('loc', 'L8', '認不得的 type 不模糊（fail-open）',
      '        default: {', "        case 'zzz-never': {", {9}),
+
+    # ---- 頁面接線（B1j-37）----
+    ('pg_detail', 'P1', '場地頁自己寫 if (!exactAddress)，不走判讀層',
+     'const head = venueHeadline(v);', 'const head = { emoji: "", typeLabel: "", name: v.name, badges: [], rating: { text: "" }, addressState: (v.exactAddress ? "granted" : "withheld-home") } as never;', {37}),
+    ('pg_list', 'P2', '列表改用「這一頁 0 筆就停」（§5.3 點名的坑，直接搬進頁面）',
+     'decision = nextPageDecision({ nextToken: token }, rounds);',
+     'decision = (pages[pages.length - 1].length === 0 ? "done" : "fetch") as never;', {37}),
+    ('pg_create', 'P3', '🔴 建立表單直接送精確座標（模糊化整段沒接上）',
+     'const loc = locationForSubmit(type, exact, name);',
+     'const loc = { approxLocation: { latitude: exact.latitude, longitude: exact.longitude }, blurred: false };', {37}),
+    # 🔴 這一發打的是**註解**：B1j-37 若沒把註解剝掉，改註解就會讓它綠得莫名其妙；
+    #    剝掉之後改註解**不該**有任何影響 ⇒ 預期存活。它是 P1~P3 的反控。
+    ('pg_detail', 'P4', '只動註解（預期存活：接線尺不該被註解左右）',
+     '// pages/VenueDetail.tsx — 場地頁（[B1-j2]）',
+     '// pages/VenueDetail.tsx — 場地頁（[B1-j2]）venueHeadline( addressCopy( isAddressVisible(', set()),
 ]
 
 def run_tests(key):

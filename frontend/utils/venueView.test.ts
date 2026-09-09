@@ -304,3 +304,43 @@ test('B1j-33 座標缺漏／NaN 也會被擋（不是只擋超出範圍）', () 
         assert.ok(validateCreateVenue({ type: 'hall', name: 'x', ...bad }), JSON.stringify(bad));
     }
 });
+
+test('B1j-37 三頁真的接上判讀層（掃原始碼，且先把註解拿掉）', () => {
+    // 🔴 純函式的 36 條測試對「頁面有沒有用它們」零鑑別力：VenueDetail.tsx 大可
+    //    自己寫一行 `if (!v.exactAddress)`，上面每一條照樣綠。e2e/venue.e2e.cjs 咬得住
+    //    detail／list 兩頁（真的開瀏覽器），但 **CreateVenue 不在那支裡**
+    //    （它要開 MapPicker，會真的抓圖磚）⇒ 這條是它唯一的接線尺。
+    //
+    // 🔴 **先把註解拿掉再比對**：這幾個檔的檔頭註解裡就寫著 `readAddressState()`
+    //    這種字樣，不剝註解的話「提到」與「呼叫」在偵測器眼裡逐字相同
+    //    （而那正是這種掃描最容易假綠的地方）。
+    const here = dirname(fileURLToPath(import.meta.url));
+    const stripComments = (src: string) =>
+        src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    const read = (...seg: string[]) => stripComments(readFileSync(join(here, '..', ...seg), 'utf8'));
+
+    const cases: [string, string[]][] = [
+        ['VenueDetail.tsx', ['venueHeadline(', 'addressCopy(', 'isAddressVisible(']],
+        ['VenueList.tsx', ['nextPageDecision(', 'shouldKeepScanning(', 'listEmptyCopy(', 'mergeVenuePages(']],
+        ['CreateVenue.tsx', ['validateCreateVenue(', 'locationForSubmit(', 'CREATABLE_VENUE_TYPES']],
+    ];
+    for (const [file, needles] of cases) {
+        const src = read('pages', file);
+        for (const n of needles) assert.ok(src.includes(n), `${file} 沒有呼叫 ${n}`);
+    }
+    // 🔴 偵測器自己的反控：它分不分得出「有」與「沒有」？
+    assert.equal(read('pages', 'VenueDetail.tsx').includes('venueGhostFunctionThatDoesNotExist('), false);
+    // 🔴 偵測器自己的反控 ②：**剝註解那一步真的有效嗎**。
+    //    少了這段，把 stripComments 改成 `s => s` 不會有任何測試紅 ——
+    //    而那正是這種掃描假綠的入口（註解裡寫著 `readAddressState()` 也會被算成接上了）。
+    //    ⚠️ 刻意用**合成輸入**直接打這個函式，不是去斷言某個真檔的註解裡有什麼字：
+    //      後者的前提會被一次無關的註解改寫靜靜推翻，而推翻之後它與「正常運作」逐字相同。
+    assert.equal(stripComments('// foo(\nbar(').includes('foo('), false, '單行註解沒被剝掉');
+    assert.equal(stripComments('/* foo( */\nbar(').includes('foo('), false, '區塊註解沒被剝掉');
+    assert.ok(stripComments('// foo(\nbar(').includes('bar('), '把程式碼也一起剝掉了');
+    // 而且它真的被套用在這三個檔上（剝完一定變短 —— 這三個檔都有大段檔頭註解）。
+    for (const [file] of cases) {
+        const rawLen = readFileSync(join(here, '..', 'pages', file), 'utf8').length;
+        assert.ok(read('pages', file).length < rawLen, `${file} 剝註解之後長度沒變 ⇒ 沒套用`);
+    }
+});

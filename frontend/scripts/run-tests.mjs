@@ -68,7 +68,7 @@ const DEFAULT_TARGETS = [
     //   照本檔「誰的下限就數誰」的原則另立一列：這份守的是 venue 那條路徑上
     //   四個「兩種情況長得一樣」的坑（地址／評價／分頁／type），
     //   而全域 minTests 20 對「這 28 條被整個清空」零鑑別力（其他檔加起來遠超過 20）。
-    { glob: 'utils/venueView.test.ts', min: 1, minTests: 24 },
+    { glob: 'utils/venueView.test.ts', min: 1, minTests: 30 },
     // [B1-j4] 自建場座標模糊化（§5.1 的硬規則）。10 條。
     { glob: 'utils/venueLocation.test.ts', min: 1, minTests: 8 },
     // 2 檔：mahjong-tai.test.ts（包裝層 4 條）＋ mahjong-tai-sync.test.ts（副本漂移守衛 5 條）

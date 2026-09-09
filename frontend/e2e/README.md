@@ -1,4 +1,4 @@
-# e2e/ — 發團表單的瀏覽器實跑驗收（**兩支**）
+# e2e/ — 玩家端頁面的瀏覽器實跑驗收
 
 > **這一塊的正典在別的 repo**：`/opt/sml/repo/tools/ryojaku-webapp/PLAYER_APP_REDESIGN.md`
 > —— 規格是 **§4.4「開局表單分段」**，分塊進度與**還沒做完的部分**是 **§15.2**。
@@ -12,12 +12,15 @@
 |---|---|---|---|
 | 建局精靈（`A3-c`～`A3-m`） | `createGroupWizard.harness.tsx` | `createGroupWizard.e2e.cjs` | 兩段精靈：第一段送出即建局、第二段可存可跳過 |
 | **編輯補充設定（`A3-p`/E5）** | `editGroupExtras.harness.tsx` | `editGroupExtras.e2e.cjs` | `/edit-group/:id`：既有宣告要**還原**，儲存不可整批洗掉 |
+| **場地（`B1-j6`）** | `venue.harness.tsx` | `venue.e2e.cjs` | `/venue/:id`／`/venues`：地址五態要說**不同**的話；列表不可用「這一頁 0 筆」當終止條件。正典 §5 |
 
 ```bash
 cd frontend
 npm run e2e                       # 預設＝建局那支（行為與過去逐字相同）
 E2E_HARNESS=e2e/editGroupExtras.harness.tsx \
 E2E_SPEC=editGroupExtras.e2e.cjs npm run e2e     # 編輯那支
+E2E_HARNESS=e2e/venue.harness.tsx \
+E2E_SPEC=venue.e2e.cjs npm run e2e                # 場地那支
 ```
 
 🔴 `run.sh` 生成的 harness html **檔名跟著 harness 走**（`_generated.<名>.harness.html`）。
