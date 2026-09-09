@@ -107,7 +107,11 @@ func initialVenueStatus(venueType string) string {
 // 所以「不小心讀了 body 的 ownerId」在這條路徑上寫不出來。
 //
 // 三條認證的原料一律零值：新建的 venue 不可能已付費、也不可能已經有裁判。
-func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, nowUnix int64) *Venue {
+//
+// 🔴 [B5-a] rnd 是**簽章參數**而不是可選項：ApproxLocation 在這裡經過
+// BlurredApproxLocation（§5.1 自建場位移 300–500m），而每一個呼叫端都被編譯器逼著
+// 對「隨機來源是什麼」做一次決定。生產傳 rand.Float64；測試傳固定序列。
+func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, nowUnix int64, rnd func() float64) *Venue {
 	if r == nil {
 		return nil
 	}
@@ -117,7 +121,7 @@ func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, n
 		Name:           strings.TrimSpace(r.Name),
 		Phone:          r.Phone,
 		BusinessHours:  r.BusinessHours,
-		ApproxLocation: r.ApproxLocation,
+		ApproxLocation: BlurredApproxLocation(r.Type, r.ApproxLocation, rnd),
 		ExactAddress:   strings.TrimSpace(r.ExactAddress),
 		Features:       r.Features,
 		OwnerID:        ownerID,

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"time"
@@ -78,6 +79,23 @@ func venueResponsePayload(v *shared.Venue, ev shared.AddressEvidence, nowUnix in
 	return shared.NewVenueView(v, ev)
 }
 
+// errVenueNotSelfServe 是 [B5-a] 自助路徑的第五條擋門訊息。
+//
+// 🔴 與 shared 的四條驗證訊息**不同**，而且刻意不放進 shared 的 Validate()：
+// event 仍然是合法 type（將來會有官方建立的路徑），不合法的是「玩家自己建它」。
+// 判準只有一份（shared.IsSelfServeVenueType）；這裡只是把它接到 HTTP 上。
+const errVenueNotSelfServe = "活動場由官方建立，不開放自助登錄"
+
+// selfServeGate 在 Validate() 通過**之後**再判一次：這種 type 玩家可不可以自己建。
+// 回空字串＝放行。抽成函式是為了讓「hall／home 放行、event 擋下」兩個方向都有尺，
+// 而不必在測試裡打到 DDB。
+func selfServeGate(venueType string) string {
+	if shared.IsSelfServeVenueType(venueType) {
+		return ""
+	}
+	return errVenueNotSelfServe
+}
+
 func respond(status int, body Response) (events.APIGatewayProxyResponse, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -125,9 +143,15 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if err := req.Validate(); err != nil {
 		return respond(validationStatus(err), Response{Error: err.Error()})
 	}
+	// 🔴 [B5-a] 自助路徑只收 hall／home。event 是官方建的（§5.1）：它 status 直接
+	// active、進公開列表、地址對所有登入者公開 ⇒ 讓玩家自己建等於免審公開一個地址。
+	if msg := selfServeGate(req.Type); msg != "" {
+		return respond(http.StatusBadRequest, Response{Error: msg})
+	}
 
 	now := time.Now().Unix()
-	v := shared.NewVenueFromCreateRequest(&req, "V_"+uuid.NewString(), userID, now)
+	// [B5-a] rand.Float64 是自建場座標位移的隨機源（shared.BlurredApproxLocation）。
+	v := shared.NewVenueFromCreateRequest(&req, "V_"+uuid.NewString(), userID, now, rand.Float64)
 
 	item, err := attributevalue.MarshalMap(v)
 	if err != nil {

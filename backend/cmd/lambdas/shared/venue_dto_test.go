@@ -73,7 +73,7 @@ func TestCreateVenueRequest_InjectedFieldsAreDropped(t *testing.T) {
 	if err := r.Validate(); err != nil {
 		t.Fatalf("這份 body 本身是合法的建立請求：%v", err)
 	}
-	v := NewVenueFromCreateRequest(&r, "V-伺服器產生的", "U-來自JWT", 1000)
+	v := NewVenueFromCreateRequest(&r, "V-伺服器產生的", "U-來自JWT", 1000, fixedRnd)
 
 	// 正控先行：確認 body 真的被解析了。少了它，Unmarshal 整個沒作用也會全綠。
 	if v.Name != "某某館" || v.ExactAddress != "台北市某路9號" {
@@ -109,7 +109,7 @@ func TestCreateVenueRequest_InjectedDojoNeverResolvesTrue(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &r); err != nil {
 		t.Fatal(err)
 	}
-	v := NewVenueFromCreateRequest(&r, "V1", "U1", 1000)
+	v := NewVenueFromCreateRequest(&r, "V1", "U1", 1000, fixedRnd)
 	v.ResolveIsDojo(1000)
 	if v.IsDojo {
 		t.Fatal("🔴 前端塞三條原料就拿到道館徽章")
@@ -153,7 +153,7 @@ func TestCreateVenueRequest_Validate(t *testing.T) {
 			}
 		})
 	}
-	if NewVenueFromCreateRequest(nil, "V", "U", 1) != nil {
+	if NewVenueFromCreateRequest(nil, "V", "U", 1, fixedRnd) != nil {
 		t.Fatal("nil 請求應該回 nil")
 	}
 	if (&CreateVenueRequest{}).Validate() == nil {
@@ -214,11 +214,15 @@ func TestInitialVenueStatus(t *testing.T) {
 // —— 函式寫對但沒接上，在上面那條是看不出來的。
 func TestNewVenueFromCreateRequest_StatusFollowsType(t *testing.T) {
 	hall := &CreateVenueRequest{Type: VenueTypeHall, Name: "館"}
-	if got := NewVenueFromCreateRequest(hall, "V1", "U1", 1).Status; got != VenueStatusPending {
+	if got := NewVenueFromCreateRequest(hall, "V1", "U1", 1, fixedRnd).Status; got != VenueStatusPending {
 		t.Fatalf("hall 建立後 status = %q，want pending", got)
 	}
 	home := &CreateVenueRequest{Type: VenueTypeHome, Name: "家", ExactAddress: "x"}
-	if got := NewVenueFromCreateRequest(home, "V2", "U1", 1).Status; got != VenueStatusActive {
+	if got := NewVenueFromCreateRequest(home, "V2", "U1", 1, fixedRnd).Status; got != VenueStatusActive {
 		t.Fatalf("home 建立後 status = %q，want active", got)
 	}
 }
+
+// fixedRnd 是既有測試用的固定隨機源：這些測試不在乎位移到哪裡，只在乎其他欄位。
+// 位移本身的尺在 venue_blur_test.go。
+func fixedRnd() float64 { return 0.5 }

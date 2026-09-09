@@ -155,3 +155,94 @@ var errUnknownForTest = &testErr{}
 type testErr struct{}
 
 func (*testErr) Error() string { return "某個沒想到的錯誤" }
+
+// --- [B5-a] 自助路徑只收 hall／home（正典 §5.1：活動場由官方建立）---
+
+// B5a-H1 承重：登入者送 type=event（其餘欄位全合法）要拿到 400 ＋ 自助擋門訊息，
+// 而且**在碰 DDB 之前**（dynamoClient 在測試裡是 nil，走到 PutItem 會回 500「建立失敗」，
+// 見 H2 —— 所以 400 就代表沒走到那一行）。
+func TestB5a_Handler_RejectsEventBeforeAnyIO(t *testing.T) {
+	resp, err := handler(context.Background(), events.APIGatewayProxyRequest{
+		HTTPMethod: http.MethodPost,
+		Body:       `{"type":"event","name":"官方盃","approxLocation":{"latitude":25,"longitude":121.5}}`,
+		RequestContext: events.APIGatewayProxyRequestContext{
+			Authorizer: map[string]interface{}{"userId": "U-玩家"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("event 自助建立應該 400，得到 %d（body=%s）", resp.StatusCode, resp.Body)
+	}
+	var body Response
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != errVenueNotSelfServe {
+		t.Fatalf("錯誤訊息 = %q，want %q", body.Error, errVenueNotSelfServe)
+	}
+	// 訊息要與既有四條驗證訊息不同 —— 否則前端分不出「type 打錯」與「這種 type 不給自助建」。
+	for _, e := range []error{shared.ErrVenueTypeInvalid, shared.ErrVenueNameRequired, shared.ErrVenueLatLngRange, shared.ErrVenueHomeNeedAddr} {
+		if body.Error == e.Error() {
+			t.Fatalf("自助擋門訊息與既有驗證訊息相同：%q", body.Error)
+		}
+	}
+}
+
+// B5a-H2 反控：hall／home 不可以被同一道門擋下。
+//
+// 🔴 少了這條，`selfServeGate` 一律回訊息（＝整個端點不能建任何場地）也會讓 H1 變綠。
+// 過了門之後會走到 PutItem；測試裡 dynamoClient 是 nil，**實測**它回 error 而不是 panic
+// （2026-09-09 用探針量過：status=500、error="建立失敗"）⇒ 這個 500 就是
+// 「確實過了門、走到 IO 那一行」的證據，而且與 400＋擋門訊息逐字不同。
+func TestB5a_Handler_HallAndHomePassTheGate(t *testing.T) {
+	bodies := map[string]string{
+		"hall": `{"type":"hall","name":"某館","approxLocation":{"latitude":25,"longitude":121.5}}`,
+		"home": `{"type":"home","name":"某家","exactAddress":"台北市某路9號","approxLocation":{"latitude":25,"longitude":121.5}}`,
+	}
+	for typ, b := range bodies {
+		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost, Body: b,
+			RequestContext: events.APIGatewayProxyRequestContext{
+				Authorizer: map[string]interface{}{"userId": "U-玩家"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body Response
+		if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode == http.StatusBadRequest && body.Error == errVenueNotSelfServe {
+			t.Fatalf("%s 被自助擋門攔下 ⇒ 這道門沒有在分辨 type", typ)
+		}
+		// 正控：要真的走到 PutItem（nil client ⇒ 500「建立失敗」）。
+		// 少了這條，上面那句對「handler 在更早的地方就回了別的 4xx」零鑑別力。
+		if resp.StatusCode != http.StatusInternalServerError || body.Error != "建立失敗" {
+			t.Fatalf("%s 沒有走到 PutItem：status=%d body=%s", typ, resp.StatusCode, resp.Body)
+		}
+	}
+}
+
+// B5a-H3 純函式那一層：三種 type 逐格，含認不得的 type（fail-closed 擋下）。
+func TestB5a_SelfServeGate_Matrix(t *testing.T) {
+	cases := map[string]bool{ // type → 要不要擋
+		shared.VenueTypeHall:  false,
+		shared.VenueTypeHome:  false,
+		shared.VenueTypeEvent: true,
+		"dojo":                true,
+		"":                    true,
+	}
+	for typ, blocked := range cases {
+		got := selfServeGate(typ) != ""
+		if got != blocked {
+			t.Errorf("selfServeGate(%q) 擋=%v，want %v", typ, got, blocked)
+		}
+	}
+	// 反控：hall 與 event 不可以拿到同一個結果 —— 否則上面一半的格子是自動成立的。
+	if (selfServeGate(shared.VenueTypeHall) != "") == (selfServeGate(shared.VenueTypeEvent) != "") {
+		t.Fatal("hall 與 event 的擋門結果相同 ⇒ 這道門沒有在分辨 type")
+	}
+}
