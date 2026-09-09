@@ -143,6 +143,26 @@ test('A2a1-6d 台北日界與週界（Q1=A 固定 +8、Q2=A 週一起算）', ()
     assert.equal(new Date(taipeiDayStart(taipeiEarly)).toISOString(), '2026-09-03T16:00:00.000Z');
 });
 
+test('A2a1-6e ONGOING 桶內是**降序**：最近開始的在最上面（突變 M4 補的尺）', () => {
+    // 🔴 這條是突變測試逼出來的：改判當下「ONGOING 降序」只寫在註解裡，
+    //    而 A2a1-6 的整串排序裡**只有一場**進行中的局 ⇒ 桶內排序結構上求值不到，
+    //    把它改成升序四條測試全綠。有主張就要有尺。
+    const events = [
+        { id: 'started-5h', status: 'recruiting', date: iso(-5 * HOUR) },
+        { id: 'started-1h', status: 'recruiting', date: iso(-1 * HOUR) },
+        { id: 'started-3h', status: 'full',       date: iso(-3 * HOUR) },
+    ];
+    assert.deepEqual(sortMyGames(events, NOW).map(e => e.id),
+        ['started-1h', 'started-3h', 'started-5h'],
+        '最近開始的最可能是「人現在就在那張桌子上」的那一局');
+    // 反控：DONE 桶也是降序，但 TODAY／THIS_WEEK 是升序 —— 三者不可以同向
+    const upcoming = [
+        { id: 'later',  status: 'recruiting', date: iso(+5 * HOUR) },
+        { id: 'sooner', status: 'recruiting', date: iso(+1 * HOUR) },
+    ];
+    assert.deepEqual(sortMyGames(upcoming, NOW).map(e => e.id), ['sooner', 'later'], '未開始的是升序');
+});
+
 test('A2a1-7 壞日期的局排在整串最底（epoch 0 ⇒ 遠在今天之前 ⇒ DONE 桶最舊的一端）', () => {
     const events = [
         { id: 'bad', status: 'recruiting', date: 'not-a-date' },
