@@ -139,6 +139,16 @@ AUTHORIZER_PILOT = {
     "create-venue",           # REST_V1 POST /create-venue
     "venue-detail",           # REST_V1 POST /venue-detail
     # ⓘ admin-venues **不必**列在這裡：authorizer_for() 對 auth=="admin" 自動掛。
+    #
+    # 🔴 ⓘ venue-list **刻意標 auth:"public" 且刻意不列在這裡** —— 這不是漏列。
+    #    上面 S4 那條教訓說「標 public 又不在本名單 → 兩層都沒人管到它」，
+    #    那個形狀與這次逐字相同，所以差別必須寫出來，否則下次稽核分不出兩者：
+    #      · S4 的 event-get-upload-url 是**需要身分**的（代他人取得 S3 上傳授權），
+    #        標 public 就是漏洞。
+    #      · venue-list 回的是 shared.PublicVenueCard —— 一個**白名單型別**，
+    #        結構上不含 exactAddress／ownerId／phone（有反射測試守著），
+    #        而且 IsPubliclyListable 把自建場整個排除。它**沒有東西可以被冒名取得**。
+    #    ⇒ 它的風險不在授權而在**成本**（無閘門的 Scan），那道由 capScanLimit 擋。
 }
 
 def authorizer_for(f):

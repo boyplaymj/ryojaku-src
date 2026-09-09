@@ -29,11 +29,16 @@ API=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION
 echo "API: $API"
 
 fail=0
-hit() { # $1 路徑  $2 期望碼  $3 說明
-  local body code
+hit() { # $1 路徑  $2 期望碼  $3 說明  [$4 method，預設 POST]
+  local body code method
+  method="${4:-POST}"
   body=$(mktemp)
-  code=$(curl -s -o "$body" -w '%{http_code}' -X POST "$API/$1" \
-           -H 'Content-Type: application/json' -d '{}' --max-time 20)
+  if [ "$method" = "GET" ]; then
+    code=$(curl -s -o "$body" -w '%{http_code}' "$API/$1" --max-time 20)
+  else
+    code=$(curl -s -o "$body" -w '%{http_code}' -X POST "$API/$1" \
+             -H 'Content-Type: application/json' -d '{}' --max-time 20)
+  fi
   if [ -z "$code" ] || [ "$code" = "000" ]; then
     echo "🔴 [設備] 打不到 $1（curl 沒有回應碼）"; rm -f "$body"; return 2
   fi
@@ -51,6 +56,12 @@ hit create-venue  401 "建立場地"
 hit venue-detail  401 "查詢場地（安全承重）"
 hit admin/venues  401 "後台審核"
 
+echo "── 受測：公開列表（刻意**沒有** authorizer，期望 200）"
+echo "   🔴 這一項的期望碼與上面三支相反，那是刻意的：它回的是白名單型別"
+echo "      （PublicVenueCard，結構上不含 exactAddress／ownerId），沒有東西可被冒名取得。"
+echo "      若它回 401 ⇒ 有人替它掛了 authorizer，未登入瀏覽地圖那條路就斷了。"
+hit venue-list 200 "公開場地列表" GET
+
 echo "── C1 正控：既有已掛 authorizer 的端點也必須 401"
 echo "   （若它變成 403，代表 authorizer 整組壞了，上面三個 401 就不能證明是我的路由對）"
 hit create-game 401 "既有端點"
@@ -60,7 +71,7 @@ echo "   （若它也回 401，代表 401 沒有鑑別力，上面全部作廢�
 hit definitely-not-a-route-xyz 403 "不存在的路徑"
 
 if [ "$fail" -eq 0 ]; then
-  echo "✅ 5/5 通過：三支路由已建上，且 authorizer 在擋。"
+  echo "✅ 6/6 通過：四支路由已建上；三支的 authorizer 在擋，venue-list 刻意開放。"
   echo "⚠️ 界線：這**沒有**驗到業務邏輯、DDB 讀寫、或地址授權判斷 —— 那些要真 token。"
   exit 0
 fi

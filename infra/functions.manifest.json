@@ -995,6 +995,17 @@
         "Games",
         "Registrations"
       ]
+    },
+    {
+      "name": "venue-list",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_web_venue_list",
+      "apiType": "REST_V1",
+      "method": "GET",
+      "path": "/venue-list",
+      "auth": "public",
+      "tables": [
+        "Venues"
+      ]
     }
   ]
 }
