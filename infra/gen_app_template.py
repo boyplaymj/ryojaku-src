@@ -123,6 +123,22 @@ AUTHORIZER_PILOT = {
     #       「有算、有印」不等於「有接上」。)
     # ⚠️ 它自己也 fail-closed（AuthorizerUserID 為空即 401），掛 authorizer 是第二層。
     "ruleset",                # REST_V1 GET  /ruleset
+
+    # 場地（[B1]，正典 tools/ryojaku-webapp/PLAYER_APP_REDESIGN.md §5）。
+    # 依上面那條「第三次被漏列」的教訓同步列舉。
+    #
+    # 🔴 venue-detail 掛 user authorizer 是一個**有代價的決定**，不是照抄：
+    #    它意味著「未登入看不到任何場地」。而不掛的代價更大 ——
+    #    這支的全部價值在 CanSeeExactAddress，而那個判斷的第一個輸入就是
+    #    AuthorizerUserID；沒有 authorizer 時它**永遠是空字串** ⇒ 每個人都被判成
+    #    匿名 ⇒ 連已核准的玩家都拿不到地址。也就是說標 public 的話，
+    #    這支端點的授權功能不是「比較鬆」，是**整個不能用**。
+    #    ⇒ 之後要開放未登入瀏覽地圖，正確做法是另開一支「公開場地列表」端點
+    #      （只回 approxLocation，本來就不該碰 exactAddress），
+    #      不是把這支放寬。兩件事不要混。
+    "create-venue",           # REST_V1 POST /create-venue
+    "venue-detail",           # REST_V1 POST /venue-detail
+    # ⓘ admin-venues **不必**列在這裡：authorizer_for() 對 auth=="admin" 自動掛。
 }
 
 def authorizer_for(f):
@@ -177,7 +193,7 @@ def auth_block_http(names):
 HEAD = """AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  両雀 Ryōjaku — 計算層 (61 Lambda + REST/HTTP/WebSocket API)。
+  両雀 Ryōjaku — 計算層 (Lambda + REST/HTTP/WebSocket API；**支數刻意不寫死**，寫死的數目會隨新增自動說謊)。
   由 gen_app_template.py 從 functions.manifest.json 生成，勿手改此檔。
   機密由 SSM 注入；DynamoDB 表由 01-tables.yaml 先建。
 

@@ -1,5 +1,5 @@
 {
-  "_note": "61 Lambda 路由 manifest。從工程師 setup_*.{sh,ps1} 路由腳本 + 各 main.go 萃取。path 帶 ? = 推斷待驗。apiType: REST_V1(APIGW REST) / HTTP_V2 / WEBSOCKET / STREAM(DDB) / LAMBDA_URL。tables 短名(不含前綴)。IAM 對 ${prefix}* 全域授權，故 tables 僅供參考。",
+  "_note": "Lambda 路由 manifest（**刻意不寫支數** —— 寫死的數目會隨新增自動說謊，而且零徵兆）。從工程師 setup_*.{sh,ps1} 路由腳本 + 各 main.go 萃取。path 帶 ? = 推斷待驗。apiType: REST_V1(APIGW REST) / HTTP_V2 / WEBSOCKET / STREAM(DDB) / LAMBDA_URL。tables 短名(不含前綴)。IAM 對 ${prefix}* 全域授權，故 tables 僅供參考。",
   "functions": [
     {
       "name": "admin-activities",
@@ -959,6 +959,41 @@
       "auth": "admin",
       "tables": [
         "AdminConfigs"
+      ]
+    },
+    {
+      "name": "admin-venues",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_admin_venues",
+      "apiType": "REST_V1",
+      "method": "ANY",
+      "path": "/admin/venues",
+      "auth": "admin",
+      "tables": [
+        "Venues"
+      ]
+    },
+    {
+      "name": "create-venue",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_web_create_venue",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/create-venue",
+      "auth": "user",
+      "tables": [
+        "Venues"
+      ]
+    },
+    {
+      "name": "venue-detail",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_web_venue_detail",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/venue-detail",
+      "auth": "user",
+      "tables": [
+        "Venues",
+        "Games",
+        "Registrations"
       ]
     }
   ]

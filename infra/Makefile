@@ -1,5 +1,17 @@
-# SAM makefile BuildMethod 目標(由 gen 產)。sam build 會呼叫 build-<LogicalId>。
-# 每個 Lambda = 一顆 Go bootstrap(provided.al2023/arm64)。
+# 🔴 **這個檔目前沒有任何東西在讀它**（2026-09-09 實查，B1-c2d）。
+#
+# 原註解寫「由 gen 產。sam build 會呼叫 build-<LogicalId>」—— 兩半都不成立：
+#   ① `gen_app_template.py` 完全沒有寫 Makefile 的程式碼（grep 零命中）
+#   ② `02-app.generated.yaml` 裡 `BuildMethod` 出現 **0 次** ⇒ SAM 不會走 makefile
+#      建置。CodeUri 直接指向 `../build/<art>/`，那些 bootstrap 是 `build_all.sh`
+#      用 `find ./cmd/lambdas -name main.go` 掃出來編的。
+#
+# 徵兆為零的地方在這裡：它停在 61 個目標，而 manifest 早已 80+ 支 ——
+# 若真的有人在讀它，缺 20 個目標的 build 會炸；它不炸，正因為沒人讀。
+# 「檔案存在、內容看起來合理、從來沒被執行」與「有在用」在 repo 裡長得一樣。
+#
+# ⇒ 留著不刪，因為 `BuildMethod: makefile` 是 SAM 的正當路徑，未來可能切回去。
+#   但**不要照它推論現在的建置方式** —— 現在的正典是 `build_all.sh`。
 
 build-FnAdminActivities:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags='-s -w' -o $(ARTIFACTS_DIR)/bootstrap .
