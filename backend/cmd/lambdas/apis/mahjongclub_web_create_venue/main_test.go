@@ -298,3 +298,32 @@ func TestB5a_SelfServeGate_Matrix(t *testing.T) {
 		t.Fatal("hall 與 event 的擋門結果相同 ⇒ 這道門沒有在分辨 type")
 	}
 }
+
+// --- [B5-b] 建場回應是白名單：與 detail 端點同一份型別、同一條規矩 ---
+
+func TestB5b_Payload_StrangerSeesNoPrivateData(t *testing.T) {
+	v := &shared.Venue{
+		VenueID: "V1", Type: shared.VenueTypeHome, OwnerID: "U-屋主", Phone: "0912345678",
+		Status: shared.VenueStatusActive, ExactAddress: "台北市某路9號",
+	}
+	b, err := json.Marshal(venueResponsePayload(v, shared.AddressEvidence{CallerUserID: "U-路人"}, 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"台北市某路9號", "0912345678", "U-屋主", `"ownerId"`} {
+		if strings.Contains(string(b), leak) {
+			t.Fatalf("路人拿到了 %q：%s", leak, b)
+		}
+	}
+	if !strings.Contains(string(b), `"isOwner":false`) {
+		t.Fatalf("路人的 isOwner 應該是 false：%s", b)
+	}
+	// 正控：屋主自己 ⇒ 地址在、isOwner 是 true。
+	b2, err := json.Marshal(venueResponsePayload(v, shared.AddressEvidence{CallerUserID: "U-屋主"}, 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b2), "台北市某路9號") || !strings.Contains(string(b2), `"isOwner":true`) {
+		t.Fatalf("正控失敗：屋主拿不到地址或 isOwner 不是 true：%s", b2)
+	}
+}

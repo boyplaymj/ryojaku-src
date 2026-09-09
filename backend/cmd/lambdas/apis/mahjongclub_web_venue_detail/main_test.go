@@ -345,3 +345,39 @@ func TestHandleDetail_LogNeverContainsAddress(t *testing.T) {
 		t.Fatalf("正控失敗：日誌裡沒有預期的 reason：%q", out)
 	}
 }
+
+// --- [B5-b] 詳情回應是白名單：路人查自建場拿不到 phone／ownerId ---
+
+// 🔴 這條打的是 handler 這一層的接線，不是 shared 的建構子（那邊有自己的尺）。
+// 「建構子對了但 handler 自己組回應」在 shared 的測試上看不出來。
+func TestB5b_HandleDetail_StrangerSeesNoPrivateData(t *testing.T) {
+	v := homeVenue()
+	v.Phone, v.BusinessHours = "0912345678", "18:00-02:00"
+	resp, err := handleDetail(context.Background(), &spySource{venueToReturn: v}, "U-路人",
+		VenueDetailRequest{VenueID: "V1"}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bodyOf(t, resp)
+	for _, leak := range []string{homeAddr, "0912345678", "18:00-02:00", "U-屋主", `"ownerId"`, `"exactAddress"`} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("路人拿到了 %q：%s", leak, body)
+		}
+	}
+	if !strings.Contains(body, `"isOwner":false`) {
+		t.Fatalf("路人的 isOwner 應該是 false：%s", body)
+	}
+	// 正控：屋主查同一筆 ⇒ 地址在、isOwner 是 true（但 ownerId 仍然不在）。
+	resp2, err := handleDetail(context.Background(), &spySource{venueToReturn: v}, "U-屋主",
+		VenueDetailRequest{VenueID: "V1"}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2 := bodyOf(t, resp2)
+	if !strings.Contains(body2, homeAddr) || !strings.Contains(body2, `"isOwner":true`) {
+		t.Fatalf("正控失敗：屋主拿不到自己的地址或 isOwner 不是 true：%s", body2)
+	}
+	if strings.Contains(body2, `"ownerId"`) {
+		t.Fatalf("屋主回應裡也不該有 ownerId：%s", body2)
+	}
+}

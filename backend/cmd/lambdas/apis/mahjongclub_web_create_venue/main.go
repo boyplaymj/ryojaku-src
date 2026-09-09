@@ -32,9 +32,9 @@ import (
 )
 
 type Response struct {
-	Success bool              `json:"success"`
-	Data    *shared.VenueView `json:"data,omitempty"`
-	Error   string            `json:"error,omitempty"`
+	Success bool                    `json:"success"`
+	Data    *shared.VenueDetailView `json:"data,omitempty"`
+	Error   string                  `json:"error,omitempty"`
 }
 
 var dynamoClient *dynamodb.Client
@@ -71,12 +71,13 @@ func callerUserID(request events.APIGatewayProxyRequest) string {
 // 🔴 不要在別處組回應。IsDojo 不落地，所以從 DDB 讀出來的 Venue 它一定是 false；
 // 而「忘了呼叫 ResolveIsDojo」的後果是徽章不亮 —— fail-closed，但也代表
 // **漏掉沒有徵兆**。單一出口讓「有沒有做」變成一個可以打的點。
-func venueResponsePayload(v *shared.Venue, ev shared.AddressEvidence, nowUnix int64) *shared.VenueView {
+func venueResponsePayload(v *shared.Venue, ev shared.AddressEvidence, nowUnix int64) *shared.VenueDetailView {
 	if v == nil {
 		return nil
 	}
-	v.ResolveIsDojo(nowUnix)
-	return shared.NewVenueView(v, ev)
+	// [B5-b] VenueDetailView 是白名單型別，不嵌入 Venue：路人查自建場拿不到
+	// phone／ownerId（前身 VenueView 會照出）。IsDojo 由建構子用 nowUnix 現算。
+	return shared.NewVenueDetailView(v, ev, nowUnix)
 }
 
 // errVenueNotSelfServe 是 [B5-a] 自助路徑的第五條擋門訊息。

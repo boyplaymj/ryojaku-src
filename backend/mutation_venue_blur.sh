@@ -31,13 +31,24 @@ PKG_SHARED=./cmd/lambdas/shared/
 PKG_HANDLER=./cmd/lambdas/apis/mahjongclub_web_create_venue/
 # [B5-a3] 突變也會打到測試檔本身（M21 驗掃描器的反控）⇒ 它要一起備份還原。
 HANDLER_TEST_GO=cmd/lambdas/apis/mahjongclub_web_create_venue/main_test.go
+# [B5-b] 詳情白名單型別（VenueDetailView）與 detail 端點：M22～M29 打這幾支。
+DETAIL_GO=cmd/lambdas/shared/venue_detail_view.go
+DETAIL_TEST_GO=cmd/lambdas/shared/venue_detail_view_test.go
+DETAIL_MAIN_GO=cmd/lambdas/apis/mahjongclub_web_venue_detail/main.go
+PKG_DETAIL=./cmd/lambdas/apis/mahjongclub_web_venue_detail/
 
 BAK=$(mktemp -d "$TMPDIR/mutblur.XXXXXX")
 cp "$BLUR_GO" "$BAK/venue_blur.go"
 cp "$DTO_GO"  "$BAK/venue_dto.go"
 cp "$MAIN_GO" "$BAK/main.go"
 cp "$HANDLER_TEST_GO" "$BAK/main_test.go"
-restore() { cp "$BAK/venue_blur.go" "$BLUR_GO"; cp "$BAK/venue_dto.go" "$DTO_GO"; cp "$BAK/main.go" "$MAIN_GO"; cp "$BAK/main_test.go" "$HANDLER_TEST_GO"; }
+cp "$DETAIL_GO" "$BAK/venue_detail_view.go"
+cp "$DETAIL_TEST_GO" "$BAK/venue_detail_view_test.go"
+cp "$DETAIL_MAIN_GO" "$BAK/detail_main.go"
+restore() {
+  cp "$BAK/venue_blur.go" "$BLUR_GO"; cp "$BAK/venue_dto.go" "$DTO_GO"; cp "$BAK/main.go" "$MAIN_GO"; cp "$BAK/main_test.go" "$HANDLER_TEST_GO"
+  cp "$BAK/venue_detail_view.go" "$DETAIL_GO"; cp "$BAK/venue_detail_view_test.go" "$DETAIL_TEST_GO"; cp "$BAK/detail_main.go" "$DETAIL_MAIN_GO"
+}
 # 訊號 handler 必須自己 exit，清理只掛 EXIT（理由見 infra/mutation_auth_line.sh）。
 trap 'restore; rm -rf "$BAK"' EXIT
 trap 'echo "[中斷] 交給 EXIT trap 還原"; exit 130' INT TERM HUP
@@ -59,10 +70,10 @@ PY
 # red_tests <pkg> —— 印出轉紅的測試名（每行一個，精確名稱）。量測器壞掉時印 __METER_BROKEN__。
 red_tests() {
   local out
-  # 🔴 `^TestB5a`（**沒有**尾部底線）：[B5-a2] 補的兩條叫 TestB5a2_…，
-  #    原本的 `^TestB5a_` 對它們是**不匹配**的 ⇒ 那兩條會靜靜不在突變的射程內，
+  # 🔴 `^TestB5`（**沒有** a／底線）：[B5-a2] 補的兩條叫 TestB5a2_…、[B5-b] 的叫 TestB5b_…，
+  #    原本的 `^TestB5a_` 對它們是**不匹配**的 ⇒ 那些會靜靜不在突變的射程內，
   #    而「射不到」與「射到了但殺不掉」在這份報告上長得一樣。
-  out=$(go test "$1" -count=1 -run '^TestB5a' -v 2>&1)
+  out=$(go test "$1" -count=1 -run '^TestB5' -v 2>&1)
   if echo "$out" | grep -qE '^(FAIL|ok)[[:space:]]+mahjongclub-backend'; then
     echo "$out" | sed -nE 's/^--- FAIL: ([^ ]+) .*/\1/p'
   else
@@ -71,12 +82,12 @@ red_tests() {
 }
 
 echo "── 基準線（未突變）──"
-if ! go build $PKG_SHARED $PKG_HANDLER; then echo "🔴 基準線編不過"; exit 2; fi
-for pkg in $PKG_SHARED $PKG_HANDLER; do
+if ! go build $PKG_SHARED $PKG_HANDLER $PKG_DETAIL; then echo "🔴 基準線編不過"; exit 2; fi
+for pkg in $PKG_SHARED $PKG_HANDLER $PKG_DETAIL; do
   base=$(red_tests "$pkg")
   if [ -n "$base" ]; then echo "🔴 基準線就有紅（$pkg）：$base"; exit 2; fi
 done
-echo "  兩個套件 B5a 全綠 ✓"
+echo "  三個套件 B5 全綠 ✓"
 
 pass=0; fail=0
 # mut <描述> <檔案> <原文> <替換> <套件> <預期轉紅的測試（精確名）>
@@ -88,7 +99,7 @@ mut() {
   if ! apply "$file" "$old" "$new"; then
     echo "  🔴 [設備] 探針沒打中 —— 這一發不算突變，不可讀成通過"; fail=$((fail+1)); return
   fi
-  if ! go build $PKG_SHARED $PKG_HANDLER >/dev/null 2>&1; then
+  if ! go build $PKG_SHARED $PKG_HANDLER $PKG_DETAIL >/dev/null 2>&1; then
     echo "  🔴 [設備] 突變體編不過 —— 它會讓測試紅得像被殺掉"; fail=$((fail+1)); return
   fi
   local got
@@ -266,11 +277,75 @@ mut "M21 掃描器的 regex 掃不到任何 sentinel（尺自己壞掉要判紅�
   '`(ZzNeverMatches\w+)\s*=\s*errors\.New`' \
   $PKG_HANDLER TestB5a3_ValidationStatusCoversEverySentinel
 
+# ── [B5-b] 詳情白名單（VenueDetailView）：路人查自建場不可拿到 phone／ownerId ──
+# 🔴 M22～M29 每一發都對應散文裡一句「刻意…」：phone 只給 hall／event、ownerId 用
+#    isOwner 取代、exactAddress 的鍵合約、isOwner 走 IsVenueOwner、isDojo 現算、
+#    反射尺自己的反控、以及**兩支 handler 各自**的接線。
+mut "M22 phone／businessHours 對 home 也填（VenueContactIsPublic 放行 home）" "$DETAIL_GO" \
+'	case VenueTypeHall, VenueTypeEvent:
+		return true' \
+'	case VenueTypeHall, VenueTypeEvent, VenueTypeHome:
+		return true' \
+"$PKG_SHARED" TestB5b_DetailView_PhoneOnlyForPublicTypes
+
+mut "M23 ownerId 加回型別（反射尺要紅，不是靠行為測試順便抓到）" "$DETAIL_GO" \
+'	VenueID string `json:"venueId"`
+	Type    string `json:"type"`' \
+'	VenueID string `json:"venueId"`
+	OwnerID string `json:"ownerId"`
+	Type    string `json:"type"`' \
+"$PKG_SHARED" TestB5b_DetailView_IsAWhitelist
+
+mut "M24 exactAddress 去掉 omitempty（沒授權時鍵變成 null 存在）" "$DETAIL_GO" \
+'	ExactAddress *string `json:"exactAddress,omitempty"`' \
+'	ExactAddress *string `json:"exactAddress"`' \
+"$PKG_SHARED" TestB5b_DetailView_ExactAddressContract
+
+# 🔴 「改成非指標 string」在 Go 裡是兩行一起改（宣告＋建構子）而 apply 只命中一處；
+#    它在線上的效果是「放行但地址空字串 ⇒ 鍵消失」，這一發直接打那個行為。
+mut "M25 放行但地址空字串時把鍵省掉（等價於改成 string+omitempty）" "$DETAIL_GO" \
+'	if allowed {
+		addr := v.ExactAddress' \
+'	if allowed && v.ExactAddress != "" {
+		addr := v.ExactAddress' \
+"$PKG_SHARED" TestB5b_DetailView_ExactAddressContract
+
+mut "M26 isOwner 恆 true" "$DETAIL_GO" \
+'		IsOwner:        IsVenueOwner(v, ev.CallerUserID),' \
+'		IsOwner:        v.OwnerID != "" || ev.CallerUserID != "" || true,' \
+"$PKG_SHARED" TestB5b_DetailView_IsOwnerUsesIsVenueOwner
+
+mut "M27 isDojo 照抄記憶體裡的值（不重算）" "$DETAIL_GO" \
+'		IsDojo:         EvaluateIsDojo(v, nowUnix),' \
+'		IsDojo:         v.IsDojo,' \
+"$PKG_SHARED" TestB5b_DetailView_ResolvesIsDojo
+
+# 反射尺自己的反控：掃到 0 個欄位必須判紅（尺壞了 ≠ 型別是空的）。
+mut "M28 反射尺掃錯型別（掃到 0 個欄位）" "$DETAIL_TEST_GO" \
+'	rt := reflect.TypeOf(VenueDetailView{})
+	got := map[string]bool{}' \
+'	rt := reflect.TypeOf(struct{}{})
+	got := map[string]bool{}' \
+"$PKG_SHARED" TestB5b_DetailView_IsAWhitelist
+
+# 兩支 handler 各自的接線：把 evidence 換成「當自己是屋主」⇒ 路人拿到地址與 isOwner=true。
+# 🔴 同一個突變量兩次，因為 venueResponsePayload 是**兩份**複製的程式碼。
+mut "M29a detail handler 把每個呼叫者當屋主" "$DETAIL_MAIN_GO" \
+'	return shared.NewVenueDetailView(v, ev, nowUnix)' \
+'	return shared.NewVenueDetailView(v, shared.AddressEvidence{CallerUserID: v.OwnerID}, nowUnix)' \
+"$PKG_DETAIL" TestB5b_HandleDetail_StrangerSeesNoPrivateData
+
+mut "M29b create handler 把每個呼叫者當屋主" "$MAIN_GO" \
+'	return shared.NewVenueDetailView(v, ev, nowUnix)' \
+'	return shared.NewVenueDetailView(v, shared.AddressEvidence{CallerUserID: v.OwnerID}, nowUnix)' \
+"$PKG_HANDLER" TestB5b_Payload_StrangerSeesNoPrivateData
+
 restore
 echo
-echo "── 還原後回歸（兩套件全部測試，不只 B5a）──"
-if ! go test $PKG_SHARED $PKG_HANDLER -count=1 2>&1 | tail -2; then fail=$((fail+1)); fi
-for f in "$BLUR_GO:venue_blur.go" "$DTO_GO:venue_dto.go" "$MAIN_GO:main.go"; do
+echo "── 還原後回歸（三套件全部測試，不只 B5）──"
+if ! go test $PKG_SHARED $PKG_HANDLER $PKG_DETAIL -count=1 2>&1 | tail -3; then fail=$((fail+1)); fi
+for f in "$BLUR_GO:venue_blur.go" "$DTO_GO:venue_dto.go" "$MAIN_GO:main.go" "$HANDLER_TEST_GO:main_test.go" \
+         "$DETAIL_GO:venue_detail_view.go" "$DETAIL_TEST_GO:venue_detail_view_test.go" "$DETAIL_MAIN_GO:detail_main.go"; do
   if ! diff -q "${f%%:*}" "$BAK/${f##*:}" >/dev/null; then
     echo "❌ ${f%%:*} 沒有還原乾淨（工作樹被留下突變）"; fail=$((fail+1))
   fi

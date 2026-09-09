@@ -1,7 +1,5 @@
 package shared
 
-import "errors"
-
 // [B1-b] 精確地址的授權判斷與安全序列化（正典：PLAYER_APP_REDESIGN.md §5.1）。
 //
 // §5.1 是硬規則：自建場（type=home）的精確地址**只在報名核准後才給該名玩家**，
@@ -188,57 +186,4 @@ func canSeeHomeAddress(v *Venue, ev AddressEvidence) (bool, string) {
 		return false, AddressDenyRegNotAccepted
 	}
 	return true, AddressAllowAcceptedReg
-}
-
-// VenueView 是要送給前端的形狀。
-//
-// 嵌入的 Venue 把 ExactAddress 標成 json:"-"，所以嵌入本身**永遠不會**帶出地址；
-// 唯一會帶出地址的是外層這個 ExactAddress 指標欄位，而它只由 NewVenueView 在
-// CanSeeExactAddress 放行時填。
-//
-// 🔴 取捨：沒授權時 `exactAddress` 這個鍵**整個不存在**，不是空字串。
-//   - 空字串對前端是歧義的：「沒地址」「被擋了」「主揪還沒填」三種在線上長得一樣，
-//     前端會被迫用 `=== ""` 去猜，猜錯就會把「被擋」畫成「地址空白」的輸入框。
-//   - 鍵不存在 ⇒ 與「根本沒接授權邏輯」（只 marshal Venue）在線上**逐字相同**。
-//     這是刻意的：fail-closed 的兩種來源（沒接／被擋）長得一樣，前端只需要處理一種形狀。
-//   - 放行時鍵一定存在，即使 venue 的地址本身是空字串（`"exactAddress": ""`）——
-//     所以「鍵在不在」就是「有沒有授權」，不需要第二個布林欄位來說明。
-type VenueView struct {
-	Venue
-	// ExactAddress 只在授權後非 nil。omitempty 對 nil 指標會省略整個鍵。
-	ExactAddress *string `json:"exactAddress,omitempty"`
-	// AddressReason 是 CanSeeExactAddress 回的 reason，不上線（只給呼叫端記日誌用）。
-	AddressReason string `json:"-"`
-}
-
-// NewVenueView 用 ev 判斷授權後組出回應形狀。v == nil 回 nil。
-//
-// 呼叫端**只能**用這個建構子產生 VenueView；自己 `&VenueView{...}` 填 ExactAddress
-// 就繞過了授權 —— 這一點沒有編譯期的尺守著，只有 code review。
-// UnmarshalJSON 明確拒絕：VenueView 是**輸出專用**的形狀，不要拿它讀回來。
-//
-// 🔴 理由是一個實測到的靜默陷阱：Venue 有了自己的 UnmarshalJSON（擋 inbound isDojo）
-// 之後，那個方法被**提升**成 VenueView 的方法 ⇒ 外層的 ExactAddress 欄位不再被解析。
-// 實測：同一份 `{"exactAddress":"…"}`，加 Venue.UnmarshalJSON 之前讀得到、之後是 nil。
-// 方向雖然是 fail-closed（讀不到地址，不是洩漏），但它**零徵兆** ——
-// 未來有人寫整合測試比對回應，會看到 exactAddress 讀不回來，然後去懷疑授權壞了。
-//
-// ⇒ 與其讓它靜靜少讀一個欄位，不如讓它響亮地失敗。要解析回應請自己定一份 DTO。
-func (vw *VenueView) UnmarshalJSON([]byte) error {
-	return errors.New("VenueView 是輸出專用形狀，不支援 UnmarshalJSON：" +
-		"嵌入的 Venue.UnmarshalJSON 會被提升，導致外層 exactAddress 靜靜讀不進來。請自訂 DTO")
-}
-
-func NewVenueView(v *Venue, ev AddressEvidence) *VenueView {
-	if v == nil {
-		return nil
-	}
-	view := &VenueView{Venue: *v}
-	allowed, reason := CanSeeExactAddress(v, ev)
-	view.AddressReason = reason
-	if allowed {
-		addr := v.ExactAddress
-		view.ExactAddress = &addr
-	}
-	return view
 }

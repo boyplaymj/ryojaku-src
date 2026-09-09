@@ -52,9 +52,9 @@ var venueDetailForbiddenFields = []string{
 }
 
 type Response struct {
-	Success bool              `json:"success"`
-	Data    *shared.VenueView `json:"data,omitempty"`
-	Error   string            `json:"error,omitempty"`
+	Success bool                    `json:"success"`
+	Data    *shared.VenueDetailView `json:"data,omitempty"`
+	Error   string                  `json:"error,omitempty"`
 }
 
 // evidenceSource 是 evidence 的**真來源**。抽成介面只有一個目的：
@@ -130,12 +130,13 @@ func addressAuditLine(reason, venueType string) string {
 
 // venueResponsePayload 是回應的單一出口（正典 §5.3 第 ② 條）。
 // 與 create 端點那支同一個形狀 —— 兩支都必須經過它。
-func venueResponsePayload(v *shared.Venue, ev shared.AddressEvidence, nowUnix int64) *shared.VenueView {
+func venueResponsePayload(v *shared.Venue, ev shared.AddressEvidence, nowUnix int64) *shared.VenueDetailView {
 	if v == nil {
 		return nil
 	}
-	v.ResolveIsDojo(nowUnix)
-	return shared.NewVenueView(v, ev)
+	// [B5-b] VenueDetailView 是白名單型別，不嵌入 Venue：路人查自建場拿不到
+	// phone／ownerId（前身 VenueView 會照出）。IsDojo 由建構子用 nowUnix 現算。
+	return shared.NewVenueDetailView(v, ev, nowUnix)
 }
 
 // --- DDB 實作 ---

@@ -1,11 +1,8 @@
 package shared
 
 import (
-	"encoding/json"
 	"os"
-	"reflect"
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -207,129 +204,6 @@ func TestCanSeeExactAddress_HomeRegistration(t *testing.T) {
 	}
 }
 
-// ===== 序列化 =====
-
-func marshalView(t *testing.T, view *VenueView) (string, map[string]json.RawMessage) {
-	t.Helper()
-	b, err := json.Marshal(view)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatal(err)
-	}
-	return string(b), m
-}
-
-func TestVenueView_GrantedCarriesAddress(t *testing.T) {
-	view := NewVenueView(taHomeVenue(), taAcceptedEvidence())
-	if view == nil || view.AddressReason != AddressAllowAcceptedReg {
-		t.Fatalf("view=%+v", view)
-	}
-	_, m := marshalView(t, view)
-	raw, ok := m["exactAddress"]
-	if !ok {
-		t.Fatal("授權後 exactAddress 鍵必須存在")
-	}
-	var got string
-	if err := json.Unmarshal(raw, &got); err != nil || got != taAddress {
-		t.Fatalf("exactAddress=%s err=%v", raw, err)
-	}
-}
-
-// 放行但 venue 沒填地址 ⇒ 鍵仍在、值是 ""。「鍵在不在」＝「有沒有授權」，不摻第二個意義。
-func TestVenueView_GrantedEmptyAddressKeepsKey(t *testing.T) {
-	v := taHomeVenue()
-	v.ExactAddress = ""
-	_, m := marshalView(t, NewVenueView(v, taAcceptedEvidence()))
-	if raw, ok := m["exactAddress"]; !ok || string(raw) != `""` {
-		t.Fatalf("exactAddress=%s ok=%v，要 \"\" 且鍵存在", raw, ok)
-	}
-}
-
-// 🔴 承重那條：沒授權時鍵**整個不存在**，而且地址字串不可以出現在輸出的任何地方
-// （不只看那個鍵 —— 若嵌入的 Venue 哪天把 json:"-" 拿掉，這裡也要紅）。
-func TestVenueView_DeniedOmitsKey(t *testing.T) {
-	cases := []struct {
-		name string
-		ev   AddressEvidence
-	}{
-		{"pending_registration", func() AddressEvidence {
-			ev := taAcceptedEvidence()
-			ev.Registration.Status = "pending"
-			return ev
-		}()},
-		{"stranger_no_registration", AddressEvidence{CallerUserID: "U-stranger"}},
-		{"anonymous", AddressEvidence{}},
-		{"zero_evidence_with_registration_for_other_game", func() AddressEvidence {
-			ev := taAcceptedEvidence()
-			ev.Registration.GameID = "G-9"
-			return ev
-		}()},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			view := NewVenueView(taHomeVenue(), c.ev)
-			if view == nil {
-				t.Fatal("nil view")
-			}
-			if !strings.HasPrefix(view.AddressReason, "deny:") {
-				t.Fatalf("reason=%q 應該是 deny", view.AddressReason)
-			}
-			raw, m := marshalView(t, view)
-			if _, ok := m["exactAddress"]; ok {
-				t.Fatalf("沒授權時 exactAddress 鍵不可存在：%s", raw)
-			}
-			if strings.Contains(raw, taAddress) {
-				t.Fatalf("地址字串出現在輸出裡：%s", raw)
-			}
-			if strings.Contains(raw, "deny:") {
-				t.Fatalf("reason 不該上線：%s", raw)
-			}
-			// 公開的部分要在（不是整個空掉才叫安全）
-			if _, ok := m["approxLocation"]; !ok {
-				t.Fatalf("approxLocation 應該照常回：%s", raw)
-			}
-		})
-	}
-}
-
-func TestVenueView_NilVenue(t *testing.T) {
-	if NewVenueView(nil, taAcceptedEvidence()) != nil {
-		t.Fatal("nil venue 要回 nil view")
-	}
-}
-
-// 結構尺：VenueView 只有**一條**會帶出地址的 JSON 路徑，且嵌入的 Venue.ExactAddress 仍是 json:"-"。
-// 這條擋的是「有人再加一個帶地址的欄位」或「把嵌入欄位的 tag 改掉」。
-func TestVenueView_SingleJSONPathToAddress(t *testing.T) {
-	rt := reflect.TypeOf(VenueView{})
-	paths := 0
-	for i := 0; i < rt.NumField(); i++ {
-		f := rt.Field(i)
-		if f.Anonymous {
-			inner, ok := f.Type.FieldByName("ExactAddress")
-			if !ok || inner.Tag.Get("json") != "-" {
-				t.Fatalf("嵌入的 %s.ExactAddress 必須是 json:\"-\"，現在是 %q", f.Type.Name(), inner.Tag.Get("json"))
-			}
-			continue
-		}
-		tag := f.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-		if strings.HasPrefix(tag, "exactAddress,omitempty") && f.Type.Kind() == reflect.Ptr {
-			paths++
-			continue
-		}
-		t.Fatalf("VenueView 多了一個會上線的欄位 %s（tag %q）—— 每個新欄位都要重新問「它會不會帶出地址」", f.Name, tag)
-	}
-	if paths != 1 {
-		t.Fatalf("帶地址的 JSON 路徑應該恰好 1 條，實際 %d", paths)
-	}
-}
-
 // --- [B1-b 補] 第二道空字串守衛的獨立尺 ---
 //
 // 🔴 為什麼要單獨測 IsVenueOwner，而不是透過 CanSeeExactAddress 測：
@@ -356,27 +230,6 @@ func TestIsVenueOwner_EmptyStringNeverMatches(t *testing.T) {
 				t.Fatalf("IsVenueOwner = %v, want %v", got, c.want)
 			}
 		})
-	}
-}
-
-// --- [B1-b 補・收 Codex 覆驗] VenueView 不可被 unmarshal ---
-//
-// 釘住那個「響亮失敗」的決定：Venue.UnmarshalJSON 會被提升成 VenueView 的方法，
-// 於是外層 exactAddress 靜靜讀不進來（實測：加之前讀得到「台北市某路9號」，加之後 nil）。
-// 與其少讀一個欄位，不如報錯。
-func TestVenueView_UnmarshalIsRefused(t *testing.T) {
-	var vw VenueView
-	err := json.Unmarshal([]byte(`{"venueId":"V1","exactAddress":"台北市某路9號"}`), &vw)
-	if err == nil {
-		t.Fatal("VenueView 應該拒絕被 unmarshal —— 沉默地少讀 exactAddress 會讓人去懷疑授權壞了")
-	}
-	if !strings.Contains(err.Error(), "輸出專用") {
-		t.Fatalf("錯誤訊息要說得出原因，得到：%v", err)
-	}
-	// 反控：確認它不是連 marshal 都壞了 —— 輸出方向必須照常。
-	b, mErr := json.Marshal(NewVenueView(&Venue{VenueID: "V1"}, AddressEvidence{CallerUserID: "U1"}))
-	if mErr != nil || !strings.Contains(string(b), `"venueId":"V1"`) {
-		t.Fatalf("正控失敗：輸出方向也壞了（err=%v, out=%s）", mErr, b)
 	}
 }
 
