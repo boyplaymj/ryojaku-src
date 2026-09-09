@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // dojoVenue 回傳一個三條件**全部成立**的 venue，測試各自破壞其中一條。
@@ -191,5 +192,47 @@ func TestVenueStruct_NoPrivateFieldIsJSONExported(t *testing.T) {
 	// 而空轉與「每個都合格」在結果上逐字相同。
 	if checked != len(private) {
 		t.Fatalf("只掃到 %d 個私密欄位，預期 %d ⇒ 這把尺失明了", checked, len(private))
+	}
+}
+
+// --- [B1-c] Game.VenueID：可為空、不做資料遷移（§5.3）---
+
+// 既有局在 DDB 裡**沒有** venueId 這個屬性。讀回來不可以爆，且必須是「沒綁 venue」。
+func TestGameVenueID_LegacyItemWithoutAttribute(t *testing.T) {
+	legacy := map[string]types.AttributeValue{
+		"gameId": &types.AttributeValueMemberS{Value: "G-old"},
+	}
+	var g Game
+	if err := attributevalue.UnmarshalMap(legacy, &g); err != nil {
+		t.Fatalf("既有局讀不回來：%v", err)
+	}
+	if g.VenueID != "" {
+		t.Fatalf("沒有 venueId 屬性的既有局應該是空字串，得到 %q", g.VenueID)
+	}
+	// 正控：證明這份 fixture 真的被解析了，不是整個 UnmarshalMap 沒作用。
+	if g.GameID != "G-old" {
+		t.Fatalf("正控失敗：連 gameId 都沒讀進來 ⇒ 上面那條斷言證明不了任何事")
+	}
+}
+
+// 空的 VenueID 不落地（omitempty）；有值時要落地，否則綁了也讀不回來。
+func TestGameVenueID_MarshalRoundTrip(t *testing.T) {
+	m, err := attributevalue.MarshalMap(Game{GameID: "G1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["venueId"]; ok {
+		t.Fatal("空的 venueId 不該落地 —— 「屬性不存在」與「空字串」都只是「沒綁 venue」，留一種形狀就好")
+	}
+	m2, err := attributevalue.MarshalMap(Game{GameID: "G1", VenueID: "V1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	av, ok := m2["venueId"]
+	if !ok {
+		t.Fatal("有值的 venueId 沒有落地 ⇒ 綁了也讀不回來")
+	}
+	if s, ok := av.(*types.AttributeValueMemberS); !ok || s.Value != "V1" {
+		t.Fatalf("venueId 落地成了 %#v", av)
 	}
 }

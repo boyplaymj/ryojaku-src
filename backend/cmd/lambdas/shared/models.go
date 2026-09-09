@@ -30,7 +30,21 @@ type Game struct {
 	// ⚠️ **omitempty 不可以加**：A3-o2 之前建立的局沒有這個屬性，而
 	//    「屬性不存在」必須 fail-closed 成**不退**，不可以與「值是 0」混為一談。
 	//    加了 omitempty 之後，新建的 0 也會消失 ⇒ 兩者變成同一個形狀。
-	RegistrationCount int          `dynamodbav:"registrationCount" json:"registrationCount"`
+	RegistrationCount int `dynamodbav:"registrationCount" json:"registrationCount"`
+	// VenueID 綁到 venue 主表（§5.3）。**可為空**：既有局沒有這個屬性，
+	// 新局才綁 venue，而且**不做一次性資料遷移** —— 地址字串相同不代表是同一間店，
+	// 自動合併會把不同店併在一起，而那個錯誤事後看不出來。
+	//
+	// ⚠️ 這裡 omitempty **可以**加，而上面 RegistrationCount 不可以，差別在於：
+	//    RegistrationCount 的「屬性不存在」與「值是 0」語意**不同**（前者要 fail-closed
+	//    成不退點），而 VenueID 的「屬性不存在」與「空字串」都只是「沒綁 venue」——
+	//    同義,所以不必分辨。
+	//
+	// 🔴 授權用途上不可以信這個欄位的**請求體版本**：CanSeeExactAddress 要的
+	//    AddressEvidence.GameVenueID 必須由呼叫端從**這裡**讀出來（DDB 的 game 記錄），
+	//    不可以從前端送上來的 body 照抄 —— 否則前端可以宣稱「我報名那局在 V1」
+	//    而實際那局在 V2，換走別人家的地址。
+	VenueID           string       `dynamodbav:"venueId,omitempty" json:"venueId,omitempty"`
 	JoinedPlayers     []Player     `dynamodbav:"joinedPlayers" json:"joinedPlayers"`
 	GameInfo          GameInfo     `dynamodbav:"gameInfo" json:"gameInfo"`
 	VenueFeatures     []string     `dynamodbav:"venueFeatures,omitempty" json:"venueFeatures,omitempty"`
