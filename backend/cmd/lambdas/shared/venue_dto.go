@@ -1,0 +1,107 @@
+package shared
+
+import (
+	"errors"
+	"strings"
+)
+
+// [B1-c2a] 建立 venue 的**窄 DTO**（正典 §5.3 的三條接線驗收之第 ①）。
+//
+// 🔴 端點不可以直接把 request body decode 進 Venue。Venue.UnmarshalJSON 雖然已經
+// 會把 IsDojo 歸零（第二道），但那只涵蓋 IsDojo 一個欄位 —— OwnerID、Status、
+// RatingCount、DojoPaidUntil、CertifiedRefereeCount 全都還是可寫的公開欄位。
+// 直接 decode Venue ＝ 前端可以宣稱自己是別人的場地、自己是 active、自己有 99 好評。
+//
+// ⇒ 窄 DTO 的價值在於「**沒有那個欄位**」是編譯期事實，不是執行期檢查：
+// 前端送 {"ownerId":"別人"} 進來，那個鍵在這個型別上根本不存在 ⇒ 被 json 丟掉。
+type CreateVenueRequest struct {
+	Type           string        `json:"type"`
+	Name           string        `json:"name"`
+	Phone          string        `json:"phone,omitempty"`
+	BusinessHours  string        `json:"businessHours,omitempty"`
+	ApproxLocation VenueLocation `json:"approxLocation"`
+	ExactAddress   string        `json:"exactAddress,omitempty"`
+	Features       []string      `json:"features,omitempty"`
+}
+
+// venueServerOwnedFields 是**絕對不可以**出現在任何建立／更新 DTO 上的欄位。
+// 測試用反射拿這份清單去掃 DTO（不是手打欄位比對）——
+// 之後有人往 DTO 加欄位，加到這裡面任何一個就會紅。
+//
+// 分三類，理由各不相同：
+//   - 身分與生命週期：venueId（伺服器產）、ownerId（從 JWT 取）、status（審核流程定）、
+//     createdAt／updatedAt（伺服器時鐘）
+//   - isDojo 三條件的原料：dojoPaidUntil（付費流程）、certifiedRefereeCount（裁判系統彙總）、
+//     isDojo（算出來的，§5.2）
+//   - 評價彙總：ratingPositive／ratingCount（§7 由評價寫入端維護）
+var venueServerOwnedFields = []string{
+	"venueId", "ownerId", "status", "createdAt", "updatedAt",
+	"isDojo", "dojoPaidUntil", "certifiedRefereeCount",
+	"ratingPositive", "ratingCount",
+}
+
+// 建立請求的驗證錯誤。分開命名讓端點能回不同訊息，也讓測試斷言得到「是哪一條擋的」。
+var (
+	ErrVenueTypeInvalid  = errors.New("venue: type 必須是 hall／home／event 之一")
+	ErrVenueNameRequired = errors.New("venue: name 不可為空")
+	ErrVenueLatLngRange  = errors.New("venue: approxLocation 超出合法經緯度範圍")
+	ErrVenueHomeNeedAddr = errors.New("venue: 自建場必須填 exactAddress")
+)
+
+// Validate 檢查建立請求。fail-closed：看不懂就擋。
+func (r *CreateVenueRequest) Validate() error {
+	if r == nil {
+		return ErrVenueTypeInvalid
+	}
+	if !IsValidVenueType(r.Type) {
+		return ErrVenueTypeInvalid
+	}
+	if strings.TrimSpace(r.Name) == "" {
+		return ErrVenueNameRequired
+	}
+	lat, lng := r.ApproxLocation.Latitude, r.ApproxLocation.Longitude
+	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+		return ErrVenueLatLngRange
+	}
+	// 🔴 自建場沒有精確地址的話，報名核准之後也沒東西可以給玩家 ——
+	// 而那個失敗會發生在「玩家已經被核准、正要出門」的時候，不是建立的時候。
+	if r.Type == VenueTypeHome && strings.TrimSpace(r.ExactAddress) == "" {
+		return ErrVenueHomeNeedAddr
+	}
+	return nil
+}
+
+// NewVenueFromCreateRequest 把驗證過的請求變成 Venue。
+//
+// 🔴 ownerID 與 venueID 是**參數**，不是從 r 讀 —— 呼叫端必須從 authorizer
+// （shared.AuthorizerUserID）取 ownerID，不可以信任 body。DTO 上根本沒有那個欄位，
+// 所以「不小心讀了 body 的 ownerId」在這條路徑上寫不出來。
+//
+// 三條認證的原料一律零值：新建的 venue 不可能已付費、也不可能已經有裁判。
+func NewVenueFromCreateRequest(r *CreateVenueRequest, venueID, ownerID string, nowUnix int64) *Venue {
+	if r == nil {
+		return nil
+	}
+	return &Venue{
+		VenueID:        venueID,
+		Type:           r.Type,
+		Name:           strings.TrimSpace(r.Name),
+		Phone:          r.Phone,
+		BusinessHours:  r.BusinessHours,
+		ApproxLocation: r.ApproxLocation,
+		ExactAddress:   strings.TrimSpace(r.ExactAddress),
+		Features:       r.Features,
+		OwnerID:        ownerID,
+		// 三條認證的原料：全部零值，只能由付費流程與裁判系統改。
+		DojoPaidUntil:         0,
+		CertifiedRefereeCount: 0,
+		// 評價彙總：從零開始，§7 的寫入端維護。
+		RatingPositive: 0,
+		RatingCount:    0,
+		// 🔴 新建一律 pending，不是 active。非 owner 看不到 pending 的場地
+		// （CanSeeExactAddress 第 4 條），所以未審核的資料不會外流。
+		Status:    VenueStatusPending,
+		CreatedAt: nowUnix,
+		UpdatedAt: nowUnix,
+	}
+}
