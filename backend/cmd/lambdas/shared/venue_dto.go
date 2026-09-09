@@ -115,3 +115,11 @@ func venuesTable() string { return tablePrefix() + "Venues" }
 
 // VenuesTableName 是給 lambda 用的匯出版本（shared 內部用小寫那個）。
 func VenuesTableName() string { return venuesTable() }
+
+// TablePrefix 匯出 shared 內部的 tablePrefix()，給 lambda 組其他表名用。
+//
+// 🔴 匯出而不是讓 lambda 自己 os.Getenv("TABLE_PREFIX")：既有 lambda 各自讀了一次，
+// 於是 stg／prod 的判斷散在 80 個地方。新的一律走這裡 —— 兩個來源遲早會不一致，
+// 而不一致的症狀是「打到不存在的表」，錯誤訊息是 ResourceNotFound，
+// 不會告訴你環境搞錯了。
+func TablePrefix() string { return tablePrefix() }
