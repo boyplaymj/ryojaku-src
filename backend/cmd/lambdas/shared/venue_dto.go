@@ -2,6 +2,7 @@ package shared
 
 import (
 	"errors"
+	"math"
 	"strings"
 )
 
@@ -46,6 +47,8 @@ var (
 	ErrVenueNameRequired = errors.New("venue: name 不可為空")
 	ErrVenueLatLngRange  = errors.New("venue: approxLocation 超出合法經緯度範圍")
 	ErrVenueHomeNeedAddr = errors.New("venue: 自建場必須填 exactAddress")
+	// [B5-a2] NaN／Inf 專用。刻意與 ErrVenueLatLngRange 分開 —— 見 Validate() 裡的理由。
+	ErrVenueLatLngNotFinite = errors.New("venue: approxLocation 必須是有限的數字")
 )
 
 // Validate 檢查建立請求。fail-closed：看不懂就擋。
@@ -60,6 +63,17 @@ func (r *CreateVenueRequest) Validate() error {
 		return ErrVenueNameRequired
 	}
 	lat, lng := r.ApproxLocation.Latitude, r.ApproxLocation.Longitude
+	// 🔴 NaN／±Inf 要**先**擋（[B5-a2]，2026-09-09 實測）。
+	// 範圍比較對 NaN 全部是 false ⇒ `lat < -90 || lat > 90` **放行 NaN**，
+	// 而下游是 `json.Marshal` 直接失敗（`json: unsupported value: NaN`）——
+	// 那個失敗發生在 venue 已經寫進 DDB **之後**，端點回 500。
+	// ⇒ 症狀是「建立失敗」，而實際上那筆已經躺在表裡，且任何列表都序列化不出來。
+	// ⚠️ 這條與下面那條範圍檢查**不可以合併**：合併之後「NaN 被擋」與
+	//    「超出範圍被擋」回同一個 error，而測試就分不出是哪一條擋的
+	//    （這正是 CanSeeExactAddress 那邊每條 deny 各有 reason 的同一個理由）。
+	if math.IsNaN(lat) || math.IsNaN(lng) || math.IsInf(lat, 0) || math.IsInf(lng, 0) {
+		return ErrVenueLatLngNotFinite
+	}
 	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
 		return ErrVenueLatLngRange
 	}

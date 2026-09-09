@@ -287,3 +287,43 @@ func TestB5a_IsSelfServeVenueType(t *testing.T) {
 		t.Fatal("event 不再是合法 type ⇒ 改錯地方了（該擋的是自助路徑）")
 	}
 }
+
+// [B5-a2] NaN／Inf 座標：Validate 必須擋下來，而且是**它自己那條** error。
+//
+// 🔴 為什麼要補：範圍比較對 NaN 全部是 false ⇒ 原本的 `lat < -90 || lat > 90`
+// 放行 NaN（2026-09-09 實測 `Validate(NaN lat) = <nil>`），而下游 json.Marshal
+// 直接失敗 —— 且那是在 venue 已經寫進 DDB **之後**。
+func TestB5a2_ValidateRejectsNonFiniteCoords(t *testing.T) {
+	nan, posInf, negInf := math.NaN(), math.Inf(1), math.Inf(-1)
+	bad := []struct {
+		name     string
+		lat, lng float64
+	}{
+		{"NaN lat", nan, 121}, {"NaN lng", 25, nan},
+		{"+Inf lat", posInf, 121}, {"-Inf lng", 25, negInf},
+	}
+	for _, c := range bad {
+		r := &CreateVenueRequest{Type: VenueTypeHall, Name: "x",
+			ApproxLocation: VenueLocation{Latitude: c.lat, Longitude: c.lng}}
+		if got := r.Validate(); got != ErrVenueLatLngNotFinite {
+			t.Errorf("%s：期望 ErrVenueLatLngNotFinite，得到 %v", c.name, got)
+		}
+	}
+}
+
+// 🔴 上一條的**兩道反控**，缺一不可：
+//   ① 正常座標仍然放行 —— 少了它，Validate 一律回 ErrVenueLatLngNotFinite 也會綠。
+//   ② 超出範圍仍然回 ErrVenueLatLngRange —— 少了它，把兩條合併成同一個 error
+//     也會綠，而合併之後「NaN 被擋」與「超範圍被擋」在測試上分不出來。
+func TestB5a2_ValidateStillDistinguishesRangeFromNonFinite(t *testing.T) {
+	okReq := &CreateVenueRequest{Type: VenueTypeHall, Name: "x",
+		ApproxLocation: VenueLocation{Latitude: 25.03, Longitude: 121.56}}
+	if err := okReq.Validate(); err != nil {
+		t.Fatalf("正常座標不該被擋：%v", err)
+	}
+	rangeReq := &CreateVenueRequest{Type: VenueTypeHall, Name: "x",
+		ApproxLocation: VenueLocation{Latitude: 999, Longitude: 121}}
+	if got := rangeReq.Validate(); got != ErrVenueLatLngRange {
+		t.Errorf("超出範圍要回 ErrVenueLatLngRange，得到 %v", got)
+	}
+}

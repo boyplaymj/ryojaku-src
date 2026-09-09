@@ -56,7 +56,10 @@ PY
 # red_tests <pkg> —— 印出轉紅的測試名（每行一個，精確名稱）。量測器壞掉時印 __METER_BROKEN__。
 red_tests() {
   local out
-  out=$(go test "$1" -count=1 -run '^TestB5a_' -v 2>&1)
+  # 🔴 `^TestB5a`（**沒有**尾部底線）：[B5-a2] 補的兩條叫 TestB5a2_…，
+  #    原本的 `^TestB5a_` 對它們是**不匹配**的 ⇒ 那兩條會靜靜不在突變的射程內，
+  #    而「射不到」與「射到了但殺不掉」在這份報告上長得一樣。
+  out=$(go test "$1" -count=1 -run '^TestB5a' -v 2>&1)
   if echo "$out" | grep -qE '^(FAIL|ok)[[:space:]]+mahjongclub-backend'; then
     echo "$out" | sed -nE 's/^--- FAIL: ([^ ]+) .*/\1/p'
   else
@@ -225,6 +228,19 @@ mut "M16 閘一律擋下（hall／home 也 400）" "$MAIN_GO" \
 		return errVenueNotSelfServe
 	}' \
 "$PKG_HANDLER" TestB5a_Handler_HallAndHomePassTheGate
+
+# 🔴 M17 刻意**不**整段刪掉那個 if：刪掉會讓 `math` 這個 import 變成沒人用 ⇒
+#    突變體編不過，而腳本會（正確地）判成設備問題、不是「殺掉」。
+#    ⇒ 改成把條件寫成恆假，`math` 仍被引用 —— 這才是「守衛在，但攔不到 NaN」那個缺陷。
+mut "M17 Validate 的 NaN／Inf 守衛恆假（形狀還在，攔不到東西）" "$DTO_GO" \
+  'if math.IsNaN(lat) || math.IsNaN(lng) || math.IsInf(lat, 0) || math.IsInf(lng, 0) {' \
+  'if math.IsNaN(lat) && !math.IsNaN(lat) {' \
+  $PKG_SHARED TestB5a2_ValidateRejectsNonFiniteCoords
+
+mut "M18 NaN 與「超出範圍」合成同一個 error（分不出是哪一條擋的）" "$DTO_GO" \
+  'return ErrVenueLatLngNotFinite' \
+  'return ErrVenueLatLngRange' \
+  $PKG_SHARED TestB5a2_ValidateRejectsNonFiniteCoords
 
 restore
 echo
