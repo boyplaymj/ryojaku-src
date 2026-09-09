@@ -118,6 +118,7 @@ func validationStatus(err error) int {
 	case errors.Is(err, shared.ErrVenueTypeInvalid),
 		errors.Is(err, shared.ErrVenueNameRequired),
 		errors.Is(err, shared.ErrVenueLatLngRange),
+		errors.Is(err, shared.ErrVenueLatLngNotFinite),
 		errors.Is(err, shared.ErrVenueHomeNeedAddr):
 		return http.StatusBadRequest
 	default:

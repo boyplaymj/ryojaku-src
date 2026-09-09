@@ -29,12 +29,15 @@ DTO_GO=cmd/lambdas/shared/venue_dto.go
 MAIN_GO=cmd/lambdas/apis/mahjongclub_web_create_venue/main.go
 PKG_SHARED=./cmd/lambdas/shared/
 PKG_HANDLER=./cmd/lambdas/apis/mahjongclub_web_create_venue/
+# [B5-a3] 突變也會打到測試檔本身（M21 驗掃描器的反控）⇒ 它要一起備份還原。
+HANDLER_TEST_GO=cmd/lambdas/apis/mahjongclub_web_create_venue/main_test.go
 
 BAK=$(mktemp -d "$TMPDIR/mutblur.XXXXXX")
 cp "$BLUR_GO" "$BAK/venue_blur.go"
 cp "$DTO_GO"  "$BAK/venue_dto.go"
 cp "$MAIN_GO" "$BAK/main.go"
-restore() { cp "$BAK/venue_blur.go" "$BLUR_GO"; cp "$BAK/venue_dto.go" "$DTO_GO"; cp "$BAK/main.go" "$MAIN_GO"; }
+cp "$HANDLER_TEST_GO" "$BAK/main_test.go"
+restore() { cp "$BAK/venue_blur.go" "$BLUR_GO"; cp "$BAK/venue_dto.go" "$DTO_GO"; cp "$BAK/main.go" "$MAIN_GO"; cp "$BAK/main_test.go" "$HANDLER_TEST_GO"; }
 # 訊號 handler 必須自己 exit，清理只掛 EXIT（理由見 infra/mutation_auth_line.sh）。
 trap 'restore; rm -rf "$BAK"' EXIT
 trap 'echo "[中斷] 交給 EXIT trap 還原"; exit 130' INT TERM HUP
@@ -241,6 +244,27 @@ mut "M18 NaN 與「超出範圍」合成同一個 error（分不出是哪一條�
   'return ErrVenueLatLngNotFinite' \
   'return ErrVenueLatLngRange' \
   $PKG_SHARED TestB5a2_ValidateRejectsNonFiniteCoords
+
+# ── [B5-a3] 收 Codex 覆驗：validationStatus 是**手打清單**，新 sentinel 漏接會回 500 ──
+# 🔴 M19～M21 打的是「有沒有漏接」那把尺，不是「接得對不對」。
+#    M19 是真的發生過的缺陷本身；M20 是它的推廣（下一個新 sentinel）；
+#    M21 是掃描器自己的反控 —— 少了它，把 regex 改成掃不到任何東西也會全綠。
+mut "M19 validationStatus 漏掉 ErrVenueLatLngNotFinite（回到 Codex 抓到的那一刻）" "$MAIN_GO" \
+  '		errors.Is(err, shared.ErrVenueLatLngNotFinite),
+' \
+  '' \
+  $PKG_HANDLER TestB5a3_ValidationStatusCoversEverySentinel
+
+mut "M20 shared 多一個 sentinel 而測試清單沒跟上（漂移守衛）" "$DTO_GO" \
+  'ErrVenueHomeNeedAddr = errors.New("venue: 自建場必須填 exactAddress")' \
+  'ErrVenueHomeNeedAddr = errors.New("venue: 自建場必須填 exactAddress")
+	ErrVenueMutantOnly   = errors.New("venue: 突變用的假 sentinel")' \
+  $PKG_HANDLER TestB5a3_ValidationStatusCoversEverySentinel
+
+mut "M21 掃描器的 regex 掃不到任何 sentinel（尺自己壞掉要判紅，不是通過）" "$HANDLER_TEST_GO" \
+  '`(ErrVenue\w+)\s*=\s*errors\.New`' \
+  '`(ZzNeverMatches\w+)\s*=\s*errors\.New`' \
+  $PKG_HANDLER TestB5a3_ValidationStatusCoversEverySentinel
 
 restore
 echo

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -136,6 +139,7 @@ func TestValidationStatus(t *testing.T) {
 		{shared.ErrVenueTypeInvalid, http.StatusBadRequest},
 		{shared.ErrVenueNameRequired, http.StatusBadRequest},
 		{shared.ErrVenueLatLngRange, http.StatusBadRequest},
+		{shared.ErrVenueLatLngNotFinite, http.StatusBadRequest},
 		{shared.ErrVenueHomeNeedAddr, http.StatusBadRequest},
 	}
 	for _, c := range cases {
@@ -147,6 +151,54 @@ func TestValidationStatus(t *testing.T) {
 	// 使用者會一直改輸入重試，而問題不在那裡。
 	if got := validationStatus(errUnknownForTest); got != http.StatusInternalServerError {
 		t.Fatalf("未知錯誤應該 500，得到 %d", got)
+	}
+}
+
+// TestB5a3_ValidationStatusCoversEverySentinel 釘的是「**有沒有漏接**」，不是「接得對不對」。
+//
+// 🔴 這條的存在理由是一個真的發生過的漏接（2026-09-09，Codex 覆驗抓到）：
+// [B5-a2] 加了 ErrVenueLatLngNotFinite 這個新 sentinel，而 validationStatus() 的
+// switch 是**手打清單** ⇒ 沒加進去的那條走 default ⇒ 輸入錯誤回 **500 不是 400**。
+// 上面那支 TestValidationStatus 對這件事零鑑別力：它自己也是手打清單，
+// **同一個人漏掉一次就是兩邊一起漏**，而兩邊都漏之後測試照樣全綠。
+//
+// ⇒ 這裡改成**掃原始碼數 sentinel 定義**，與測試清單的長度比對（同 shared 那邊
+// 「掃常數定義行數比對 map 大小」的手法）。新增 sentinel 而忘了接線 ⇒ 這條會紅。
+//
+// ⚠️ 界線：它只保證「每一個 ErrVenue* 都被 TestValidationStatus 列到」，
+// 不保證列的那個 want 值是對的 —— 後者是 TestValidationStatus 自己的事。
+func TestB5a3_ValidationStatusCoversEverySentinel(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "shared", "venue_dto.go"))
+	if err != nil {
+		// fail-closed：讀不到就判紅。讀不到與「一個 sentinel 都沒有」必須不同。
+		t.Fatalf("讀不到 shared/venue_dto.go：%v", err)
+	}
+	found := regexp.MustCompile(`(ErrVenue\w+)\s*=\s*errors\.New`).FindAllStringSubmatch(string(src), -1)
+	// 🔴 掃描器自己的反控：掃到 0 個一定是 regex 壞了，不是「真的沒有 sentinel」。
+	if len(found) == 0 {
+		t.Fatal("掃不到任何 ErrVenue* sentinel ⇒ 這把尺壞了，不是通過")
+	}
+	// 這份清單必須與 TestValidationStatus 的 cases 同步（那裡多了一格 nil）。
+	listed := []error{
+		shared.ErrVenueTypeInvalid,
+		shared.ErrVenueNameRequired,
+		shared.ErrVenueLatLngRange,
+		shared.ErrVenueLatLngNotFinite,
+		shared.ErrVenueHomeNeedAddr,
+	}
+	if len(listed) != len(found) {
+		names := make([]string, 0, len(found))
+		for _, m := range found {
+			names = append(names, m[1])
+		}
+		t.Fatalf("shared 有 %d 個 ErrVenue* sentinel %v，而這裡只列了 %d 個 ⇒ 有新的沒接線",
+			len(found), names, len(listed))
+	}
+	// 每一個都必須被 validationStatus 認得（走到 default 就是漏接）。
+	for i, e := range listed {
+		if got := validationStatus(e); got != http.StatusBadRequest {
+			t.Errorf("listed[%d] (%v) = %d，走到 default 了 ⇒ 輸入錯誤被回成 500", i, e, got)
+		}
 	}
 }
 
