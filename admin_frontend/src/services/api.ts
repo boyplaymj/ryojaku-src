@@ -372,5 +372,22 @@ export const api = {
                 body: JSON.stringify(configs)
             });
         }
+    },
+    // 場地審核（B1-f3）。後端 mahjongclub_admin_venues。
+    //
+    // 🔴 review() 只送 approve／reject，**不送 status** —— 後端的 DTO 上根本沒有
+    // 那個欄位（有測試守著）。這裡跟著窄，是為了讓「前端想直接指定狀態」這件事
+    // 在兩端都寫不出來，而不是只有一端擋。
+    venues: {
+        list: async (status = 'pending') => {
+            const res = await request(`/admin/venues?status=${encodeURIComponent(status)}`);
+            return res; // { success, venues: [...] }
+        },
+        review: async (venueId: string, action: 'approve' | 'reject', note?: string) => {
+            return request('/admin/venues', {
+                method: 'POST',
+                body: JSON.stringify({ venueId, action, note })
+            });
+        }
     }
 };

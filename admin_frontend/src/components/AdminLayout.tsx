@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
     LayoutDashboard, Users, Smartphone, Ticket, Cog, LogOut, ChevronRight,
-    BarChart3, MessageSquare, Gamepad2, Megaphone, ShieldAlert, Keyboard, MessageCircle,
+    BarChart3, MessageSquare, Gamepad2, Megaphone, ShieldAlert, Keyboard, MessageCircle, Store,
     Menu, X, Shield, BookOpen, Gift, Mic, ClipboardCheck, BookLock } from 'lucide-react';
 
 interface NavItemProps {
@@ -101,6 +101,7 @@ const AdminLayout: React.FC = () => {
                         <div className="space-y-1">
                             {isSuper && <NavItem to="/users" icon={<Users size={18} />} label="用戶名單管理" />}
                             {isSuper && <NavItem to="/moderation" icon={<ShieldAlert size={18} />} label="內容檢舉審核" />}
+                            {isSuper && <NavItem to="/venues" icon={<Store size={18} />} label="場地審核" />}
 
                             <NavItem to="/push" icon={<Megaphone size={18} />} label="全體推送通知" />
 

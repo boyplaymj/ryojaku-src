@@ -22,6 +22,7 @@ import AnalysisInvite from './pages/AnalysisInvite';
 import VoiceTaiUsage from './pages/VoiceTaiUsage';
 import VoiceTaiReview from './pages/VoiceTaiReview';
 import VoiceTaiRuleset from './pages/VoiceTaiRuleset';
+import VenueReview from './pages/VenueReview';
 
 import { Navigate } from 'react-router-dom';
 
@@ -58,6 +59,8 @@ const App: React.FC = () => {
           <Route path="users" element={<ProtectedRoute requireSuper><Users /></ProtectedRoute>} />
           <Route path="push" element={<ProtectedRoute><PushNotifications /></ProtectedRoute>} />
           <Route path="moderation" element={<ProtectedRoute requireSuper><Moderation /></ProtectedRoute>} />
+          {/* 場地審核（B1-f3）：hall 建立後是 pending，通過前玩家拿不到地址 */}
+          <Route path="venues" element={<ProtectedRoute requireSuper><VenueReview /></ProtectedRoute>} />
           <Route path="versions" element={<ProtectedRoute requireSuper><VersionControl /></ProtectedRoute>} />
           <Route path="vouchers" element={<ProtectedRoute requireSuper><Vouchers /></ProtectedRoute>} />
           <Route path="activities" element={<ProtectedRoute requireSuper><ActivitySettings /></ProtectedRoute>} />
