@@ -516,6 +516,25 @@ Resources:
       # GSI 暫不開:v1 的查詢只有後台列出待審建議,全表掃,量級極小(§4.2)。
       TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }   # 建議 365 天
 
+  # ---------- 場地（[B1] 2026-09-09 新增，正典 PLAYER_APP_REDESIGN.md §5.3）----------
+  VenuesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${TablePrefix}Venues'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: venueId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: venueId, KeyType: HASH }
+      # GSI 暫不開，判準（不是「以後再說」）：筆數 > 500，或列表端點單次 Scan
+      # 消耗 > 20 RCU（CloudWatch ConsumedReadCapacityUnits ÷ 呼叫數）。
+      # 既有 Games 表也是 PK-only + 一個 status GSI，且它有 geohash 欄位卻沒有
+      # geohash 索引 ⇒ 地圖查詢本來就不靠索引。後台審核用量本來就低。
+      # ⚠️ 要加之前先讀這條坑：DDB 對 key 屬性型別不符是**直接拒寫**不是稀疏跳過；
+      #    而 geohash 目前在 approxLocation 底下（巢狀），GSI 不能用巢狀屬性當 key
+      #    ⇒ 真要做得先拉到頂層並回填。
+      # ⚠️ **不設 TTL**：場地是常駐實體，不像 Games／Notifications 會過期。
+
 Outputs:
   TablePrefix:
     Value: !Ref TablePrefix
