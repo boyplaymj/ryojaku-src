@@ -147,7 +147,19 @@ user_exists(){
   # 🔴 查無資料時 aws cli 回的是**空字串**，不是 `{}`（rc 仍為 0）。
   #    姊妹探針 venue-live.cjs 就是漏了這一點 ⇒ JSON.parse('') 丟例外 ⇒ 假紅。
   [ -z "${out//[[:space:]]/}" ] && return 1
-  printf '%s' "$out" | grep -q '"Item"' && return 0 || return 1
+  # 🔴 用 JSON 解析而不是 `grep '"Item"'`：後者對「空字串」與「壞掉的輸出」
+  #    都回同一個答案（不存在）⇒ 上面那行 `[ -z … ]` 會變成**等價突變**
+  #    （拿掉它行為一字不差，而那與「測試沒咬到」外觀相同 —— 突變測試 M6
+  #    第一次就是這樣存活的）。改成解析之後，三種情形才真的分得開：
+  #      有 Item → 0 ／ 沒 Item（含空字串）→ 1 ／ **解析不出來 → 2（不知道）**
+  printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(2)
+sys.exit(0 if isinstance(d, dict) and d.get("Item") else 1)' 2>/dev/null
+  return $?
 }
 
 # authtoken_hashes <userId> → 每行一個 tokenHash
