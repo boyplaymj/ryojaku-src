@@ -417,9 +417,9 @@
     {
       "name": "daily-bonus",
       "projectPath": "cmd/lambdas/apis/mahjongclub_daily_bonus",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "POST",
-      "path": "/daily-bonus?",
+      "path": "/daily-bonus",
       "auth": "user",
       "tables": [
         "Users",

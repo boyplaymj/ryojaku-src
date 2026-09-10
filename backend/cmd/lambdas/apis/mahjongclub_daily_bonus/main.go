@@ -56,7 +56,14 @@ type Response struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+// 🔴 v1(APIGatewayProxy*) 而非 v2 —— 2026-09-10 由 HTTP_V2 改判 REST_V1 時一起轉。
+// 光搬路由不夠,而失敗的樣子會誤導:v2 的回應結構多一個 `cookies` 欄位,
+// REST proxy integration 只認 statusCode/headers/multiValueHeaders/body/isBase64Encoded,
+// 多出來的欄位被判成 malformed ⇒ 回 **502**,而 Lambda 那邊 END 正常、零錯誤日誌。
+// 「lambda 壞了」與「回應形狀不合 REST 的規矩」在 CloudWatch 上逐字相同。
+// 請求端同樣要轉:RequestContext.HTTP.Method 與 AuthorizerUserIDV2 讀的都是 v2 專屬欄位,
+// 餵 v1 事件時**靜靜取到零值** ⇒ 每個請求都會被判成未授權。
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
 		"Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -64,11 +71,11 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"Content-Type":                 "application/json",
 	}
 
-	if request.RequestContext.HTTP.Method == "OPTIONS" {
-		return events.APIGatewayV2HTTPResponse{StatusCode: 200, Headers: headers, Body: ""}, nil
+	if request.HTTPMethod == "OPTIONS" {
+		return events.APIGatewayProxyResponse{StatusCode: 200, Headers: headers, Body: ""}, nil
 	}
 
-	userID := shared.AuthorizerUserIDV2(request)
+	userID := shared.AuthorizerUserID(request)
 	if userID == "" {
 		return errorResponse(headers, http.StatusUnauthorized, "unauthorized")
 	}
@@ -249,14 +256,14 @@ func executeClaimTransaction(ctx context.Context, userID string, record DailyCla
 	return err
 }
 
-func successResponse(headers map[string]string, data interface{}) (events.APIGatewayV2HTTPResponse, error) {
+func successResponse(headers map[string]string, data interface{}) (events.APIGatewayProxyResponse, error) {
 	body, _ := json.Marshal(Response{Success: true, Data: data})
-	return events.APIGatewayV2HTTPResponse{StatusCode: 200, Headers: headers, Body: string(body)}, nil
+	return events.APIGatewayProxyResponse{StatusCode: 200, Headers: headers, Body: string(body)}, nil
 }
 
-func errorResponse(headers map[string]string, statusCode int, message string) (events.APIGatewayV2HTTPResponse, error) {
+func errorResponse(headers map[string]string, statusCode int, message string) (events.APIGatewayProxyResponse, error) {
 	body, _ := json.Marshal(Response{Success: false, Error: message})
-	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: headers, Body: string(body)}, nil
+	return events.APIGatewayProxyResponse{StatusCode: statusCode, Headers: headers, Body: string(body)}, nil
 }
 
 func main() {

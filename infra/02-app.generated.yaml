@@ -1295,12 +1295,12 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_daily_bonus
       FunctionName: !Sub 'ryojaku-${Stage}-daily-bonus'
       Events:
-        Http0:
-          Type: HttpApi
+        Rest0:
+          Type: Api
           Properties:
-            ApiId: !Ref HttpApi
+            RestApiId: !Ref RestApi
             Path: '/daily-bonus'
-            Method: POST
+            Method: post
             Auth:
               Authorizer: RyojakuUserAuth
       Policies:
