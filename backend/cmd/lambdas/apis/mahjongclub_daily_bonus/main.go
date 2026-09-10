@@ -20,17 +20,37 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
+// ddbAPI 只列 handler 主線真的會呼叫的兩支。
+// 抽成介面的唯一理由是**可注入** —— 見 main_v1_contract_test.go 檔頭的 M4:
+// 在此之前「身分讀得到的時候不會被判 401」這條線沒有任何單元尺,
+// 因為 handler 一旦走過 401 那道閘,下一步就是碰真表。
+type ddbAPI interface {
+	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	TransactWriteItems(ctx context.Context, in *dynamodb.TransactWriteItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)
+}
+
 var (
-	dynamoClient *dynamodb.Client
-	tablePrefix  string
+	dynamoClient ddbAPI
+	// 🔴 影子帳本那一步走 shared.RecordPointChangeShadow,它吃的是**具體**的
+	// *dynamodb.Client(points.go:75)。把它改成介面會動到整個 backend 的呼叫端,
+	// 是另一個決定 ⇒ 這裡另存一份具體 client。生產路徑上兩個變數指向同一顆;
+	// 測試裡 recordShadowLog 會被整個換掉,所以碰不到這顆。
+	shadowDB    *dynamodb.Client
+	tablePrefix string
 )
+
+// nowFunc 是時鐘的接縫。理由不是為了好看:連續天數要拿「台北的昨天」當 key,
+// 而測試若用真時鐘,跨午夜跑就會拿到差一天的 key ⇒ 那把尺會間歇假紅。
+var nowFunc = time.Now
 
 func init() {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("ap-southeast-1"))
 	if err != nil {
 		log.Fatalf("unable to load SDK config, %v", err)
 	}
-	dynamoClient = dynamodb.NewFromConfig(cfg)
+	client := dynamodb.NewFromConfig(cfg)
+	dynamoClient = client
+	shadowDB = client
 	tablePrefix = os.Getenv("TABLE_PREFIX")
 	if tablePrefix == "" {
 		tablePrefix = "MahjongClub_"
@@ -82,7 +102,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// 1. Get accurate Taipei time
 	loc, _ := time.LoadLocation("Asia/Taipei")
-	now := time.Now().In(loc)
+	now := nowFunc().In(loc)
 	todayStr := now.Format("2006-01-02")
 	yesterdayStr := now.AddDate(0, 0, -1).Format("2006-01-02")
 
@@ -134,27 +154,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// 5.5 Record Shadow Point Log
-	go func() {
-		logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		// Get current balance
-		res, err := dynamoClient.GetItem(logCtx, &dynamodb.GetItemInput{
-			TableName: aws.String(tablePrefix + "Users"),
-			Key: map[string]types.AttributeValue{
-				"userId": &types.AttributeValueMemberS{Value: userID},
-			},
-		})
-		if err != nil || res.Item == nil {
-			log.Printf("[DailyBonus] Failed to fetch balance for user %s: %v", userID, err)
-			return
-		}
-
-		var user shared.User
-		attributevalue.UnmarshalMap(res.Item, &user)
-
-		shared.RecordPointChangeShadow(logCtx, dynamoClient, tablePrefix, userID, totalReward, shared.PointTypeCredit, user.Points-totalReward, user.Points, "每日簽到獎勵", "daily_bonus", nil)
-	}()
+	go recordShadowLog(userID, totalReward)
 
 	return successResponse(headers, map[string]interface{}{
 		"pointsEarned":    totalReward,
@@ -264,6 +264,37 @@ func successResponse(headers map[string]string, data interface{}) (events.APIGat
 func errorResponse(headers map[string]string, statusCode int, message string) (events.APIGatewayProxyResponse, error) {
 	body, _ := json.Marshal(Response{Success: false, Error: message})
 	return events.APIGatewayProxyResponse{StatusCode: statusCode, Headers: headers, Body: string(body)}, nil
+}
+
+// recordShadowLog 是上面「5.5 影子帳本」那一步。抽成變數是為了讓契約測試把它換掉 ——
+// 它走的是具體 client(見 shadowDB 那段),留在 handler 裡的話,
+// 一個「帶合法身分」的單元測試會在背景真的打到線上表。
+//
+// ⚠️ 代價要寫清楚:被換掉之後,下面這個函式本體在單元測試裡是**零覆蓋**的。
+// 它在補這支測試之前也是零覆蓋(整支 handler 都沒有測試),所以不是退步 ——
+// 但也**不可以**因為「契約測試全綠」就讀成這一段有尺。
+var recordShadowLog = defaultRecordShadowLog
+
+func defaultRecordShadowLog(userID string, totalReward int) {
+	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Get current balance
+	res, err := dynamoClient.GetItem(logCtx, &dynamodb.GetItemInput{
+		TableName: aws.String(tablePrefix + "Users"),
+		Key: map[string]types.AttributeValue{
+			"userId": &types.AttributeValueMemberS{Value: userID},
+		},
+	})
+	if err != nil || res.Item == nil {
+		log.Printf("[DailyBonus] Failed to fetch balance for user %s: %v", userID, err)
+		return
+	}
+
+	var user shared.User
+	attributevalue.UnmarshalMap(res.Item, &user)
+
+	shared.RecordPointChangeShadow(logCtx, shadowDB, tablePrefix, userID, totalReward, shared.PointTypeCredit, user.Points-totalReward, user.Points, "每日簽到獎勵", "daily_bonus", nil)
 }
 
 func main() {
