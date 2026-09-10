@@ -44,7 +44,7 @@ AUTHORIZER_PILOT = {
 
     # S2-A（風險分級見 SECURITY_AUTH_BYPASS.md §3；原註記為「低風險」有誤，已更正：
     #  daily-bonus 與 claim-push-bonus 是 A 級金流，會直接發點數，不是低風險讀取。）
-    "daily-bonus",            # HTTP_V2 POST /daily-bonus         ← A 級金流
+    "daily-bonus",            # REST_V1 POST /daily-bonus        ← A 級金流（2026-09-10 由 HTTP_V2 改判，見 PATH_RECONCILE §4b）
     "claim-push-bonus",       # HTTP_V2 POST /claim-push-bonus    ← A 級金流
     "chat-get-history",       # REST_V1 GET  /chat/history        D 級讀取
     "chat-get-room-info",     # REST_V1 GET  /chat/room-info      D 級讀取

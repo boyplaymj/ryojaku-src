@@ -45,10 +45,16 @@ ek5dythoh9: $connect, $disconnect, sendMessage
 
 ### 2a. 切法問題 —— 路徑對，但被分到 HTTP API／Lambda URL（5 條）
 
+⚠️ **本表是 2026-07 對帳當下的紀錄，不是即時現況** —— 已解決的逐列標注，
+不改寫原值（改寫的話「當初就沒問題」與「後來修好了」會分不出來）。
+🔴 這一段是 Codex 覆驗抓到的：`daily-bonus` 那列與同檔 §4b **互相矛盾**，
+而「manifest 現況」這個欄名讀起來就是即時的。同一個檔裡兩個說法相反時，
+讀到哪一個取決於從哪裡進來 —— 從 §2a 進來的人會拿到過期那份。
+
 | 前端呼叫 | manifest 現況 | 上游真相 |
 |---|---|---|
 | `POST /claim-push-bonus` | `HTTP_V2` | 腳本實證在 `yg7y0xkb50` |
-| `POST /daily-bonus` | `HTTP_V2` | 同一個 API |
+| `POST /daily-bonus` | ~~`HTTP_V2`~~ → **`REST_V1`** ✅ 已解決 2026-09-10（§4b） | 同一個 API |
 | `GET,POST /notifications` | `HTTP_V2` | 同一個 API |
 | `GET /ratings` | `HTTP_V2` | 同一個 API |
 | `POST /redeem-code` | `LAMBDA_URL` | 前端走 base URL 呼叫，故上游必為 API 路由 |
