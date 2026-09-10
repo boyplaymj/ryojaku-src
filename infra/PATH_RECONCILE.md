@@ -121,7 +121,7 @@ accept-registration apiType: HTTP_V2→REST_V1, path: "/registrations/accept?" �
 reject-registration apiType: HTTP_V2→REST_V1, path: "/registrations/reject?" → "/reject-registration"
 notifications       apiType: HTTP_V2 → REST_V1
 get-ratings         apiType: HTTP_V2 → REST_V1
-daily-bonus         apiType: HTTP_V2 → REST_V1
+daily-bonus         ✅ 已套用(2026-09-10)：apiType HTTP_V2→REST_V1、path 去 "?" —— 見 §4b
 claim-push-bonus    apiType: HTTP_V2 → REST_V1
 redeem-code         apiType: LAMBDA_URL → REST_V1,   path: "/redeem-code?" → "/redeem-code"
 analytics           ✅ 已套用(2026-07-30 P0-a)：auth: public → admin，路由保留 —— 見 §4
@@ -130,6 +130,57 @@ analytics           ✅ 已套用(2026-07-30 P0-a)：auth: public → admin，�
 
 **方向理由**：不要把 59 條搬去 HTTP API 去模仿上游 —— 我方 REST `9mu0vajn38` 已有 62 條在跑、
 自訂網域 `ryojaku-api.boyplaymj.com` 也掛在它上面，那樣是拆掉能動的東西。反過來把 7 條收進 REST 才是小動作。
+
+## 4b. `daily-bonus` 單獨出隊（2026-09-10）
+
+**起因不是對帳，是線上壞著**：前端每次開 App 打 `/daily-bonus` 都拿到 403，
+訊息來自 **SigV4 解析器**（`Invalid key=value pair (missing equal-sign) in Authorization header`）。
+🔴 **這個訊息會把人帶往錯的方向** —— 它讀起來像「那條路由的 auth 設定與別支不同」，
+而我第一次就是這樣寫進設計冊的。真因是：`POST /daily-bonus` 活在 HTTP API
+`3pmmlmvr5a`，而自訂網域 `ryojaku-api.boyplaymj.com` 的 basePath mapping
+**只指向 REST `9mu0vajn38`** ⇒ 請求落到一支沒有這個資源的 API，
+API Gateway 於是拿 `Authorization` 去當 SigV4 解析。
+**「auth 設錯」與「路由不在這支 API 上」在那個 403 上長得一模一樣。**
+
+**為什麼可以不等 §5 的前置條件**：那個條件的觸發點是 `HTTP_V2` **歸零**
+（無 route 的 HttpApi 能不能過 CFN 未驗證）。只搬這一條之後 HTTP API 還剩四條
+（`ANY /notifications`／`GET /ratings`／`POST /claim-push-bonus`／
+`POST /registrations/{accept,reject}`）⇒ 不歸零，不觸發。**剩下七條仍受該條件約束。**
+
+🔴 **搬路由只是一半，而另一半的失敗長得像「Lambda 壞了」**：
+`mahjongclub_daily_bonus` 的 handler 是 `APIGatewayV2HTTPRequest/Response`。
+
+| | 症狀 | 為什麼難查 |
+|---|---|---|
+| 回應端 | v2 結構多一個 `cookies` 欄位；REST proxy integration 只認 `statusCode`／`headers`／`multiValueHeaders`／`body`／`isBase64Encoded` ⇒ malformed ⇒ **502** | Lambda 那邊 `END` 正常、**零錯誤日誌**、2.21ms。「函式壞了」與「回應形狀不合規矩」在 CloudWatch 上逐字相同 |
+| 請求端 | `RequestContext.HTTP.Method`、`AuthorizerUserIDV2` 讀的都是 v2 專屬欄位，餵 v1 事件時**靜靜取到零值** | 沒有例外、沒有日誌，只是每個請求都被判成未授權 |
+
+⇒ **這七條之後要搬時，每一條都必須先確認 handler 的事件型別。**
+判別法：`grep -n 'APIGatewayV2' <handler>/main.go`。有命中就要一起轉
+（v1 的 `shared.AuthorizerUserID` 早就存在，auth.go:176）。
+
+✅ **authorizer 沒有掉**：`daily-bonus` 本來就在 `gen_app_template.py` 的
+`AUTHORIZER_PILOT` 裡，而 `authorizer_for()` **只認名字、不看 `apiType`**
+⇒ 改 apiType 不會讓它變成裸端點。⚠️ 但這是**這一條**的事實，不是通則：
+要搬的下一條若不在那份手工名單裡，搬過去就是無認證端點，**而漏列零錯誤訊號**。
+
+**線上驗收（2026-09-10，四格）**：
+
+| 檢查 | 結果 |
+|---|---|
+| 正控·合法 token `POST /daily-bonus` | **200**，`{"consecutiveDays":1,"pointsEarned":25,...}` |
+| 反控 A·完全沒有 token | **401** `x-amzn-errortype: UnauthorizedException`（不再是 403 SigV4） |
+| 反控 B·壞掉的 token | **401** ⇒ 擋下來的是簽章驗證，不是「有 header 就放行」 |
+| 迴歸·`GET /chat/rooms` | 200 |
+
+⚠️ 反控 B 不可省 —— 少了它，反控 A 的 401 與「authorizer 根本沒掛、是別的東西回的」分不出來。
+⚠️ 正控**會真的領一次每日獎勵**（寫 `DailyClaims` ＋ `PointTransactions` ＋ `Users.points`），
+對象是 stg 探針帳號 `APP_C1fARb3MMx0cp0j0`。重跑當天第二次會拿到「今天已領」而非 200。
+
+⚠️ **只重 build `daily-bonus` 一顆，沒跑 `build_all.sh`** —— 後者會用當下工作樹
+重建全部 84 顆，把別條 session 未提交的改動做成產物上線。
+（部署前實證過 `build/` 最新 mtime `09-09 17:00:32` vs stack 最後更新 `09-09 17:02:53`
+⇒ 當時產物就是線上那一份，沒有夾帶。）
 
 ### ⚠️ 套用前的前置條件
 
