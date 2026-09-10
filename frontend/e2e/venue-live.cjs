@@ -39,6 +39,7 @@ const MARK = 'B5RPROBE-DELETEME';
 const SHOTS = '/tmp/b5r-shots';
 
 let TOTAL = 0, FAIL = 0;
+let residueRc2 = false;   // 清理沒歸零 ⇒ 這一輪不可信（rc=2），見收尾那段
 const ok = (m) => { TOTAL++; console.log(`  ✅ ${m}`); };
 const bad = (m) => { TOTAL++; FAIL++; console.log(`  ❌ ${m}`); };
 const check = (desc, cond) => (cond ? ok(desc) : bad(desc));
@@ -233,27 +234,65 @@ function loadPlaywright() {
     process.exitCode = 2;
   } finally {
     if (browser) await browser.close().catch(() => {});
-    console.log('\n══ 清理 ══');
+    console.log('\n══ 清理（寫入面積必須歸零）══');
+    // 🔴🔴 **這一段 2026-09-10 整個重寫，收 Codex 覆驗的三條，而第三條是承重的那條：**
+    //  ① 原本寫了 1 筆 Users ＋ 2 筆 Venues，read-back **只掃 Venues**
+    //     ⇒ 漏掉的那張表上的殘留，與「沒有殘留」逐字相同。
+    //  ② 原本宣稱「掃過整張表」。⚠️ **這條我實測後判定不成立**：aws cli 對 scan
+    //     會自動翻頁（`--page-size 1` 強制 7 次 API 呼叫，仍回全部 7 筆，與 `--select COUNT`
+    //     的 7 一致）。但仍然改掉 —— GetItem 不依賴「CLI 預設會翻頁」這個**工具的性質**
+    //     （`~/.aws/config` 的 `max_items` 就能靜靜改掉它）。
+    //  ③ **承重**：原本刪除失敗／read-back 失敗／發現殘留都只印 ⚠️，**不動 FAIL 也不動 rc**
+    //     ⇒ 可以印出 13/13、rc=0 而東西還躺在表上。現在任何一種都 **rc=2**。
+    //     為什麼是 2 不是 1：斷言本身沒有失敗，是**這一輪的前提**（跑完不留東西）破了
+    //     ⇒ 屬於「這次的結果不可信」，與「量到失敗」不同號。
+    const SKIP = process.env.PROBE_SKIP_CLEANUP === '1';
+    if (SKIP) console.log('  ⚠️ PROBE_SKIP_CLEANUP=1：**故意不刪**（這是 read-back 自己的反控）');
+    const problems = [];
+    const keyOf = (tbl, id) => (tbl === 'users' ? { userId: { S: id } } : { venueId: { S: id } });
+    const tableOf = (tbl) => (tbl === 'users' ? USERS : VENUES);
     for (const [tbl, id] of cleanup) {
-      const table = tbl === 'users' ? USERS : VENUES;
-      const key = tbl === 'users' ? { userId: { S: id } } : { venueId: { S: id } };
-      try { aws(['dynamodb', 'delete-item', '--table-name', table, '--key', JSON.stringify(key)]); }
-      catch (e) { console.log(`  ⚠️ 刪不掉 ${id}：${e.message.slice(0, 100)}`); }
+      if (SKIP) break;
+      try { aws(['dynamodb', 'delete-item', '--table-name', tableOf(tbl), '--key', JSON.stringify(keyOf(tbl, id))]); }
+      catch (e) { problems.push(`刪不掉 ${tbl}/${id}：${e.message.slice(0, 80)}`); }
     }
-    // read-back：刪掉了與「刪除指令回 0 但東西還在」不可以同形。
-    try {
-      const out = JSON.parse(aws(['dynamodb', 'scan', '--table-name', VENUES,
-        '--filter-expression', 'begins_with(venueId, :p)',
-        '--expression-attribute-values', JSON.stringify({ ':p': { S: MARK } }),
-        '--projection-expression', 'venueId', '--output', 'json']));
-      console.log((out.Items || []).length
-        ? `  ⚠️ 仍有 ${out.Items.length} 筆 ${MARK} 殘留`
-        : `  ✅ Venues 沒有 ${MARK} 殘留（read-back 掃過整張表）`);
-    } catch (e) { console.log(`  ⚠️ 殘留掃描失敗，不能宣稱清乾淨了：${e.message.slice(0, 100)}`); }
+    // 🔴 逐個 ID 做 GetItem（含 Users）——「刪除指令回 0」與「東西還在」不可以同形。
+    for (const [tbl, id] of cleanup) {
+      try {
+        // 🔴 `|| '{}'`：**查無資料時 aws cli 回的是空字串，不是 `{}`**（rc 仍是 0）。
+        //    第一版少了它 ⇒ `JSON.parse('')` 丟例外 ⇒ 落進下面的 catch，被算成
+        //    「read-back 失敗」而 rc=2。方向是**假紅**：東西明明刪乾淨了卻報殘留。
+        //    ⚠️ 抓到它的不是任何測試，是**真的跑一次**（2026-09-10，3/3 全誤報）——
+        //    而 Python 姊妹檔早就寫著 `json.loads(out or "{}")`，我改 Node 這支時
+        //    只搬了結構、沒搬這個細節。⇒ 「兩支對齊」不等於「兩支都對」。
+        const raw = aws(['dynamodb', 'get-item', '--table-name', tableOf(tbl),
+          '--key', JSON.stringify(keyOf(tbl, id)), '--consistent-read',
+          '--projection-expression', tbl === 'users' ? 'userId' : 'venueId', '--output', 'json']);
+        const out = JSON.parse(raw.trim() || '{}');
+        if (out.Item) problems.push(`${tbl}/${id} 仍在表上`);
+      } catch (e) {
+        // 讀不回來 ⇒ 不知道還在不在 ⇒ 一樣不可以宣稱清乾淨了。
+        problems.push(`read-back 失敗 ${tbl}/${id}：${e.message.slice(0, 80)}`);
+      }
+    }
+    if (problems.length) {
+      console.log(`  ❌ 清理沒有歸零（${problems.length} 項）：`);
+      problems.slice(0, 6).forEach((m) => console.log(`      · ${m}`));
+      console.log('  ⇒ rc=2：斷言本身沒失敗，但這一輪留下了東西 ⇒ 結果不可信。');
+      residueRc2 = true;
+    } else {
+      console.log(`  ✅ ${cleanup.length} 個 ID 逐個 GetItem 讀回，全部不存在（含 Users）`);
+    }
   }
 
   console.log(`\n══ 結果：${TOTAL - FAIL}/${TOTAL} ══  截圖：${SHOTS}/`);
   if (process.exitCode === 2) { console.log('rc=2：腳本自己爆了，不可讀成通過。'); return; }
+  // 🔴 順序：殘留優先於斷言結果 —— 13/13 而東西還在表上，那個 13/13 不可以被讀成「乾淨跑完」。
+  if (residueRc2) {
+    console.log('rc=2：**清理沒有歸零**，本輪結果不可讀成通過（斷言另計，見上）。');
+    process.exitCode = 2;
+    return;
+  }
   if (FAIL) { console.log('❌ 有斷言沒過。'); process.exitCode = 1; return; }
   console.log('✅ 全部通過。⚠️ 界線：注入 session 繞過了登入流程；CreateVenue 那頁沒驗（它會抓圖磚）。');
 })();

@@ -42,7 +42,12 @@
 # ⚠️ 寫入面積（跑完全部刪掉並 read-back 確認）：
 #    Users 兩列、Venues 最多四列（P1 一列、P3 兩列、P4b 一列，
 #    外加**部署前**那次 P4a 會意外建成的一列 —— 那正是它紅的方式）。
-#    全部以 B5PROBE-DELETEME 開頭，收尾另有一道 Scan 掃殘留。
+#    收尾對**每一個寫過的 ID**（兩張表都算）逐個 `GetItem --consistent-read`，
+#    有任何一筆讀得回來、或讀不回來 ⇒ **rc=2**（見 main() 的 finally）。
+#    🔴 本行 2026-09-10 之前寫的是「收尾另有一道 Scan 掃殘留」，而那把尺
+#      `begins_with(venueId, MARK)` 只掃 Venues ⇒ **API 建出來的 `V_<uuid>`
+#      不帶 MARK 前綴、Users 兩列根本不在它掃的表上**。實測（反控留下 6 筆殘留）
+#      它只看得到 **2/6**，而且看到了也只印 ⚠️、rc 照樣 0。
 
 import base64
 import hashlib
@@ -73,6 +78,8 @@ BLUR_TOL = 0.02
 TOTAL = 0
 FAIL = 0
 LAST_FP = ""
+# 清理沒歸零 ⇒ 這一輪不可信（rc=2）。用 list 是為了在巢狀作用域裡免 global。
+RESIDUE = []
 
 
 def pass_(msg):
@@ -345,38 +352,56 @@ def main():
 
     finally:
         print("\n══ 清理（寫入面積必須歸零）══")
-        left = []
-        for vid in created:
-            if not vid:
-                continue
-            rc, _, err = ddb("delete-item", "--table-name", VENUES, "--key",
-                             json.dumps({"venueId": {"S": vid}}))
+        # 🔴🔴 **2026-09-10 整段重寫。** 起因是 Codex 覆驗**姊妹那支**
+        #    （frontend/e2e/venue-live.cjs）時抓到三條，而**這一支一模一樣** ——
+        #    只修被指出來的那一支，就是「我只改剛好讀到的那一處」那個坑。
+        #  ① 寫了 Users 也寫了 Venues，read-back **只掃 Venues**
+        #     ⇒ 漏掉那張表上的殘留，與「沒有殘留」逐字相同。
+        #  ② 原本宣稱「掃過整張表」。⚠️ **實測後判定這條不成立**：aws cli 對 scan 會自動翻頁
+        #     （`--page-size 1` 強制 7 次呼叫仍回全部 7 筆，與 `--select COUNT` 一致）。
+        #     但仍改掉 —— GetItem 不依賴「CLI 預設會翻頁」這個**工具的性質**
+        #     （`~/.aws/config` 的 `max_items` 就能靜靜改掉它）。
+        #  ③ **承重**：原本刪除失敗／殘留都只印 ⚠️，**不影響 rc**
+        #     ⇒ 可以印 21/21、rc=0 而東西還躺在表上。現在任何一種都 rc=2。
+        #     為什麼是 2 不是 1：斷言沒有失敗，是**這一輪的前提**破了。
+        skip = os.environ.get("PROBE_SKIP_CLEANUP") == "1"
+        if skip:
+            print("  ⚠️ PROBE_SKIP_CLEANUP=1：**故意不刪**（這是 read-back 自己的反控）")
+        targets = ([(VENUES, "venueId", v) for v in created if v]
+                   + [(USERS, "userId", u) for u in users])
+        problems = []
+        for table, keyname, ident in targets:
+            if skip:
+                break
+            rc, _, err = ddb("delete-item", "--table-name", table, "--key",
+                             json.dumps({keyname: {"S": ident}}))
             if rc != 0:
-                left.append(vid)
-                print(f"  ⚠️ 刪不掉 venue {vid}：{err.strip()[:120]}")
-        for uid in users:
-            rc, _, err = ddb("delete-item", "--table-name", USERS, "--key",
-                             json.dumps({"userId": {"S": uid}}))
+                problems.append(f"刪不掉 {table}/{ident}：{err.strip()[:80]}")
+        # 🔴 逐個 ID 做 GetItem（**含 Users**）。「刪除指令回 0」與「東西還在」不可以同形。
+        for table, keyname, ident in targets:
+            rc, out, err = ddb("get-item", "--table-name", table, "--key",
+                               json.dumps({keyname: {"S": ident}}), "--consistent-read",
+                               "--projection-expression", keyname, "--output", "json")
             if rc != 0:
-                left.append(uid)
-                print(f"  ⚠️ 刪不掉 user {uid}：{err.strip()[:120]}")
-        # 🔴 read-back：刪掉了與「刪除指令回 0 但東西還在」不可以同形。
-        #    掃的是**整張表**找 MARK 開頭的殘留 —— 包含前幾輪跑掛掉留下的。
-        rc, out, err = ddb("scan", "--table-name", VENUES,
-                           "--filter-expression", "begins_with(venueId, :p)",
-                           "--expression-attribute-values", json.dumps({":p": {"S": MARK}}),
-                           "--projection-expression", "venueId", "--output", "json")
-        if rc != 0:
-            print(f"  ⚠️ 殘留掃描失敗（不能宣稱清乾淨了）：{err.strip()[:120]}")
+                # 讀不回來 ⇒ 不知道還在不在 ⇒ 一樣不可以宣稱清乾淨了。
+                problems.append(f"read-back 失敗 {table}/{ident}：{err.strip()[:80]}")
+            elif (json.loads(out or "{}") or {}).get("Item"):
+                problems.append(f"{table}/{ident} 仍在表上")
+        if problems:
+            print(f"  ❌ 清理沒有歸零（{len(problems)} 項）：")
+            for m in problems[:6]:
+                print(f"      · {m}")
+            print("  ⇒ rc=2：斷言本身沒失敗，但這一輪留下了東西 ⇒ 結果不可信。")
+            RESIDUE.append(1)
         else:
-            items = json.loads(out).get("Items", [])
-            if items:
-                print(f"  ⚠️ Venues 仍有 {len(items)} 筆 {MARK} 殘留："
-                      f"{[i['venueId']['S'] for i in items][:5]}")
-            else:
-                print(f"  ✅ Venues 沒有 {MARK} 殘留（read-back 掃過整張表）")
+            print(f"  ✅ {len(targets)} 個 ID 逐個 GetItem 讀回，全部不存在（含 Users）")
 
     print(f"\n══ 結果：{TOTAL - FAIL}/{TOTAL} ══")
+    # 🔴 順序：殘留優先於斷言結果 —— 21/21 而東西還在表上，
+    #    那個 21/21 不可以被讀成「乾淨跑完」。
+    if RESIDUE:
+        print("rc=2：**清理沒有歸零**，本輪結果不可讀成通過（斷言另計，見上）。")
+        return 2
     if FAIL:
         print("❌ 有斷言失敗。")
         print("🔴 **部署前跑本支，P1～P4 紅是預期的** —— 那是這把尺有牙齒的證據；")
