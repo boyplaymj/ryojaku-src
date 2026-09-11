@@ -312,31 +312,47 @@ Codex 回「覆驗通過，沒有新增 finding」，附三個 `run_id`。回收
 
 **結論：五支全是 v2。** 所以這不是「只改 manifest」的事 —— 每一支都要轉 handler。
 
-| handler | auth | V2Req | V2Resp | `RC.HTTP.Method` | `RC.HTTP.Path` | `AuthorizerUserIDV2` | 小計 |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `get_ratings` | public | 1 | 6 | 1 | 0 | 0 | **8** |
-| `notifications` | user | 3 | 13 | 4 | 1 | 1 | **22** |
-| `reject_registration` | user | 1 | 13 | 2 | 1 | 1 | **18** |
-| `accept_registration` | user | 1 | 17 | 2 | 1 | 1 | **22** |
-| `claim_push_bonus` | user | 1 | 6 | 1 | 0 | 1 | **9** |
-| | | | | | | | **79 處** |
+🔴🔴 **下表是 2026-09-11 訂正後的版本（83＋3＝86）。舊版寫 79＋3＝82，漏了一整欄
+`RecordTokenUsageFromHeaderV2` —— Codex 覆驗抓到的。為什麼會漏見本節末尾。**
 
-**五種機械替換**（v1 對應物都已存在，不必新寫）：
+| handler | auth | V2Req | V2Resp | `RC.HTTP.Method` | `RC.HTTP.Path` | `AuthorizerUserIDV2` | `RecordTokenUsageFromHeaderV2` | 小計 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `get_ratings` | public | 1 | 6 | 1 | 0 | 0 | 1 | **9** |
+| `notifications` | user | 3 | 13 | 4 | 1 | 1 | 1 | **23** |
+| `reject_registration` | user | 1 | 13 | 2 | 1 | 1 | 1 | **19** |
+| `accept_registration` | user | 1 | 17 | 2 | 1 | 1 | 1 | **23** |
+| `claim_push_bonus` | user | 1 | 6 | 1 | 0 | 1 | 0 | **9** |
+| | | 7 | 55 | 10 | 3 | 4 | 4 | **83 處** |
 
-| 從 | 到 |
-|---|---|
-| `events.APIGatewayV2HTTPRequest` | `events.APIGatewayProxyRequest` |
-| `events.APIGatewayV2HTTPResponse` | `events.APIGatewayProxyResponse` |
-| `request.RequestContext.HTTP.Method` | `request.HTTPMethod` |
-| `request.RequestContext.HTTP.Path` | `request.Path` |
-| `shared.AuthorizerUserIDV2(request)` | `shared.AuthorizerUserID(request)`（`auth.go:176`，早就在） |
+**六種機械替換**（v1 對應物都已存在，不必新寫）。可原樣照抄：
 
-🔴 **加上三處註解，共 82 處。** 用上面五條 sed 把 79 處消掉之後，
+```bash
+FILES=$(for d in get_ratings notifications reject_registration \
+                 accept_registration claim_push_bonus; do
+          echo backend/cmd/lambdas/apis/mahjongclub_web_$d/main.go; done)
+sed -i \
+  -e 's/events\.APIGatewayV2HTTPRequest/events.APIGatewayProxyRequest/g' \
+  -e 's/events\.APIGatewayV2HTTPResponse/events.APIGatewayProxyResponse/g' \
+  -e 's/request\.RequestContext\.HTTP\.Method/request.HTTPMethod/g' \
+  -e 's/request\.RequestContext\.HTTP\.Path/request.Path/g' \
+  -e 's/shared\.AuthorizerUserIDV2(/shared.AuthorizerUserID(/g' \
+  -e 's/shared\.RecordTokenUsageFromHeaderV2(/shared.RecordTokenUsageFromHeader(/g' \
+  $FILES
+```
+
+對應的 v1 函式都早就存在：`shared.AuthorizerUserID`（`auth.go:176`）、
+`shared.RecordTokenUsageFromHeader`（`token_stats.go:120`）。兩者都只讀 Authorization header。
+
+**已在隔離 worktree 實作過一次**（`git worktree add --detach`，不動共用工作樹）：
+六條套完 `go build` rc=0、`go vet` rc=0、`go test` 五個套件通過
+（`accept_registration` ok，其餘 `no test files`）。**改動未落到共用工作樹，worktree 已移除。**
+
+🔴 **加上三處註解，共 86 處。** 用上面五條 sed 把 79 處消掉之後，
 `notifications:116`／`reject_registration:94`／`accept_registration:97` 仍留著
 「本支是 **HTTP_V2**，故用 `AuthorizerUserIDV2`」——**搬完那句話就是假的**，
 而它會主動把下一個讀的人指向錯的方向。
-⚠️ 這三處是靠「把五種樣式 sed 掉之後看殘量」才浮出來的，不是靠讀程式看到的。
-殘量法同時證明了那五條樣式**涵蓋完全**（另外兩支殘量 0）。
+⚠️ 這三處是靠「把樣式 sed 掉之後看殘量」才浮出來的，不是靠讀程式看到的。
+🔴🔴 **但「殘量法證明了樣式涵蓋完全」那句話是假的，訂正見下。**
 
 **四件已查清、不必擔心的事**（每一件都附怎麼查的）：
 
@@ -358,6 +374,37 @@ Codex 回「覆驗通過，沒有新增 finding」，附三個 `run_id`。回收
 
 **回應端那個 502 的坑不適用**：五支都沒有用到 `Cookies`（實測 0 處），
 所以 v2→v1 只是型別替換，不是要拿掉欄位。
+
+#### 🔴 為什麼會漏掉一整欄：殘量法的偵測器是我手寫的清單（2026-09-11 訂正）
+
+第一版報「79＋3＝82、五種替換」，而正確答案是「83＋3＝86、六種」。
+漏掉的是 `shared.RecordTokenUsageFromHeaderV2(...)`（4 支各 1 處）。
+
+**它是 Codex 覆驗抓到的，不是我的殘量法抓到的 —— 而我當時把殘量法當成涵蓋性的證明。**
+
+殘量法長這樣：把已知的樣式 sed 掉，再 `grep` 看還剩什麼。問題在那個 `grep` 的樣式：
+
+```
+grep 'APIGatewayV2\|RequestContext\.HTTP\|AuthorizerUserIDV2'
+```
+
+⇒ **那是一份手挑清單。** `RecordTokenUsageFromHeaderV2` 這三條一條都不符
+（它含 `V2` 但不含 `APIGatewayV2`），所以它在殘量裡**結構上不可見**，
+而「偵測不到」與「不存在」在輸出上逐字相同。
+我卻據此寫下「殘量法同時證明了那五條樣式涵蓋完全」—— **用一份手挑清單證明手挑清單完整**。
+
+🔴 **而權威的尺一直都在，只要 1.5 秒：`go build`。**
+型別不相容是編譯器的職責，不是 regex 的。實證（在隔離 worktree 裡做的對照）：
+只套原本那 5 條之後 `go build` **rc=1，逐行點名那 4 處**，一個不多一個不少；
+補上第 6 條之後 rc=0、`go vet` rc=0。
+⇒ 教訓不是「regex 要寫寬一點」（寬到 `V2` 會撈到 `DynamoDB V2` 那種無關註解），
+是**有權威的尺就不要用近似的**。
+判別法：問「這個宣稱如果錯了，誰會出聲」——答案是編譯器，那就去跑編譯器。
+
+⚠️ 順帶一個同形狀的：訂正時我用 `git show HEAD:cmd/lambdas/...` 重數，
+少了 `backend/` 前綴 ⇒ `git show` 回空字串、**每一格都是 0**，
+而那與「真的一處都沒有」逐字相同。加 `assert returncode==0 and len>500` 才炸出來。
+**不檢查 returncode 的讀取，回空時會靜靜變成一個好看的零。**
 
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
