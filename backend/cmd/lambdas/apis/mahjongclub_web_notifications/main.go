@@ -55,9 +55,9 @@ func init() {
 	}
 }
 
-func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// 記錄 Token 使用統計 (異步，不影響回應時間)
-	shared.RecordTokenUsageFromHeaderV2(request, "web_notifications")
+	shared.RecordTokenUsageFromHeader(request, "web_notifications")
 
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
@@ -66,19 +66,19 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"Content-Type":                 "application/json",
 	}
 
-	if request.RequestContext.HTTP.Method == "OPTIONS" {
-		return events.APIGatewayV2HTTPResponse{
+	if request.HTTPMethod == "OPTIONS" {
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusOK,
 			Headers:    headers,
 		}, nil
 	}
 
 	// Route based on HTTP method
-	log.Printf("Method: %s, Path: %s, Body: %s", request.RequestContext.HTTP.Method, request.RequestContext.HTTP.Path, request.Body)
+	log.Printf("Method: %s, Path: %s, Body: %s", request.HTTPMethod, request.Path, request.Body)
 
-	if request.RequestContext.HTTP.Method == "GET" {
+	if request.HTTPMethod == "GET" {
 		return handleGetNotifications(ctx, request, headers)
-	} else if request.RequestContext.HTTP.Method == "POST" {
+	} else if request.HTTPMethod == "POST" {
 		// Check if it's a mark-read request by looking at the body
 		var bodyMap map[string]interface{}
 		if err := json.Unmarshal([]byte(request.Body), &bodyMap); err == nil {
@@ -92,7 +92,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 			"error":   "無效的請求格式",
 		}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -104,7 +104,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"error":   "不支援的請求方法",
 	}
 	body, _ := json.Marshal(response)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusMethodNotAllowed,
 		Headers:    headers,
 		Body:       string(body),
@@ -112,14 +112,15 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 }
 
 // handleGetNotifications gets notifications for a user with pagination
-func handleGetNotifications(ctx context.Context, request events.APIGatewayV2HTTPRequest, headers map[string]string) (events.APIGatewayV2HTTPResponse, error) {
-	// 身分一律取自 authorizer（S5-D）。本支是 HTTP_V2，故用 AuthorizerUserIDV2。
+func handleGetNotifications(ctx context.Context, request events.APIGatewayProxyRequest, headers map[string]string) (events.APIGatewayProxyResponse, error) {
+	// 身分一律取自 authorizer（S5-D）。本支 2026-09-11 由 HTTP_V2 改判 REST_V1，
+	// 故用 AuthorizerUserID（v1）。
 	// 原本讀 query param 的 userId：登入者帶 ?userId=<他人> 即可讀取別人的通知（D 級）。
-	userID := shared.AuthorizerUserIDV2(request)
+	userID := shared.AuthorizerUserID(request)
 	if userID == "" {
 		response := GetNotificationsResponse{Success: false, Error: "unauthorized"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusUnauthorized,
 			Headers:    headers,
 			Body:       string(body),
@@ -136,7 +137,7 @@ func handleGetNotifications(ctx context.Context, request events.APIGatewayV2HTTP
 		log.Printf("Failed to get notifications: %v", err)
 		response := GetNotificationsResponse{Success: false, Error: "獲取通知失敗"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    headers,
 			Body:       string(body),
@@ -162,7 +163,7 @@ func handleGetNotifications(ctx context.Context, request events.APIGatewayV2HTTP
 		LastKey:       newLastKey,
 	}
 	body, _ := json.Marshal(response)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers:    headers,
 		Body:       string(body),
@@ -170,12 +171,12 @@ func handleGetNotifications(ctx context.Context, request events.APIGatewayV2HTTP
 }
 
 // handleMarkRead marks a notification as read
-func handleMarkRead(ctx context.Context, request events.APIGatewayV2HTTPRequest, headers map[string]string) (events.APIGatewayV2HTTPResponse, error) {
+func handleMarkRead(ctx context.Context, request events.APIGatewayProxyRequest, headers map[string]string) (events.APIGatewayProxyResponse, error) {
 	var req MarkReadRequest
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		response := MarkReadResponse{Success: false, Error: "無效的請求格式"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -185,7 +186,7 @@ func handleMarkRead(ctx context.Context, request events.APIGatewayV2HTTPRequest,
 	if req.NotificationID == "" {
 		response := MarkReadResponse{Success: false, Error: "缺少通知 ID"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -197,7 +198,7 @@ func handleMarkRead(ctx context.Context, request events.APIGatewayV2HTTPRequest,
 		log.Printf("Failed to mark notification as read: %v", err)
 		response := MarkReadResponse{Success: false, Error: "標記已讀失敗"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    headers,
 			Body:       string(body),
@@ -206,7 +207,7 @@ func handleMarkRead(ctx context.Context, request events.APIGatewayV2HTTPRequest,
 
 	response := MarkReadResponse{Success: true}
 	body, _ := json.Marshal(response)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers:    headers,
 		Body:       string(body),

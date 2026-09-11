@@ -406,6 +406,70 @@ grep 'APIGatewayV2\|RequestContext\.HTTP\|AuthorizerUserIDV2'
 而那與「真的一處都沒有」逐字相同。加 `assert returncode==0 and len>500` 才炸出來。
 **不檢查 returncode 的讀取，回空時會靜靜變成一個好看的零。**
 
+### ✅ §5 步驟③ 已做到「可部署狀態」（2026-09-11）—— **尚未 `sam deploy`**
+
+handler 六條 sed（83 處）＋ 三處註解 ＋ manifest 五支 `HTTP_V2`→`REST_V1` ＋ 重跑產生器，
+全部落到工作樹並提交。**部署沒有做**，理由見本節末。
+
+**程式面**：
+
+| 尺 | 讀數 |
+|---|---|
+| 六種樣式套用後殘量 | 六種**全 0**（套前 7／55／10／3／4／4＝83，git `--numstat` 73 行對得上） |
+| 寬偵測器（掃 `V2`）| 只剩 5 行，全是**正確**陳述（描述本次改判）＋1 行無關的 `DynamoDB V2` |
+| `go build ./...`（整包） | **rc=0**（19.9s） |
+| `go vet ./...` | **rc=0** |
+| `go test ./...` | **rc=0**（`accept_registration`／`shared` 實跑，其餘 cached／無測試檔） |
+
+⚠️ **範圍刻意放大到整包** —— 前一輪只跑那五個套件。雖然已查過「零跨套件引用」，
+但那個「零」是我 grep 出來的，而 `./...` 是編譯器算的。**同一個教訓的第二次應用。**
+
+**樣板面**——預演時寫下的預測，這次逐項驗證：
+
+| 樣式 | 現在 | 基線 | 預演時的預測 |
+|---|---:|---:|---:|
+| `Type: AWS::Serverless::HttpApi` | 0 | 1 | 0 |
+| `!Ref HttpApi` | 0 | 5 | 0 |
+| `${HttpApi}` | 0 | 2 | 0 |
+| `HttpApiUrl` | 0 | 1 | 0 |
+| `AuthorizerHttpApiPermission` | 0 | 1 | 0 |
+| `Type: Api`（REST 路由） | **80** | 75 | 80 |
+| `Type: HttpApi` | 0 | 5 | 0 |
+| 行數 | **2863** | 2896 | 2863 |
+
+**八項全部命中。** 預測是在改動之前寫下的（前置①的乾跑），所以這不是事後對答案。
+
+**五條路由的落點**（不只看「HttpApi 消失了」，要看它們**去了哪裡**）：
+
+| 路由 | 掛在 | Method | Authorizer |
+|---|---|---|---|
+| `/ratings` | REST | `get` | **（無）** —— 與 manifest `auth=public`、線上實測回 400 業務錯誤一致 |
+| `/notifications` | REST | `any` | `RyojakuUserAuth` |
+| `/registrations/reject` | REST | `post` | `RyojakuUserAuth` |
+| `/registrations/accept` | REST | `post` | `RyojakuUserAuth` |
+| `/claim-push-bonus` | REST | `post` | `RyojakuUserAuth` |
+
+**cfn-lint**（`regions=[ap-southeast-1]`）：基線 0 則、新產出 0 則。
+🔴 **同一輪的反控**：把 `/notifications` 改回 `ApiId: !Ref HttpApi`（＝搬到一半）
+⇒ **1 則 E0001**（`property ApiId not defined for resource of type Api`）⇒ 尺有牙。
+⚠️ 精確地說這一輪驗的是「半途而廢的路由」；「懸空引用」那個洞是**上一輪**在基線上驗的
+（5 則 E0001）。兩者是不同的失效模式，不要互相代替。
+
+#### 🔴 為什麼停在這裡，沒有 `sam deploy`
+
+風險不在這次改動，在部署的機制：`build_all.sh` 會用**當下工作樹**重建全部 84 顆
+⇒ 這台機器上別條 session 的未提交改動會被做成產物上線
+（`deploy.sh 打包工作樹` 那個已知坑）。而 `build/` 現在是**舊的**
+（還是 v2 版本的 bootstrap）⇒ 只 `sam deploy` 不重 build 的話，
+樣板說「REST 路由」而 Lambda 裡跑的仍是 v2 handler
+—— **那正是 `/daily-bonus` 踩過的 502／靜靜未授權那一組症狀**。
+
+⇒ 部署要做的是一個獨立決定，必須先處理「怎麼只 build 這五顆、或怎麼確認工作樹乾淨」。
+
+**部署後的驗收已經有現成的反控組**：本檔上一節量到的
+「五條在自訂網域上全部 403」就是 **before 讀數**，部署後應變成 401／200
+（`/ratings` 是 public ⇒ 應為 200 或 400 業務錯誤，不是 403）。
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。

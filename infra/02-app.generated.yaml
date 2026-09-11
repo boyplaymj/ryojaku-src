@@ -161,28 +161,6 @@ Resources:
               Headers: [Authorization]
               ReauthorizeEvery: 0
 
-
-  HttpApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      StageName: !Ref Stage
-      # HTTP API 原本完全沒有 CORS 設定（get-api 回 CorsConfiguration: null、
-      # preflight 直接 404），故其下所有端點在瀏覽器中一律不可用。
-      # 注意與上面 REST 的寫法不同：HTTP API 用純字串列表，不加內層單引號。
-      CorsConfiguration:
-        AllowOrigins: ["*"]
-        AllowHeaders: [Content-Type, Authorization, X-App-Version, X-Platform]
-        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
-      Auth:
-        Authorizers:
-          RyojakuUserAuth:
-            FunctionArn: !GetAtt FnAuthorizer.Arn
-            AuthorizerPayloadFormatVersion: 1.0
-            EnableSimpleResponses: false
-            Identity:
-              Headers: [Authorization]
-              ReauthorizeEvery: 0
-
   FnAdminActivities:
     Type: AWS::Serverless::Function
     Properties:
@@ -1430,9 +1408,9 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_web_get_ratings
       FunctionName: !Sub 'ryojaku-${Stage}-get-ratings'
       Events:
-        Http0:
-          Type: HttpApi
-          Properties: { ApiId: !Ref HttpApi, Path: '/ratings', Method: GET }
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/ratings', Method: get }
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1590,12 +1568,12 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_web_notifications
       FunctionName: !Sub 'ryojaku-${Stage}-notifications'
       Events:
-        Http0:
-          Type: HttpApi
+        Rest0:
+          Type: Api
           Properties:
-            ApiId: !Ref HttpApi
+            RestApiId: !Ref RestApi
             Path: '/notifications'
-            Method: ANY
+            Method: any
             Auth:
               Authorizer: RyojakuUserAuth
       Policies:
@@ -1681,12 +1659,12 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_web_reject_registration
       FunctionName: !Sub 'ryojaku-${Stage}-reject-registration'
       Events:
-        Http0:
-          Type: HttpApi
+        Rest0:
+          Type: Api
           Properties:
-            ApiId: !Ref HttpApi
+            RestApiId: !Ref RestApi
             Path: '/registrations/reject'
-            Method: POST
+            Method: post
             Auth:
               Authorizer: RyojakuUserAuth
       Policies:
@@ -1714,12 +1692,12 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_web_accept_registration
       FunctionName: !Sub 'ryojaku-${Stage}-accept-registration'
       Events:
-        Http0:
-          Type: HttpApi
+        Rest0:
+          Type: Api
           Properties:
-            ApiId: !Ref HttpApi
+            RestApiId: !Ref RestApi
             Path: '/registrations/accept'
-            Method: POST
+            Method: post
             Auth:
               Authorizer: RyojakuUserAuth
       Policies:
@@ -1973,12 +1951,12 @@ Resources:
       CodeUri: ../build/apis__mahjongclub_web_claim_push_bonus
       FunctionName: !Sub 'ryojaku-${Stage}-claim-push-bonus'
       Events:
-        Http0:
-          Type: HttpApi
+        Rest0:
+          Type: Api
           Properties:
-            ApiId: !Ref HttpApi
+            RestApiId: !Ref RestApi
             Path: '/claim-push-bonus'
-            Method: POST
+            Method: post
             Auth:
               Authorizer: RyojakuUserAuth
       Policies:
@@ -2880,17 +2858,6 @@ Resources:
       StageName: !Ref Stage
       AutoDeploy: true
 
-  # HTTP API 專用：明確授權 API Gateway 呼叫 authorizer（SAM 不會自動建這份）。
-  AuthorizerHttpApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt FnAuthorizer.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/*'
-
-
 Outputs:
   RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }
-  HttpApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }
   WebSocketUrl: { Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }

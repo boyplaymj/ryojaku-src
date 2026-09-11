@@ -69,11 +69,11 @@ type Response struct {
 }
 
 // Handler is the main Lambda handler
-func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// 記錄 Token 使用統計 (異步，不影響回應時間)
-	shared.RecordTokenUsageFromHeaderV2(request, "web_accept_registration")
+	shared.RecordTokenUsageFromHeader(request, "web_accept_registration")
 
-	log.Printf("Received request: %s %s", request.RequestContext.HTTP.Method, request.RequestContext.HTTP.Path)
+	log.Printf("Received request: %s %s", request.HTTPMethod, request.Path)
 
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
@@ -82,8 +82,8 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"Content-Type":                 "application/json",
 	}
 
-	if request.RequestContext.HTTP.Method == "OPTIONS" {
-		return events.APIGatewayV2HTTPResponse{
+	if request.HTTPMethod == "OPTIONS" {
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusOK,
 			Headers:    headers,
 			Body:       "",
@@ -94,16 +94,17 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	var userID string
 	var err error
 
-	// 身分一律取自 authorizer（S5-C）。本支是 HTTP_V2，故用 AuthorizerUserIDV2
-	// （讀 RequestContext.Authorizer.Lambda），與 REST 的 AuthorizerUserID 不同，別用錯。
+	// 身分一律取自 authorizer（S5-C）。本支 2026-09-11 由 HTTP_V2 改判 REST_V1，
+	// 故用 AuthorizerUserID（讀 RequestContext.Authorizer）；v2 那支叫 AuthorizerUserIDV2
+	// （讀 RequestContext.Authorizer.Lambda），兩者不可互換。
 	//   原本讀 query param 的 userId：登入者帶 ?userId=<團主> 即可代團主核准報名。
 	//   lineID：LINE legacy 相容層，自 S2-B 掛上 authorizer 後已無法到達（已實測 401）。
 	// 刻意不留 fallback：authorizer context 缺失時必須 fail-closed。
-	userID = shared.AuthorizerUserIDV2(request)
+	userID = shared.AuthorizerUserID(request)
 	if userID == "" {
 		response := Response{Success: false, Error: "unauthorized"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusUnauthorized,
 			Headers:    headers,
 			Body:       string(body),
@@ -117,7 +118,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Failed to parse request body: %v", err)
 		response := Response{Success: false, Error: "Invalid request body"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -137,7 +138,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if finalRegistrationID == "" {
 		response := Response{Success: false, Error: "Missing registrationID parameter"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -150,7 +151,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Registration not found: %s, err: %v", finalRegistrationID, err)
 		response := Response{Success: false, Error: "找不到此報名紀錄"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusNotFound,
 			Headers:    headers,
 			Body:       string(body),
@@ -167,7 +168,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if finalGameID == "" {
 		response := Response{Success: false, Error: "Missing gameID parameter"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -180,7 +181,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Game not found: %s, err: %v", finalGameID, err)
 		response := Response{Success: false, Error: "找不到此團局"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusNotFound,
 			Headers:    headers,
 			Body:       string(body),
@@ -191,7 +192,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if game["hostUserId"].(string) != userID {
 		response := Response{Success: false, Error: "只有主揪可以接受報名"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusForbidden,
 			Headers:    headers,
 			Body:       string(body),
@@ -203,7 +204,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if status == "accepted" {
 		response := Response{Success: false, Error: "此報名已經接受過了"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -213,7 +214,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if status == "rejected" {
 		response := Response{Success: false, Error: "此報名已經被拒絕過了"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -230,7 +231,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if gameStatus != "recruiting" {
 		response := Response{Success: false, Error: gameNotRecruitingMessage(gameStatus)}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -244,7 +245,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if currentPlayers >= capacity {
 		response := Response{Success: false, Error: msgGameFull}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -275,7 +276,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Failed to marshal new player: %v", err)
 		response := Response{Success: false, Error: "接受報名失敗"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    headers,
 			Body:       string(body),
@@ -311,7 +312,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 				log.Printf("Accept rejected by condition: reg=%s game=%s msg=%s", finalRegistrationID, finalGameID, msg)
 				response := Response{Success: false, Error: msg}
 				body, _ := json.Marshal(response)
-				return events.APIGatewayV2HTTPResponse{
+				return events.APIGatewayProxyResponse{
 					StatusCode: http.StatusBadRequest,
 					Headers:    headers,
 					Body:       string(body),
@@ -321,7 +322,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Failed to accept registration atomically: %v", err)
 		response := Response{Success: false, Error: "接受報名失敗"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    headers,
 			Body:       string(body),
@@ -372,7 +373,7 @@ func Handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	}
 
 	body, _ := json.Marshal(response)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers:    headers,
 		Body:       string(body),

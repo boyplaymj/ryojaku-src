@@ -48,7 +48,7 @@ type ClaimRequest struct {
 
 const BonusPoints = 360
 
-func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Received claim request: %s", request.Body)
 
 	headers := map[string]string{
@@ -58,14 +58,14 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"Content-Type":                 "application/json",
 	}
 
-	if request.RequestContext.HTTP.Method == "OPTIONS" {
-		return events.APIGatewayV2HTTPResponse{
+	if request.HTTPMethod == "OPTIONS" {
+		return events.APIGatewayProxyResponse{
 			StatusCode: 200,
 			Headers:    headers,
 		}, nil
 	}
 
-	userID := shared.AuthorizerUserIDV2(request)
+	userID := shared.AuthorizerUserID(request)
 	if userID == "" {
 		return errorResponse(headers, http.StatusUnauthorized, "unauthorized"), nil
 	}
@@ -235,20 +235,20 @@ func claimBonusTransaction(ctx context.Context, userID string) error {
 	return err
 }
 
-func successResponse(headers map[string]string, data interface{}) events.APIGatewayV2HTTPResponse {
+func successResponse(headers map[string]string, data interface{}) events.APIGatewayProxyResponse {
 	resp := APIResponse{Success: true, Data: data}
 	body, _ := json.Marshal(resp)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: 200,
 		Headers:    headers,
 		Body:       string(body),
 	}
 }
 
-func errorResponse(headers map[string]string, statusCode int, message string) events.APIGatewayV2HTTPResponse {
+func errorResponse(headers map[string]string, statusCode int, message string) events.APIGatewayProxyResponse {
 	resp := APIResponse{Success: false, Error: message}
 	body, _ := json.Marshal(resp)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: statusCode,
 		Headers:    headers,
 		Body:       string(body),

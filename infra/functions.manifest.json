@@ -471,7 +471,7 @@
     {
       "name": "get-ratings",
       "projectPath": "cmd/lambdas/apis/mahjongclub_web_get_ratings",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "GET",
       "path": "/ratings?",
       "auth": "public",
@@ -525,7 +525,7 @@
     {
       "name": "notifications",
       "projectPath": "cmd/lambdas/apis/mahjongclub_web_notifications",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "ANY",
       "path": "/notifications?",
       "auth": "user",
@@ -563,7 +563,7 @@
     {
       "name": "reject-registration",
       "projectPath": "cmd/lambdas/apis/mahjongclub_web_reject_registration",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "POST",
       "path": "/registrations/reject?",
       "auth": "user",
@@ -576,7 +576,7 @@
     {
       "name": "accept-registration",
       "projectPath": "cmd/lambdas/apis/mahjongclub_web_accept_registration",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "POST",
       "path": "/registrations/accept?",
       "auth": "user",
@@ -677,7 +677,7 @@
     {
       "name": "claim-push-bonus",
       "projectPath": "cmd/lambdas/apis/mahjongclub_web_claim_push_bonus",
-      "apiType": "HTTP_V2",
+      "apiType": "REST_V1",
       "method": "POST",
       "path": "/claim-push-bonus?",
       "auth": "user",

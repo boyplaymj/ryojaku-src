@@ -114,9 +114,9 @@ func decryptLineID(encryptedData string) (string, error) {
 	return string(plaintext), nil
 }
 
-func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// 記錄 Token 使用統計 (異步，不影響回應時間)
-	shared.RecordTokenUsageFromHeaderV2(request, "web_get_ratings")
+	shared.RecordTokenUsageFromHeader(request, "web_get_ratings")
 
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
@@ -125,8 +125,8 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		"Content-Type":                 "application/json",
 	}
 
-	if request.RequestContext.HTTP.Method == "OPTIONS" {
-		return events.APIGatewayV2HTTPResponse{
+	if request.HTTPMethod == "OPTIONS" {
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusOK,
 			Headers:    headers,
 		}, nil
@@ -142,7 +142,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	if gameID == "" && lineID == "" && userID == "" {
 		response := Response{Success: false, Error: "缺少必要參數: 必須提供 gameId 或 userId/lineID"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers:    headers,
 			Body:       string(body),
@@ -160,7 +160,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 			log.Printf("Failed to decrypt LINE ID: %v", err)
 			response := Response{Success: false, Error: "無效的 LINE ID"}
 			body, _ := json.Marshal(response)
-			return events.APIGatewayV2HTTPResponse{
+			return events.APIGatewayProxyResponse{
 				StatusCode: http.StatusUnauthorized,
 				Headers:    headers,
 				Body:       string(body),
@@ -187,7 +187,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		log.Printf("Failed to get ratings: %v", err)
 		response := Response{Success: false, Error: "獲取評分失敗"}
 		body, _ := json.Marshal(response)
-		return events.APIGatewayV2HTTPResponse{
+		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    headers,
 			Body:       string(body),
@@ -201,7 +201,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		},
 	}
 	body, _ := json.Marshal(response)
-	return events.APIGatewayV2HTTPResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers:    headers,
 		Body:       string(body),
