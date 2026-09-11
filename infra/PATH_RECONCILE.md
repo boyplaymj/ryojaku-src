@@ -518,6 +518,79 @@ handler 的線上行為未變…要說『線上仍然好的』得重打一次」
    ⇒ 在 `git worktree` 裡跑它會去建**主工作樹**。本輪沒有因此受害
    （我在 worktree 裡用的是 `go build` 不是這支），但這是 CLAUDE.md 🌲 那條的形狀。
 
+### 🚀 §5 已部署（2026-09-11）—— 使用者拍板全建，等於同時把 `80af54b` 首次推上線
+
+決定是使用者做的：上一節列出「只 build 五顆／先處理 daily_bonus／全建」三條，選了**全建**。
+⇒ 本次部署**同時**送出 §5 的五支，與 `daily_bonus` 那顆掛了 32 小時沒上線的 refactor。
+
+**過程與讀數**：
+
+| 步驟 | 讀數 |
+|---|---|
+| build 前 race 檢查 | 工作樹 0 未追蹤／0 已修改，HEAD `af46d6e` ⇒ 建的就是 HEAD |
+| `build_all.sh` | **`DONE ok=84 fail=0`** |
+| 產物新鮮度 | **84/84**（`find -newermt` ＋ python `getmtime` 兩個獨立方法一致） |
+| 五支的 v2 符號 | `APIGatewayV2HTTPRequest`／`RecordTokenUsageFromHeaderV2`／`AuthorizerUserIDV2` **全 0**（部署前 notifications 是 16／1／1） |
+| ↳ **反控** | `APIGatewayProxyRequest` 各 3、`RecordTokenUsageFromHeader` notifications 1 ⇒ 那些 0 不是符號被 `-s -w` 剝掉 |
+| `daily_bonus` | `ddbAPI` **1**（部署前 0）⇒ `80af54b` 確實進了產物 |
+| `sam deploy` | **rc=0**，`Successfully created/updated stack` |
+| CFN 事件 | **`DELETE_COMPLETE  AWS::ApiGatewayV2::Api  HttpApi`** ⇒ HTTP API 整個消失 |
+| Outputs | 只剩 `RestApiUrl`＋`WebSocketUrl`，**`HttpApiUrl` 不見了** ⇒ 前置①的條件化真的生效 |
+
+**驗收 —— before 讀數是本檔上一節量的，所以這是真正的前後對照**：
+
+| 路徑（打自訂網域 `ryojaku-api.boyplaymj.com`） | before | after |
+|---|---:|---|
+| `POST /claim-push-bonus` | 403 | **401** `Unauthorized` |
+| `POST /registrations/accept` | 403 | **401** |
+| `POST /registrations/reject` | 403 | **401** |
+| `GET /notifications` | 403 | **401** |
+| `GET /ratings`（public） | 403 | **400** 業務錯誤「必須提供 gameId」 |
+| `GET /chat/rooms`（**正控**·本來就在 REST） | 401 | **401（未變）** |
+
+🔴 **正控那一列不可省**：它證明變的是這五條，不是整體漂移。
+
+🔴 **但 401 只證明「路由在、匿名被擋」。** 所以補一格**帶合法 token** 的正控
+（合成 userId ＋自簽 token，跑完刪掉並 read-back）：
+
+- `GET /notifications` ＋ token → **200** `{"success":true,"unreadCount":0,"hasMore":false}`
+- 同一刻、同一條、**不帶 token** → **401**
+
+⇒ v1 轉換後的 handler **讀得懂請求、也回得出 v1 形狀**（沒有 502，也沒有「靜靜判成未授權」）
+—— 那正是 `/daily-bonus` 踩過的兩種症狀，這次兩種都沒發生。
+
+**舊 base 已不可達**：`https://3pmmlmvr5a.…` 六條全部連線錯誤（API 已刪）。
+
+**其他兩張網**（部署動了全部 84 顆，blast radius 遠大於改動）：
+
+- `verify_daily_bonus_live.py`：`RestApiUrl` **11/11**、自訂網域 **11/11**
+  ⇒ **`80af54b` 第一次上線，也是第一次有人在線上驗過它。**
+- `security_regression.sh`：**36/36**，rc=0，測試資料已清空。
+
+#### ⚠️ 刪掉 HttpApi 的下游後果（兩支驗證腳本寫死了那個 id）
+
+`3pmmlmvr5a` 這個 id **永久消失**。全 repo 掃過，寫死它的有兩支：
+
+| 檔 | 狀態 | 處置 |
+|---|---|---|
+| `verify_cors_browser.py:58` | **活的** —— 那格打 `{HTTP}/registrations/accept` | 改打 `{REST}`，並刪掉 `HTTP` 常數 |
+| `verify_admin_role_gate.py:39,155` | **死碼** —— `TARGETS` 15 項全是 `"V1"`，`kind=="V2"` 走不到 | `HTTP_BASE = None`，且 `kind=="V2"` 改成 **fail-loud `SystemExit`** |
+
+🔴 `HTTP_BASE` 那支**不可以只把常數刪掉了事**：留著一個指向不存在 host 的 base，
+哪天真的有人加一條 V2，拿到的會是**連線錯誤**，而那讀起來像「端點壞了」。
+現在它會明講「HTTP API 已刪除，請改成 V1」。
+
+⚠️ **`verify_cors_browser.py` 我沒有跑**（它是瀏覽器 E2E）。
+`verify_admin_role_gate.py` **也沒有整支跑** —— 它的 `TARGETS` 含 `POST /admin/push-all`
+且會帶 **admin token** 真的打過去，那是對外、不可逆的副作用。
+改用 import 的方式驗：`TARGETS` 的 `kind` 取值只有 `['V1']`
+⇒ 我改的那行**對現況等價**（原本走 `REST_BASE`，現在也走 `REST_BASE`）；
+並實際呼叫 `http_probe(..., "V2", ...)` 確認那道 `SystemExit` **真的會炸**（不是寫了沒接上）。
+
+**仍未驗**：`/registrations/accept`／`reject`／`claim-push-bonus` 只驗到「帶 token 時
+authorizer 放行」這一層是靠 `/notifications` 那格推的 —— 這三條**本身**沒有帶 token 打過
+（它們會寫資料：核准報名／否決報名／領取推播獎勵）。
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。

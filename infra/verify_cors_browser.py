@@ -26,7 +26,8 @@ from playwright.sync_api import sync_playwright
 
 ORIGIN = "https://d1wa3w4dmfwqc7.cloudfront.net"
 REST = "https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg"
-HTTP = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com/stg"
+# HTTP API 已於 2026-09-11 §5 收斂時整個刪除（見 PATH_RECONCILE）。常數一併移除，
+# 留著的話下一個人會拿它去打一個不存在的 host，而那個失敗讀起來像 CORS 壞了。
 PROBE_USER = "APP_1keifs5e846ao6pD"
 
 
@@ -55,7 +56,9 @@ def mint_token():
 CASES = [
     ("REST /get-upload-url", f"{REST}/get-upload-url", {"fileName": "probe.png"}, False),
     ("REST /cancel-game", f"{REST}/cancel-game", {"gameId": "__nonexistent_probe__"}, False),
-    ("HTTP /registrations/accept", f"{HTTP}/registrations/accept",
+    # 2026-09-11：本條原本打 HTTP API。§5 收斂後該路由已搬到 REST，
+    # 而 HttpApi 資源已被 CFN 刪除（id 3pmmlmvr5a 永久消失）⇒ 不改的話這格會變成連線錯誤。
+    ("REST /registrations/accept", f"{REST}/registrations/accept",
      {"registrationId": "__nonexistent_probe__"}, False),
     # 對照組：白名單外的 header 必須被擋，藉此證明瀏覽器確實在執行 allow-headers 檢查，
     # 而不是寬容放行（否則上面三項通過也說明不了什麼）。

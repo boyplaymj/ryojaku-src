@@ -35,8 +35,10 @@ import urllib.request
 
 REGION = "ap-southeast-1"
 REST_BASE = "https://9mu0vajn38.execute-api.ap-southeast-1.amazonaws.com/stg"
-# HTTP API uses an explicit stg stage, not $default.
-HTTP_BASE = "https://3pmmlmvr5a.execute-api.ap-southeast-1.amazonaws.com/stg"
+# HTTP API 已於 2026-09-11 §5 收斂時整個刪除（id 3pmmlmvr5a 永久消失）。
+# TARGETS 現在全部是 "V1"，所以下面 kind=="V2" 的分支是死碼 —— 保留分支是為了
+# 「哪天又有 V2 端點」時不必重寫，但 base 不可以再指向一個不存在的 host。
+HTTP_BASE = None  # 沒有 HTTP API 了；kind=="V2" 會在下面明確炸掉而不是靜靜連線失敗
 
 # authorizer 對「沒 token」與「有效 user token 但非 admin」都回 errors.New("Unauthorized")，
 # API Gateway 兩者都映射成 401、不區分 —— 這是**已拍板的設計**，不是待修的 bug。
@@ -152,7 +154,10 @@ def make_tokens(secret: str, admin_secret: str = None):
 
 def http_probe(method: str, path: str, kind: str, token):
     """token=None 代表完全不帶 Authorization header。"""
-    base = HTTP_BASE if kind == "V2" else REST_BASE
+    if kind == "V2":
+        # fail-loud：連線失敗會被讀成「端點壞了」，而真因是這裡指著一個已刪除的 API。
+        raise SystemExit("kind='V2' 但 HTTP API 已刪除（2026-09-11 §5）—— 請改成 V1")
+    base = REST_BASE
     data = b"{}" if method == "POST" else None
     req = urllib.request.Request(base + path, data=data, method=method)
     if token is not None:
