@@ -730,6 +730,64 @@ A8 轉紅並精確點名漏掉的三支，rc=1。
   **兩個目錄都存在**，我第一次 grep 的是沒有被部署的那個（結果是「只有一行 401、看不到驗證」，
   讀起來就像裸端點）。⇒ 路徑一律從 manifest 取，不要用萬用字元撈。
 
+### ✅ 授權層：拿到合法身分之後能不能動別人的東西（2026-09-11）
+
+`verify_auth_inhandler_gate.py` 的界線寫著「本支答的是有沒有驗身分，不是授權邏輯對不對」。
+補那一半，新增 `infra/verify_registration_authz_live.py`（7 格）。
+
+**`/auth/*` 那四支：答案是結構性的，不需要線上量。**
+`unbindRequest{Provider}`／`changePasswordRequest{CurrentPassword,NewPassword}`／
+`bindRequest{IDToken}`／`logout-all` **連 request struct 都沒有**
+⇒ **沒有任何欄位可以指定別人**，目標一律是 JWT 來的 `userID`
+（`main.go` 各處都是 `"userId": …Value: userID`）。那比執行期檢查更強。
+
+**真正有 IDOR 面的是 §5 剛搬過來的兩條**：`/registrations/{accept,reject}` 吃的
+`registrationId` 屬於**某個人的局**，靠 `game["hostUserId"].(string) != userID → 403` 擋。
+
+**讀數**（主揪 A 開局、路人 B 報名，同一筆 `registrationId`）：
+
+| 格 | 讀數 |
+|---|---|
+| Z0（撐整組）兩把 token 都可用 | `GET /notifications` 各 200 |
+| **Z1 路人 `POST /registrations/accept`** | **403** `只有主揪可以接受報名` |
+| **Z1 路人 `POST /registrations/reject`** | **403** `只有主揪可以拒絕報名` |
+| **Z3（承重的另一半）主揪對同一筆** | **200** `✅ 已接受報名` |
+| Z4 狀態改成 accepted 後路人再試 | **403**（⇒ 擁有權檢查排在狀態檢查**之前**） |
+| Z5 涵蓋率閘 | 兩支都真的發過請求 |
+
+🔴 **Z3 不可省**：端點整支壞掉、或那條路由根本不存在時，**每一個人都會拿到 403**。
+讓主揪對**同一個 `registrationId`**在同一輪拿到 200，那一對才把
+「不是主揪」與「誰來都不行」分開。
+
+🔴🔴 **403 一定要連 body 一起斷言 —— 而這件事本檔自己有前科。**
+這套 API 上 403 至少有兩種來源：①擁有權檢查 ②**API Gateway 對不存在的路由**
+（§5 搬遷前那五條的 403 正是②）。只看狀態碼的話，「授權閘擋住了」與「這條路由根本不在」
+**逐字相同**。
+✅ **判準本身做過反控**：真的去打一條不存在的路由，把回來的 403 餵進 `want_forbidden`
+⇒ 判**失敗**；把真的擁有權 403 餵進去 ⇒ 判**通過**（2 格 1 紅）。
+🔴 **而那一輪多炸出一件事**：gateway 回的是
+`Invalid key=value pair (missing equal-sign) in Authorization header`，
+**不是** `Missing Authentication Token` ⇒ **gateway 的 403 措辭不只一種**。
+救我的不是 `SIGV4_MSG` 那份黑名單（黑名單＝手挑清單，漏掉的靜靜通過），
+是「**必須出現「只有主揪」**」這個**正向要求** —— 不管 gateway 怎麼措辭，
+它都不會說出那四個字。程式註解已改成點明這件事。
+
+**寫入面積與清理**：Users 2／Games 1／Registrations 1／Notifications 2，
+每一筆 `delete` 後 `GetItem --consistent-read` 確認不存在。
+⚠️ Notifications 的 key 是 `notificationId` ⇒ 要 **Scan ＋ `userId` 過濾**才找得到本次那幾筆。
+⚠️ **不走 `/app-register` 建帳號**：那支限流是每 IP 每小時 10 次，而本支要兩個帳號
+⇒ 走它的話一小時只能跑 5 次。改成直接放兩列合成身分＋自簽 token。
+
+🔴 **殘留掃描那一輪有三格是空洞的通過**：`Games`／`Registrations`／`Notifications`
+在 stg **本來就是空表**（全表計數 0）⇒ 任何過濾都回 0，對「有沒有殘留」零鑑別力。
+有鑑別力的只有 `Users`（全表 6 列、我的 MARK 過濾回 0）。
+那三張表真正的證據是探針自己的**逐筆 delete → GetItem 確認不存在**。
+⇒ 引用「殘留 0」時要分開講這兩種。
+
+⚠️ **順帶記一個沒處理的形狀**：`game["hostUserId"].(string)` 與 `registration["status"].(string)`
+都是**裸型別斷言** —— 欄位缺席或非字串會 panic ⇒ Lambda Unhandled ⇒ **502**。
+那不是授權繞過（是 fail-crash 不是 fail-open），但正是設計冊 P0 記過的那種形狀。**本輪未修。**
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。
