@@ -134,7 +134,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Verify user is host
-	if game["hostUserId"].(string) != userID {
+	// 🔴 裸型別斷言會 panic ⇒ Lambda Unhandled ⇒ 502 且零錯誤日誌。
+	// 不可以退成零值："" != userID 恆真 ⇒ 一律 403，那是「用錯誤的理由拒絕」。
+	hostUserID, ok := game["hostUserId"].(string)
+	if !ok {
+		log.Printf("[DATA] 欄位缺失或型別不符，拒絕處理: game.hostUserId")
+		response := Response{Success: false, Error: "資料異常，請稍後再試"}
+		body, _ := json.Marshal(response)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    headers,
+			Body:       string(body),
+		}, nil
+	}
+	if hostUserID != userID {
 		response := Response{Success: false, Error: "只有主揪可以取消團局"}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayProxyResponse{

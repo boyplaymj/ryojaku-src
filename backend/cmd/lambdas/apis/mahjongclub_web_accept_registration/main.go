@@ -189,7 +189,11 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Verify user is host
-	if game["hostUserId"].(string) != userID {
+	hostUserID, ok := game["hostUserId"].(string)
+	if !ok {
+		return dataErr(headers, "game.hostUserId")
+	}
+	if hostUserID != userID {
 		response := Response{Success: false, Error: "只有主揪可以接受報名"}
 		body, _ := json.Marshal(response)
 		return events.APIGatewayProxyResponse{
@@ -200,7 +204,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Check if registration has already been processed
-	status := registration["status"].(string)
+	status, ok := registration["status"].(string)
+	if !ok {
+		return dataErr(headers, "registration.status")
+	}
 	if status == "accepted" {
 		response := Response{Success: false, Error: "此報名已經接受過了"}
 		body, _ := json.Marshal(response)
@@ -239,8 +246,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Check if game is full
-	currentPlayers := int(game["currentPlayers"].(float64))
-	playersNeeded := int(game["playersNeeded"].(float64))
+	curF, okCur := game["currentPlayers"].(float64)
+	needF, okNeed := game["playersNeeded"].(float64)
+	if !okCur || !okNeed {
+		return dataErr(headers, "game.currentPlayers/playersNeeded")
+	}
+	currentPlayers := int(curF)
+	playersNeeded := int(needF)
 	capacity := playersNeeded + 1 // 主揪自己也佔一個位子
 	if currentPlayers >= capacity {
 		response := Response{Success: false, Error: msgGameFull}
@@ -253,8 +265,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Add player to game
-	playerUserID := registration["userId"].(string)
-	playerDisplayName := registration["displayName"].(string)
+	playerUserID, okPU := registration["userId"].(string)
+	if !okPU {
+		return dataErr(headers, "registration.userId")
+	}
+	// displayName 缺席是良性的（只是顯示名）⇒ 退成空字串，不擋整個請求。
+	playerDisplayName, _ := registration["displayName"].(string)
 
 	// Get player info for picture URL
 	user, _ := getUser(ctx, playerUserID)
@@ -741,6 +757,31 @@ func decryptLineID(encryptedData string) (string, error) {
 	}
 
 	return string(plaintext), nil
+}
+
+// dataErr 回「資料異常」的 500。抽成函式是因為下面有多處要用同一個形狀。
+//
+// 🔴 這幾處原本是**裸型別斷言**（game["hostUserId"].(string)）。斷言失敗會 panic
+// ⇒ Lambda Unhandled ⇒ API Gateway 回 502，而 Lambda 端零錯誤日誌
+// （設計冊 P0 記過同一個形狀）。
+//
+// 🔴 為什麼缺席時要 fail-closed 而不是退成零值：status 退成 "" 的話，
+// 它既不是 "accepted" 也不是 "rejected" ⇒ 會被放行，那是 fail-open。
+// hostUserId 退成 "" 則會讓 "" != userID 恆真 ⇒ 一律 403，看起來像擋住了，
+// 但那是「用錯誤的理由拒絕」，日誌上分不出是誰的問題。
+//
+// ⚠️ 例外：displayName 缺席是良性的（只是顯示名）⇒ 退成空字串，不擋。
+//
+// ⚠️ 續行刻意不縮排：gofmt 1.19+ 會把縮排的續行當成 doc comment 裡的程式碼區塊重排。
+func dataErr(headers map[string]string, field string) (events.APIGatewayProxyResponse, error) {
+	log.Printf("[DATA] 欄位缺失或型別不符，拒絕處理: %s", field)
+	response := Response{Success: false, Error: "資料異常，請稍後再試"}
+	body, _ := json.Marshal(response)
+	return events.APIGatewayProxyResponse{
+		StatusCode: http.StatusInternalServerError,
+		Headers:    headers,
+		Body:       string(body),
+	}, nil
 }
 
 func main() {
