@@ -470,6 +470,54 @@ handler 六條 sed（83 處）＋ 三處註解 ＋ manifest 五支 `HTTP_V2`→`
 「五條在自訂網域上全部 403」就是 **before 讀數**，部署後應變成 401／200
 （`/ratings` 是 public ⇒ 應為 200 或 400 業務錯誤，不是 403）。
 
+### 🔎 部署前的查證：`build_all.sh` 不能挑，而且它會多帶一顆（2026-09-11）
+
+**問題**：能不能只 build 我改的那五顆？
+
+**答**：`build_all.sh` **不行** —— 它 23 行，`find ./cmd/lambdas -name main.go | sort`
+無條件全建，沒有任何選擇參數。但那個迴圈只有 6 行，用**同樣的旗標**
+（`GOOS=linux GOARCH=arm64 CGO_ENABLED=0 -tags lambda.norpc -ldflags='-s -w'`，
+產物名 `<dir 去掉 ./cmd/lambdas/，/ 換成 __>/bootstrap`）另寫一支是小事。
+前例：09-10 就「只重 build `daily-bonus` 一顆」做過。
+
+🔴 **但真正的理由不是省時間，是 `build_all.sh` 會多帶一顆上去。**
+
+逐顆比對「產物 mtime」與「該目錄非測試 `.go` 的最後 commit 時間」，84 顆裡 **6 顆 stale**：
+我改的那五支（落後 32.5 小時）**外加 `mahjongclub_daily_bonus`（落後 1.3 小時）**。
+
+`daily_bonus` 不是尺的假陽性：`80af54b`（09-10 07:11）真的改了 `main.go` **81 行**
+（`dynamoClient` 改成 `ddbAPI` 介面、`recordShadowLog` 抽成變數），而產物停在 05:52。
+
+✅ **用控制組確認過，不是符號被 `-s -w` 剝掉**：
+
+| 符號 | 現建（同旗標） | `build/` 那份 | 判讀 |
+|---|---:|---:|---|
+| `ddbAPI` | **1** | **0** | ⇒ 那份確實是 `80af54b` 之前的 |
+| `DailyClaims` | 1 | 1 | 反控：`strings` 讀得到兩個檔 |
+| `TransactWriteItems` | 44 | 43 | 同上 |
+| `recordShadowLog` | 0 | 0 | ⚠️ **不是每個識別字都活得過 `-s -w`** —— 所以上面那個控制組不是多餘的 |
+
+⇒ **跑 `build_all.sh` ＋ `sam deploy` 會順手把 `80af54b` 第一次推上線。**
+那是一個**沒有人做過的決定**（設計冊當時寫的是「動的全是測試與可注入性，
+handler 的線上行為未變…要說『線上仍然好的』得重打一次」）。
+⚠️ 而本輪 `/daily-bonus` 線上四格 11/11 全綠，量的是**部署中那一版**，
+不是 `80af54b` 那一版 —— 兩者不可互推。
+
+**另外三件查清楚的**：
+
+1. `deploy_app.sh` **不呼叫** `build_all.sh`（只 `sam deploy -t 02-app.generated.yaml`）
+   ⇒ build 是獨立的手動步驟，不會被部署自動帶起來。
+2. 🔴🔴 **訂正我自己上一節寫的**：`build_all.sh` 讀的是**寫死的**
+   `/opt/sml/ryojaku-src/backend` ⇒ 「夾帶未提交改動」的風險範圍**只有這棵樹**。
+   我上一節寫「此刻 `/opt/sml/ryojaku-src` 以外的 repo 都有大量未提交檔案」——
+   那句話與這個風險**無關**，是錯的引用。而這棵樹**此刻是乾淨的**（0 未追蹤／0 已修改）
+   ⇒ 現在跑 `build_all.sh` 建的就是 HEAD。
+   ⚠️ 但那是**此刻**的讀數，不是恆定狀態 —— 別條 session 隨時可能弄髒它，
+   所以「build 之前再看一次 `git status`」仍然要做。
+3. ⚠️ `build_all.sh` 寫死 `/opt/sml/ryojaku-src`（`BACKEND`／`OUT` 兩行）
+   ⇒ 在 `git worktree` 裡跑它會去建**主工作樹**。本輪沒有因此受害
+   （我在 worktree 裡用的是 `go build` 不是這支），但這是 CLAUDE.md 🌲 那條的形狀。
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。
