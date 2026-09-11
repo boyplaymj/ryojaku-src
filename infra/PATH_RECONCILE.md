@@ -648,6 +648,60 @@ V2 分支 fail-loud）⇒ 內容上「它真的跑了」與「它讀了我的報
 ⇒ 誠實的說法是：**祖先鏈證明它跑了，內容沒有被獨立驗證。**
 我另外自己重量了那六格（部署後約 40 分鐘），讀數不變。
 
+### ✅ 那 7 支「`authorizer_for()` 回 None」查完了：不是裸端點，是 in-handler 驗證（2026-09-11）
+
+§5 盤點留下的問題：全 manifest `auth=user` 共 41 支，`authorizer_for()` 回 `None` 的有 7 支。
+那個組合讀起來像「標了要登入、卻沒掛閘」。**查完了，四支 REST_V1 的有實測，另三支只讀原始碼。**
+
+🔴 **最初讓我起疑的不是清單，是不對稱**：姊妹端點 `auth-bind-line` **在**
+`AUTHORIZER_PILOT` 裡，而 `auth-bind-google` 不在。兩支做同一件事，一支有閘一支沒有。
+
+**原始碼鏈（四支相同）**：
+`shared.GetUserIdentifierWithContext` → `VerifyTokenWithUserPwGate` → `VerifyToken`
+（`jwt.ParseWithClaims` ＋ **拒絕非 HMAC signing method** ＋ `token.Valid`，
+外加密碼變更撤銷閘）。查詢參數 `?userId=`／`?lineID=` 那條 fallback 回 `fromJWT=false`，
+四支全部據此 401 —— 那正是它們註解裡那句「安全鐵律：絕不接受 query param userId」。
+
+**但讀原始碼只是假設**，所以寫了 `infra/verify_auth_inhandler_gate.py`（8 格）去量：
+
+| 格 | 讀數 |
+|---|---|
+| A5（**撐整組**）合法 token | `POST /auth/unbind` → **400** `unsupported provider` ⇒ 過了身分閘、走到業務邏輯 |
+| A1 什麼都不帶 | 401 |
+| **A3（承重）只帶 `?userId=<身分>`** | **401** |
+| A3b 只帶 `?lineID=<身分>` | **401** |
+| A4（撐 A1/A3）**用錯金鑰簽的 token** | **401** ⇒ 真的有在驗簽，不是一律 401 |
+| A6 對照組 `/auth/bind-line`（有掛 authorizer） | 401 |
+| A6b 同上 ＋ `?userId=` | 401 |
+| **A7（承重）兩種 401 的 body 必須不同** | in-handler `{"error":"unauthorized","success":false}`（**handler 自己的格式**）vs gateway `{"message":"Unauthorized"}` |
+
+🔴 **A3 才是那句「安全鐵律」真正宣稱的東西。** 少了它，A1（什麼都不帶 → 401）與
+「fallback 其實會放行」**相容** —— 因為 A1 連 query param 都沒給，那條路徑根本沒被求值。
+
+🔴 **A7 是「in-handler 真的有閘」的直接證據。** 少了它，「in-handler 有驗」與
+「其實也被某個 authorizer 擋掉了」**在狀態碼上逐字相同**（都是 401）。
+body 形狀不同 ⇒ A1/A3/A4 是**進到 Lambda 之後**才被擋。
+
+**讀數**：自訂網域 **8/8** rc=0；**反控**（打已刪除的 HttpApi base）**0/8** rc=1，清理仍歸零。
+
+#### 結論與界線
+
+- **不是裸端點。** 兩種閘在「擋不擋得住」上讀數相同。
+- ⚠️ **差別在「誰先擋」**：authorizer 擋在 Lambda **之前**（匿名請求不進 Lambda），
+  in-handler 是**每一則都進**。那是**成本與攻擊面**的差別，不是「有沒有驗」的差別。
+  本輪沒有替這個差別估過量級。
+- ⚠️ **本支答的是「有沒有驗身分」，不是「授權邏輯對不對」**（例如能不能解綁**別人**的帳號）。
+  那是另一件事，**沒驗**。
+- 另三支：`chat-ws-connect`／`chat-ws-send-message` 是 `WEBSOCKET`（機制不同，本輪未查）；
+  **`redeem-code` 是 `LAMBDA_URL` 且 CFN 裡是 `FunctionUrlConfig: { AuthType: NONE }`**
+  —— 但 handler 內同樣呼叫 `shared.VerifyTokenWithUserPwGate`（`main.go:135`，
+  註解明寫「與 API Gateway authorizer 同一套驗證」）⇒ 同一個形狀。
+  ⚠️ **這支只讀了原始碼，沒有線上量過。**
+- ⚠️ **量錯對象的坑，這輪踩了一次**：`ls -d backend/cmd/lambdas/apis/*redeem*` 撈到的是
+  `mahjongclub-redeem`，而 manifest 指的是 `mahjongclub_web_redeem_code` ——
+  **兩個目錄都存在**，我第一次 grep 的是沒有被部署的那個（結果是「只有一行 401、看不到驗證」，
+  讀起來就像裸端點）。⇒ 路徑一律從 manifest 取，不要用萬用字元撈。
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。
