@@ -305,6 +305,60 @@ Codex 回「覆驗通過，沒有新增 finding」，附三個 `run_id`。回收
 所以「base path mapping 指到舊 stage」那個坑這一輪是綠的 ——
 那條規矩來自 `verify_ruleset_live.py` 用同一個坑換來的，不是推測。
 
+### 📋 §5 前置②：五支 handler 的事件型別掃描（2026-09-11）
+
+設計冊先前寫「這七條之後要搬時，每一條都必須先確認 handler 的事件型別」。掃完了。
+⚠️ **實際是五支不是七條**（`HTTP_V2` 現況 5 支，名單由 manifest 現算，不是手打）。
+
+**結論：五支全是 v2。** 所以這不是「只改 manifest」的事 —— 每一支都要轉 handler。
+
+| handler | auth | V2Req | V2Resp | `RC.HTTP.Method` | `RC.HTTP.Path` | `AuthorizerUserIDV2` | 小計 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `get_ratings` | public | 1 | 6 | 1 | 0 | 0 | **8** |
+| `notifications` | user | 3 | 13 | 4 | 1 | 1 | **22** |
+| `reject_registration` | user | 1 | 13 | 2 | 1 | 1 | **18** |
+| `accept_registration` | user | 1 | 17 | 2 | 1 | 1 | **22** |
+| `claim_push_bonus` | user | 1 | 6 | 1 | 0 | 1 | **9** |
+| | | | | | | | **79 處** |
+
+**五種機械替換**（v1 對應物都已存在，不必新寫）：
+
+| 從 | 到 |
+|---|---|
+| `events.APIGatewayV2HTTPRequest` | `events.APIGatewayProxyRequest` |
+| `events.APIGatewayV2HTTPResponse` | `events.APIGatewayProxyResponse` |
+| `request.RequestContext.HTTP.Method` | `request.HTTPMethod` |
+| `request.RequestContext.HTTP.Path` | `request.Path` |
+| `shared.AuthorizerUserIDV2(request)` | `shared.AuthorizerUserID(request)`（`auth.go:176`，早就在） |
+
+🔴 **加上三處註解，共 82 處。** 用上面五條 sed 把 79 處消掉之後，
+`notifications:116`／`reject_registration:94`／`accept_registration:97` 仍留著
+「本支是 **HTTP_V2**，故用 `AuthorizerUserIDV2`」——**搬完那句話就是假的**，
+而它會主動把下一個讀的人指向錯的方向。
+⚠️ 這三處是靠「把五種樣式 sed 掉之後看殘量」才浮出來的，不是靠讀程式看到的。
+殘量法同時證明了那五條樣式**涵蓋完全**（另外兩支殘量 0）。
+
+**四件已查清、不必擔心的事**（每一件都附怎麼查的）：
+
+1. **裸端點風險 0。** `authorizer_for()` **只認名字、不看 `apiType`**，五支裡四支
+   `auth=user` 的都在 `AUTHORIZER_PILOT`（34 支）裡，`get-ratings` 是 `public`
+   （線上實測不帶 token 回 400 業務錯誤，不是 401 ⇒ 確實不需認證）。
+   🔴 **反控**：全 manifest `auth=user` 共 41 支，`authorizer_for()` 回 `None` 的有
+   **7 支**（`chat-ws-connect`／`chat-ws-send-message`／`redeem-code`／
+   `auth-change-password`／`auth-logout-all`／`auth-bind-google`／`auth-unbind`）
+   ⇒ 這把尺不是恆真的，上面那個「0」才有意義。
+   ⚠️ 那 7 支本身是另一件事（前三支是 WS／Lambda URL，機制不同；後四支是 REST_V1
+   而 `authorizer_for` 回 None，**本輪沒查它們是不是在 handler 內自己驗 token**）。
+2. **路由形狀不變。** manifest 的 `path` 帶尾綴 `?`（如 `/ratings?`），
+   產生器 `rstrip("?")` 後兩個分支共用同一份 `paths`；差別只有
+   `RestApiId:!Ref RestApi` vs `ApiId:!Ref HttpApi`、`Method` 大小寫、事件名 `Rest{i}`/`Http{i}`。
+3. **不會打到既有測試。** 只有 `accept_registration` 有 `main_test.go`，
+   而它 `APIGatewayV2` 命中 **0** 次（測的是 `buildAcceptTransactItems` 那些純函式）。
+4. **沒有跨套件引用。** 五個目錄各自被外部檔引用 **0** 處。
+
+**回應端那個 502 的坑不適用**：五支都沒有用到 `Cookies`（實測 0 處），
+所以 v2→v1 只是型別替換，不是要拿掉欄位。
+
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
 做上面那個前置時順手量到的，不在計畫內。
