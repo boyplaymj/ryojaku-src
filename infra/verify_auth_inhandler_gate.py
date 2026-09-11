@@ -39,8 +39,27 @@ REGION = "ap-southeast-1"
 USERS = "MahjongClubStg_Users"
 MARK = "AUTHGATE-DELETEME"
 DEFAULT_BASE = "https://ryojaku-api.boyplaymj.com"
-PROBE = "/auth/unbind"          # 四支裡最安全的：缺欄位就早退
 GATED = "/auth/bind-line"       # 對照組：這支**有**掛 authorizer
+
+# 🔴🔴 **四支全部都要打，不可以只打一支。**（2026-09-11 訂正）
+#    v1 寫成 `PROBE = "/auth/unbind"` 單一常數 ⇒ 實際只量了四支裡的一支，
+#    而結論寫成「四支有實測」。覆驗者抓到的。
+#    ⇒ 現在用表驅動，而且**跑完會檢查涵蓋率**（見 main() 結尾的 A8）——
+#      光是改成表還不夠，「表裡有四支」與「四支都真的被打過」是兩件事。
+#
+# A5（正控）的期望值**逐支不同**，因為各自身分閘之後的第一個出口不同：
+#   unbind / change-password / bind-google：下一步就是 json.Unmarshal ⇒ 餵壞 JSON 得 400
+#   logout-all：**沒有 body 解析**，身分閘過了就直接 UpdateItem ⇒ 200
+# ⚠️ 不可以統一寫成「非 401 即可」—— 那會讓「400 是因為 body 壞」與
+#    「400 是因為別的東西壞了」混在一起。期望值要逐支釘死。
+ENDPOINTS = [
+    # (path, A5 用的 body, A5 期望碼, 為什麼是這個碼)
+    ("/auth/unbind",          "not-json", 400, "身分閘後下一步是 json.Unmarshal（main.go:46）"),
+    ("/auth/change-password", "not-json", 400, "身分閘後下一步是 json.Unmarshal（main.go:95）"),
+    ("/auth/bind-google",     "not-json", 400, "身分閘後下一步是 json.Unmarshal（main.go:47）"),
+    ("/auth/logout-all",      "{}",       200, "沒有 body 解析，過閘即 UpdateItem（main.go:103）"),
+]
+HIT = set()   # req() 每打一次就記一個 path；A8 拿它跟 ENDPOINTS 對帳
 
 TOTAL = FAIL = 0
 LAST = ""
@@ -67,6 +86,7 @@ def sh(a):
 
 def req(base, path, token=None, body="{}"):
     global LAST
+    HIT.add(path.split("?")[0])
     r = urllib.request.Request(base + path, method="POST", data=body.encode())
     r.add_header("Content-Type", "application/json")
     if token: r.add_header("Authorization", "Bearer " + token)
@@ -107,20 +127,23 @@ def main():
     good   = sign({"userId":uid,"email":"ag@example.com","exp":exp}, secret)
     forged = sign({"userId":uid,"email":"ag@example.com","exp":exp}, secret + "X")  # 錯的金鑰
     try:
-        print("\n══ A5 撐整組·合法 token 必須進得去（端點整支壞掉時 A1~A4 會全綠）══")
-        c,b = req(base, PROBE, token=good); want_not_401(f"A5 POST {PROBE} + 合法 token", c, b)
-
-        print("\n══ A1 什麼都不帶 ══")
-        c,b = req(base, PROBE); want(f"A1 POST {PROBE} 無 token", c, b, 401)
-
-        print("\n══ A3 承重·只帶 ?userId=（那句「絕不接受 query param userId」的實測）══")
-        c,b = req(base, f"{PROBE}?userId={uid}")
-        want(f"A3 POST {PROBE}?userId=<合成身分>", c, b, 401)
-        c,b = req(base, f"{PROBE}?lineID={uid}")
-        want(f"A3b POST {PROBE}?lineID=<合成身分>", c, b, 401)
-
-        print("\n══ A4 撐著 A1/A3·用錯的金鑰簽的 token（證明有在驗簽，不是一律 401）══")
-        c,b = req(base, PROBE, token=forged); want(f"A4 POST {PROBE} + 偽造簽章", c, b, 401)
+        for path, a5body, a5want, why in ENDPOINTS:
+            print(f"\n══════════ {path} ══════════")
+            print(f"  （A5 期望 {a5want}：{why}）")
+            c, b = req(base, path, token=good, body=a5body)
+            if c == a5want:
+                pass_(f"A5 撐整組·{path} + 合法 token ⇒ {c}（過了身分閘，走到業務邏輯）{b[:60]!r}")
+            elif c == 401:
+                fail_(f"A5 {path}：**401** ⇒ 合法 token 進不去，本段每一格的綠燈都沒有意義")
+            else:
+                fail_(f"A5 {path}：得到 {c}，期望 {a5want}（{why}）　body={b[:100]!r}")
+            c, b = req(base, path); want(f"A1 {path} 無 token", c, b, 401)
+            c, b = req(base, f"{path}?userId={uid}")
+            want(f"A3 承重·{path}?userId=<身分>", c, b, 401)
+            c, b = req(base, f"{path}?lineID={uid}")
+            want(f"A3b {path}?lineID=<身分>", c, b, 401)
+            c, b = req(base, path, token=forged)
+            want(f"A4 {path} + 偽造簽章（錯的金鑰）", c, b, 401)
 
         print("\n══ A6 對照組·有掛 authorizer 的姊妹端點 /auth/bind-line ══")
         c,b = req(base, GATED)
@@ -136,7 +159,7 @@ def main():
         #      而 A6 在 Lambda 之前就被擋掉。
         #    少了這格，「in-handler 有閘」與「其實也被某個 authorizer 擋掉了」分不出來 ——
         #    兩者在狀態碼上逐字相同（都是 401）。
-        _, b_inh = req(base, PROBE)
+        _, b_inh = req(base, ENDPOINTS[0][0])
         _, b_gat = req(base, GATED)
         inh_ok = '"error"' in b_inh and "unauthorized" in b_inh
         gat_ok = '"message"' in b_gat and "Unauthorized" in b_gat
@@ -144,6 +167,22 @@ def main():
             pass_(f"A7 兩種 401 的 body 不同 ⇒ 不同層擋的　in-handler={b_inh[:46]!r} gateway={b_gat[:34]!r}")
         else:
             fail_(f"A7 分不出是哪一層擋的：in-handler={b_inh[:70]!r} gateway={b_gat[:70]!r}")
+        print("\n══ A8 涵蓋率閘·宣告要打的四支,必須每一支都真的被打過 ══")
+        # 🔴 這一格存在的理由就是 v1 那個缺陷：宣稱「四支」而程式只打一支,
+        #    而**輸出讀起來完全正常**（每一格都綠,只是全都在同一個 path 上）。
+        #    ⇒ 讓「涵蓋範圍」自己有 exit code,不要靠我寫報告時記得。
+        declared = {e[0] for e in ENDPOINTS}
+        missing = declared - HIT
+        if missing:
+            fail_(f"A8 宣告了 {len(declared)} 支,但這幾支一次都沒被打過：{sorted(missing)}")
+        else:
+            # 🔴 措辭要精確：本格量的是「**探針有沒有去打**」,不是「打到了」。
+            #    實測（反控打已刪除的 base）：24 格裡**只有本格是綠的** ——
+            #    主機不存在時每個請求都失敗,而 HIT 照樣被填滿。
+            #    那是本格該有的行為（打不打得到由上面 23 格負責）,但標籤不可以寫成
+            #    「四支全部驗過」——單獨被引用時會被讀成那樣。
+            pass_(f"A8 宣告的 {len(declared)} 支**都有發出請求**（本格不保證打得到，"
+                  f"那由上面各格負責）：{sorted(declared)}")
         print("  ℹ️  兩種閘在「擋不擋得住」上讀數相同；差別在**誰先擋** ——")
         print("     authorizer 擋在 Lambda 之前（匿名請求不進 Lambda），in-handler 是每一則都進。")
         print("     那是成本與攻擊面的差別，不是「有沒有驗」的差別。")
