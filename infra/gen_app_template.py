@@ -349,7 +349,14 @@ Resources:
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-App-Version,X-Platform'"
               Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
 __REST_AUTH__
+__HTTP_API__"""
 
+# 🔴 HttpApi 整段是**條件式**的：manifest 裡一支 HTTP_V2 都沒有時不輸出（§5 的前置）。
+#    理由不是潔癖 —— `Outputs.HttpApiUrl` 與各 function 的 `ApiId: !Ref HttpApi`
+#    都指著這個邏輯 ID，留著一個沒有任何 route 的 HttpApi 是「能不能過 CFN」的賭注，
+#    而整段拿掉就不必賭。⚠️ 內容與抽出來之前**逐字相同**（含前面那兩個空行），
+#    所以還有 HTTP_V2 時產出必須逐位元組不變 —— 那正是本次的迴歸判準。
+HTTP_API_RESOURCE = """
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
@@ -608,7 +615,9 @@ for _name in (USER_AUTHORIZER_NAME, ADMIN_AUTHORIZER_NAME):
         _rest_authorizers.append(_name)
     if any(authorizer_for(f) == _name and f["apiType"] == "HTTP_V2" for f in MAN):
         _http_authorizers.append(_name)
+_has_http = any(f["apiType"] == "HTTP_V2" for f in MAN)
 head = HEAD.replace("__REST_AUTH__", auth_block_rest(_rest_authorizers))
+head = head.replace("__HTTP_API__", HTTP_API_RESOURCE if _has_http else "")
 head = head.replace("__HTTP_AUTH__", auth_block_http(_http_authorizers))
 
 parts = [head]
@@ -626,9 +635,10 @@ for _name in _http_authorizers:
     ))
 parts += ["",
           "Outputs:",
-          "  RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }",
-          "  HttpApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }",
-          "  WebSocketUrl: { Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }"]
+          "  RestApiUrl: { Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }"]
+if _has_http:
+    parts += ["  HttpApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }"]
+parts += ["  WebSocketUrl: { Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' }"]
 
 # 🔴 產出前的 fail-closed 自檢：有 WS API 卻沒有任何一支 function 需要推送，
 #    代表上面那個原始碼掃描壞了（改路徑、改 marker、manifest 的 projectPath 漂掉）。
@@ -647,6 +657,26 @@ if ws and not _ws_push:
                      "掃描判準壞了（見 needs_ws_push），拒絕產出")
 
 out = "\n".join(parts) + "\n"
+# 🔴 HttpApi 的 fail-closed 自檢：**資源在不在** 與 **有沒有人引用它** 必須同時成立。
+#    兩個方向都要查，理由各不相同：
+#      ① 有引用卻沒資源 ⇒ CFN 部署時才會炸（`Unresolved resource dependencies`），
+#         而在這裡是靜悄悄的 —— 產出看起來完全正常。
+#      ② 有資源卻沒人引用 ⇒ 那正是本次要避免的「沒有 route 的 HttpApi」，
+#         它能不能過 CFN 是個賭注，而賭贏與賭輸在產出字串上長得一樣。
+#    ⚠️ 判準只認**引用形式**（`!Ref HttpApi` / `${HttpApi}`），不認裸字串 ——
+#       `Type: AWS::Serverless::HttpApi` 與事件的 `Type: HttpApi` 都含這幾個字，
+#       用裸字串比對的話這道檢查對任何輸入都成立，等於沒有。
+_http_refs = out.count("!Ref HttpApi") + out.count("${HttpApi}")
+_http_res = "Type: AWS::Serverless::HttpApi" in out
+if _http_refs and not _http_res:
+    raise SystemExit(f"❌ 產出有 {_http_refs} 處引用 HttpApi，卻沒有宣告它 —— 拒絕產出")
+if _http_res and not _http_refs:
+    raise SystemExit("❌ 產出宣告了 HttpApi，卻沒有任何 route/Output 引用它 "
+                     "（沒有 route 的 HTTP API 能不能過 CFN 未驗證）—— 拒絕產出")
+if _has_http != _http_res:
+    raise SystemExit(f"❌ manifest 有 HTTP_V2={_has_http}，而產出宣告 HttpApi={_http_res} "
+                     "—— 條件化接線壞了，拒絕產出")
+
 _leaked = [h for h in ENGINEER_PROD_HOSTS if h in out]
 if _leaked:
     raise SystemExit(f"❌ 產出含工程師 prod 位址 {_leaked} —— 拒絕產出")

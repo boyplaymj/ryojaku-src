@@ -305,6 +305,41 @@ Codex 回「覆驗通過，沒有新增 finding」，附三個 `run_id`。回收
 所以「base path mapping 指到舊 stage」那個坑這一輪是綠的 ——
 那條規矩來自 `verify_ruleset_live.py` 用同一個坑換來的，不是推測。
 
+### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
+
+做上面那個前置時順手量到的，不在計畫內。
+
+`ryojaku-api.boyplaymj.com` 這個自訂網域的 mapping 指的是 **`9mu0vajn38`＝RestApi**，
+而 **HttpApi（`3pmmlmvr5a`）沒有任何自訂網域 mapping**（`apigatewayv2 get-api-mappings`
+兩個網域各一筆，都指 REST／WS）。而前端只有**一個** base：
+`apiService.ts` 全部端點走同一個 `API_BASE_URL`，`deploy-stg.sh:26` 把它設成那個自訂網域。
+
+**出貨 bundle 實測**（`frontend/android/.../index-CAjpxzs7.js`）：
+`ryojaku-api.boyplaymj.com` 出現 1 次、`3pmmlmvr5a` 出現 **0 次**、`9mu0vajn38` **0 次**。
+
+**不帶 token 打同一條路徑，兩個 base 的回應不同**（403＝REST 的「查無此路由」、
+401＝路由在但被 authorizer 擋）：
+
+| 路徑 | 自訂網域（App 用的） | HttpApi 直連 |
+|---|---|---|
+| `POST /claim-push-bonus` | **403 Missing Authentication Token** | 401 Unauthorized |
+| `POST /registrations/accept` | **403** | 401 |
+| `POST /registrations/reject` | **403** | 401 |
+| `GET /ratings` | **403** | 400（業務錯誤「必須提供 gameId」⇒ 路由在且不需認證） |
+| `GET /notifications` | **403** | 401 |
+| `GET /chat/rooms`（正控·REST 上的） | 401 | 404 |
+
+🔴 **最後一列是正控**：少了它，「403 代表打不到」與「這個 base 整個壞了」分不出來。
+
+⇒ `/notifications`、`/claim-push-bonus` 這些**在 App 裡是有被呼叫的**
+（`apiService.ts:325,525,928`），而它們打過去只會拿到 403。
+**搬 §5 的效果不只是收斂 API，是把這幾條接回來。**
+
+⚠️ **界線**：本輪量的是 **stg**。沒有查 prod 是不是同一個形狀，也沒有查
+這是一直如此、還是某次改 mapping 造成的（沒有歷史資料可判）。
+也沒有查 App 端拿到 403 之後的行為（`/notifications` 有 localhost 用的 mock fallback，
+其他幾條沒看）。
+
 ### ⚠️ 套用前的前置條件
 
 （僅適用於**剩下八條**；`analytics` 不改 `apiType`，已先行單獨出隊，見 §4。）
@@ -318,6 +353,42 @@ Codex 回「覆驗通過，沒有新增 finding」，附三個 `run_id`。回收
 
 順序建議：① 改 `gen_app_template.py` 讓 HttpApi 可選 → ② 一次改完 manifest 九條 →
 ③ `gen_app_template.py` + `sam deploy` 一次進出 stack（分兩次部署只是讓 stack 多進一次風險期）。
+
+#### ✅ ① 已完成（2026-09-11）—— 而那個「尚未驗證」現在**不必賭了**
+
+`gen_app_template.py` 的 `HttpApi` 整段抽成 `HTTP_API_RESOURCE` 常數，由
+`_has_http = any(apiType == "HTTP_V2")` 決定要不要放進去；`Outputs.HttpApiUrl`
+跟著條件化。（`AuthorizerHttpApiPermission` **本來就已經是條件式的** ——
+它由 `_http_authorizers` 驅動，而那份名單本來就只收 HTTP_V2 的，本次未動。
+⚠️ 上面那段把它列成待辦，那是**當時盤點錯了**，留著當紀錄。）
+
+**fail-closed 自檢**（比照既有那道 WS 的）：產出裡「有沒有 `!Ref HttpApi`／`${HttpApi}`」
+與「有沒有 `Type: AWS::Serverless::HttpApi`」必須同時成立，任一方向不符就
+`raise SystemExit`。兩個方向的理由不同 ——
+①有引用沒資源 ⇒ deploy 才炸，在產生器這裡是靜悄悄的；
+②有資源沒引用 ⇒ 那正是本段要避開的賭注。
+🔴 判準只認**引用形式**，不認裸字串 `HttpApi`：`Type: AWS::Serverless::HttpApi`
+與事件的 `Type: HttpApi` 都含那幾個字，用裸字串比對的話這道檢查對任何輸入都成立。
+
+**驗收**：
+
+| 尺 | 讀數 |
+|---|---|
+| **迴歸**·現行 manifest（仍有 HTTP_V2）產出 | **逐位元組不變**（`26bbd8c6…`，2896 行） |
+| 正控·把 manifest 的 5 支 HTTP_V2 全改 REST_V1（＝§5 終局） | `Type: AWS::Serverless::HttpApi`／`!Ref HttpApi`／`${HttpApi}`／`HttpApiUrl`／`AuthorizerHttpApiPermission` **五樣全部 0**（基線是 1／5／2／1／1）；REST 路由 75→80 |
+| cfn-lint（`regions=[ap-southeast-1]`） | 兩份都 **0 則** |
+| **反控**·把基線的 `HttpApi` 資源刪掉（留 7 處懸空引用） | cfn-lint **5 則 E0001** ⇒ 這把尺抓得到，上面那兩個 0 才有意義 |
+| **突變**·拔掉條件化（永不輸出／永遠輸出） | **2 發全擋**，且兩個未突變的正控都放行 |
+
+🔴 **cfn-lint 的區域預設值會騙人。** 沒收斂區域時，**基線那份**（已部署、正常運作）
+就有 **37 則 E**，全是「這個型別在 `ap-east-2`／`ap-southeast-6` 不存在」。
+只跑受測那份會看到 33 則而誤判 —— 校準（先量一次已知是好的那份）是這裡唯一的出路。
+
+**順帶回答了本段那個掛著的問題，但只答到一半**：把一個 route-less 的
+`HttpApi` 硬塞回去，**SAM transform 過得了**（cfn-lint 0 則），
+transform 產物是 `AWS::ApiGatewayV2::Api` 且 `Body.paths = {}`。
+⚠️ **「APIGW 的 ImportApi 收不收空 paths」仍然沒驗** —— 那要真的 deploy 才知道。
+本次的改法讓這題變成不必答。
 
 ## 6. 本次對帳沒能證明的事
 
