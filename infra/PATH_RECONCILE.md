@@ -960,10 +960,9 @@ paths `backend/**`）⇒ **設定上它涵蓋棘輪**，我沒去看 `.github/` 
 承重的讀數是最後那行 **`DONE ok=84 fail=0`**（清樹實跑，10.5 秒）。
 我第一版的 C1 格子就是拿 rc 當判準的，那條斷言其實零鑑別力。
 
-⚠️ **界線**：這一輪驗到的是「不會再新增」＋「新增了會擋住出貨」。
-**沒有驗行為** —— 那 10 處改完之後線上實際回什麼碼，本輪沒量
-（前一輪 `verify_bare_assert_live.py` 量的是 registration 那三支，不是這 8 支 admin）。
-而且**這 10 處尚未部署**：`build_all.sh` 建出來的 binary 還沒 `sam deploy`。
+~~⚠️ **界線**：這一輪驗到的是「不會再新增」＋「新增了會擋住出貨」。
+**沒有驗行為** …… 而且**這 10 處尚未部署**~~
+✅ **2026-09-12 已部署並量到行為，見下一節。**
 
 ⚠️ baseline 是 0 筆之後，「一處都沒有」與「`scan()` 瞎了回空集合」在
 `TestBareAssertRatchet` 上**逐字相同**。撐住這個區別的是 `TestRatchetHasTeeth`
@@ -980,6 +979,60 @@ paths `backend/**`）⇒ **設定上它涵蓋棘輪**，我沒去看 `.github/` 
    要改的話請連同第 2 點一起排。
 2. **101 顆未推。** 這不只是 CI 的事：本檔記過的所有「已部署／已驗過」都是從
    **本機工作樹**出發的，而 GitHub 上那份停在 09-06。
+
+### 🚀 那 10 處已部署，而「量行為」這件事有一半是**構不出來的**（2026-09-12）
+
+`sam deploy` rc=0（`longrun.sh` 起在籠外，unit `ryo-sam-deploy-20260912`）。
+本地領先 `origin/master` 103 顆 ⇒ 這一班把一週的東西一起推上線。
+
+#### 🔴 先講講不了的那一半：那 6 處的 `!ok` 分支**結構上打不到**
+
+`jwt.Parse` 的實作是 `ParseWithClaims(tokenString, MapClaims{}, keyFunc)`
+（`golang-jwt/jwt/v5@v5.3.0` `parser.go:47` 實查）⇒ **`token.Claims` 恆為 `jwt.MapClaims`**，
+那個型別斷言**永遠不會失敗**。
+⇒ 「打實機確認 claims 型別不對時回 401」這句話，在這 6 支上**造不出輸入**。
+本節不宣稱量過它。改的價值在於「將來有人改用 `ParseWithClaims` 帶自訂 claims 時不會變成 502」，
+那是**預防**，不是**已驗**。
+⚠️ 對照：前一輪 `verify_bare_assert_live.py` 量得到，是因為那三支斷的是
+`game["hostUserId"].(string)` —— **資料控制的 map 值**，攻擊者/髒資料造得出來。
+**兩者不可互推**，是否可驗取決於「那個值誰控制」。
+
+#### ✅ 量得到的三件事
+
+| 尺 | 讀數 |
+|---|---|
+| **迴歸**：`verify_admin_role_gate.py` 部署前後各跑一次 | 15 列**逐行相同**、**無 502**、rc=0 兩次。P0 13/13、D5 15/15、P1 15/15 |
+| **線上 binary 指紋** | 6 支改過 `validateToken` 的含 `invalid claims type`＝yes；4 支沒改的＝no（**反控**，少了它該字串若是 runtime 內建就零鑑別力）。`admin-users` 另有專屬中文字串，正反控各一格。**12/12** |
+| **線上 binary 逐位元組** | `admin-analysis`／`admin-users`／`admin-activities` 的線上 `bootstrap` 與本機 `build_all.sh` 產物 **sha256 相同**；反控：拿 `admin-logs` 的產物去比必須不符（實測不符） |
+
+🔴 **指紋那格是必要的，因為「逐行相同」本身零鑑別力** —— 它與「部署根本沒把我的碼帶上去」
+逐字相同。git tag／`is-ancestor`／`DONE ok=84` 證明的都是歷史，不是**線上的內容**。
+🔴 而 `admin-analysis` 的改動是**移除**一個斷言、沒留下新字串 ⇒ 字串指紋對它零鑑別力，
+是逐位元組那把尺才涵蓋到它。**兩把尺是交叉不是包含。**
+
+#### 🔴 `regionCounts` 那一行：第一次量到的是一個**假綠**
+
+實打 `/admin/analysis/games` 回 `regionCounts: {}`，而我差點把
+「型別是 dict、沒有非整數的值」寫成通過 —— **0 個鍵的情況下那兩句恆真**，
+它與「我改的那一行壞掉」長得一模一樣。
+
+往下追：同一份回應的 `timeSlots` 總和 **0**、`locations` 是 `null`
+⇒ 整個 scan 一筆都沒有；實查 `MahjongClubStg_Games` **0 筆**
+⇒ `regionCounts[r.Name]++` 那一行**結構上跑不到**。空是資料事實，不是程式事實。
+
+⇒ 收了一支 `infra/verify_region_counts_live.py`：種一筆合成 game 讓那一行真的跑一次，
+跑完刪掉。四格 —— **A** 種之前必須是 `{}`（基準）／**B** 種一筆台北市 → `{"台北市":1}`
+且值是 `int`（正控）／**C** 再種一筆 → **2**（證明是**累加**不是「設成 1」）／
+**D** 刪光後回到 `{}`（證明讀數跟著我的種子動，不是別的東西）。**四格全過。**
+收尾實查：表回到 **0 筆**、`begins_with(gameId,"probe-bareassert-")` **0 筆**殘留。
+⚠️ 這是對 **stg** 空表的可逆寫入；換成有資料的表要重想，不要照抄。
+
+#### ⚠️ 仍然沒有量到的
+
+- `admin_push_all` 那兩處（`u.(*types.AttributeValueMemberS)`）：**刻意不打** ——
+  那支會對全體使用者發推播。它只有 binary 指紋那一層涵蓋。
+- 6 支 `validateToken` 的 `!ok` 分支：如上，構不出輸入。
+- `admin_users` 的 `LastEvaluatedKey` 分支：需要 scan 超過 1 MB 才會有游標，本輪沒造。
 
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
