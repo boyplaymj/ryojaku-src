@@ -156,7 +156,13 @@ def http_probe(method: str, path: str, kind: str, token):
     """token=None 代表完全不帶 Authorization header。"""
     if kind == "V2":
         # fail-loud：連線失敗會被讀成「端點壞了」，而真因是這裡指著一個已刪除的 API。
-        raise SystemExit("kind='V2' 但 HTTP API 已刪除（2026-09-11 §5）—— 請改成 V1")
+        # 🔴 但 exit code 要是 **2** 不是 1（2026-09-12 Codex 覆驗抓到）：
+        #    `raise SystemExit("字串")` 印完訊息後退 **1**，而 1 在本專案的約定裡是
+        #    「被測物壞了，去看程式」—— 這裡的真因是**腳本自己的 TARGETS 表過期**，
+        #    處置是去改那張表。訊息寫得再清楚，自動化讀到的仍是 1。
+        print("⚠️ rc=2（前提錯誤，不是回歸）：kind='V2' 但 HTTP API 已刪除"
+              "（2026-09-11 §5）—— 請把 TARGETS 裡那一列改成 V1。", file=sys.stderr)
+        raise SystemExit(2)
     base = REST_BASE
     data = b"{}" if method == "POST" else None
     req = urllib.request.Request(base + path, data=data, method=method)
