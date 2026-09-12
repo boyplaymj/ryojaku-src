@@ -1247,7 +1247,19 @@ transform 產物是 `AWS::ApiGatewayV2::Api` 且 `Body.paths = {}`。
 - 🔴 **J 只證明那個 query param 不改變「認證」結果，沒有證明「兌換記在 token 那個人頭上」。**
   要看到歸屬就得真的兌換成功，那有寫入副作用。結構上的理由只在原始碼：
   整支 handler 對 query string **零次引用**（`grep QueryString` 0 命中）⇒ 它讀不到那個參數。
-- 🔴 **量的是 stg。** prod 的 Function URL `AuthType` 要另外量，**兩者不可互推**。
+- ~~🔴 **量的是 stg。** prod 的 Function URL `AuthType` 要另外量，**兩者不可互推**。~~
+  🔴🔴 **2026-09-12 訂正：這句話預設了「有一個 prod 可以量」，而本專案沒有 prod。**
+  實查（全部讀取，不改任何東西）：CFN stack 只有 `ryojaku-tables-stg`／`ryojaku-app-stg`；
+  **84 顆 lambda 全是 `stg`**；SSM 9 個參數全在 `/ryojaku/stg/`；
+  DynamoDB **`MahjongClub_` 開頭 0 個表、`MahjongClubStg` 30 個**；
+  另外五個 region（`ap-northeast-1`／`ap-southeast-2`／`us-east-1`／`us-west-2`／`ap-east-1`）
+  的 ryojaku lambda 數都是 **0**。`02-app.generated.yaml` 的 `Stage` 預設就是 `stg`。
+  ⚠️ `01-tables.yaml` 註解裡那個 `prod (MahjongClub_)` 指的是**原工程師既有的正式環境**，
+  不是從本 repo 部署的 —— 「正式切換時改回 `MahjongClub_`」是**未來**的動作。
+  ⇒ **「另外量 prod」今天無事可做**，不是待辦、是不可構造。
+  這句界線要改寫成**條件式**：*將來真的開了 prod，讀數不可從 stg 互推。*
+  🔴 教訓：我寫「X 要另外量」時，那句話**暗示了 X 存在**。
+  寫界線也要先確認被界線指涉的東西存在，否則它會變成一條永遠做不完的待辦。
 - ⚠️ 格數與兩側計數由腳本**現算**。第一版結尾寫死「九格全過」，加了 J 之後就變成假話 ——
   過期的方向固定是「說得比實際少」，所以不留第二個會過期的數字。
 
