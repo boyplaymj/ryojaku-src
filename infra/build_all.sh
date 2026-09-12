@@ -8,9 +8,12 @@ BACKEND=/opt/sml/ryojaku-src/backend
 OUT=/opt/sml/ryojaku-src/build
 cd "$BACKEND"
 
-# 🔴 裸型別斷言棘輪（2026-09-12 接上）。在此之前它只有 `go test ./cmd/lambdas/bareassert/`
-#    這一個觸發點，而沒有人會去打 —— 「有測試」不等於「有接上」，那正是它要防的那種洞。
-#    擺在 build 之前：紅的時候binary 就不會被建出來，也就不會被 sam deploy 帶上去。
+# 🔴 裸型別斷言棘輪（2026-09-12 接上）。
+#    在此之前唯一會跑它的是 .github/workflows/backend-go.yml 的 `go test ./...`，
+#    而那支自 2026-09-06 就沒被觸發過（本地 master 領先 origin/master 101 顆）
+#    ⇒ 棘輪 09-11 出生至今，一次都沒有被自動跑過。
+#    「設定裡有觸發點」與「它真的會跑」在 .github/ 的檔案上逐字相同 —— 這一行補的是後者。
+#    擺在 build 之前：紅的時候 binary 就不會被建出來，也就不會被 sam deploy 帶上去。
 #    真的必須寫裸斷言 → 加進 baseline.txt 並附理由；臨時放行 BAREASSERT_GATE_OFF=1。
 if [ "${BAREASSERT_GATE_OFF:-0}" != "1" ]; then
   if ! go test -count=1 ./cmd/lambdas/bareassert/; then

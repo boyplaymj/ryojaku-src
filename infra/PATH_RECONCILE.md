@@ -810,8 +810,10 @@ grep 寫得出來的只是一份手挑清單（`.(string)` `.(float64)` …）�
 | `registration["displayName"]` | **退成 `""`** | 缺席是良性的（只是顯示名），不該擋整個請求 |
 | `registration["userId"]`（reject 的通知） | **跳過通知，請求仍算成功** | 🔴 那一處在**拒絕已經寫進資料庫之後**。回 500/502 會讓客戶端以為失敗而重試，**而資料其實已經改了** —— 比少一則通知糟得多 |
 
-**棘輪**（`backend/cmd/lambdas/bareassert/`）：修完之後全 repo 生產碼仍有 9 處
-（多在 admin 那幾支，一次修完划不來），收進 `baseline.txt`，**新增一處就紅**。
+**棘輪**（`backend/cmd/lambdas/bareassert/`）：~~修完之後全 repo 生產碼仍有 9 處
+（多在 admin 那幾支，一次修完划不來）~~，收進 `baseline.txt`，**新增一處就紅**。
+🔴 **2026-09-12 訂正：那 9 筆（實際 10 處）已經全部修掉，baseline 是 0 筆** —— 見本檔
+「裸斷言 baseline 清到 0」那節。上面那句留著劃掉，是因為它會被當成「還有 9 處待辦」讀。
 - **key 是「相對路徑 ＋ 斷言原文」不是行號** —— 行號會被上面任何一行編輯位移，
   而假紅會訓練出「直接 `-update`」的習慣，那會把真正的新增一起吞掉。
 - ⚠️ **已知代價**：同一檔裡原文相同的兩處會塌成一筆
@@ -880,7 +882,7 @@ stale **只有我改的那 3 顆**（上次那種「順帶把別人的改動推�
 `verify_registration_authz_live.py` **7/7**／`security_regression.sh` **36/36**，全 rc=0。
 
 ~~⚠️ **仍未驗**：`displayName` 缺席時退成 `""` 那條、以及 reject 通知那條~~
-（已於同日補完 —— 見下。剩下 9 處 baseline 裡的裸斷言仍未修。）
+（已於同日補完 —— 見下。~~剩下 9 處 baseline 裡的裸斷言仍未修。~~ **2026-09-12 已修完，baseline 0 筆**。）
 
 #### ✅ 兩條**刻意降級**的路徑也驗了（2026-09-11，`verify_degrade_paths_live.py`）
 
@@ -902,6 +904,82 @@ stale **只有我改的那 3 顆**（上次那種「順帶把別人的改動推�
 
 🔴 **E 那條為什麼刻意降級**：它在**拒絕已經寫進資料庫之後**。若在那裡回 5xx，
 客戶端會以為失敗而重試，**而資料其實已經改了** —— 比少一則通知糟得多。
+
+### ✅ 裸斷言 baseline 清到 0 —— 而更承重的一半是「這支測試沒有人會去跑」（2026-09-12）
+
+剩下那 9 筆 baseline（AST 實際 **10 處**，`admin_push_all` 有兩處原文相同塌成一筆）修完：
+
+| 位置 | 原本 | 改成 | 為什麼是這個降級 |
+|---|---|---|---|
+| 6 支 admin 的 `validateToken` | `token.Claims.(jwt.MapClaims)` | `v, ok :=`，`!ok` 回 error | 呼叫端本來就有 401 路徑，fail-closed 直接接得上 |
+| `admin_analysis` | `regionCounts[r.Name].(int) + 1` | 容器型別 `map[string]interface{}` → **`map[string]int`**，`regionCounts[r.Name]++` | 🔴 **斷言整個消失**，不是包一層 ok —— 那三行 nil 檢查也一起不需要（`int` 零值就是 0）。序列化到 JSON 的形狀不變 |
+| `admin_push_all` ×2 | `u.(*types.AttributeValueMemberS).Value` | 併進外層 `if u, ok := item["userId"].(…)` | 型別不對就跳過該筆；一筆髒資料不該讓整批推播 panic |
+| `admin_users` | `LastEvaluatedKey["userId"].(…).Value` | `ok` 檢查，取不到就不回游標並 `log.Printf("%T")` | ⚠️ **不可以靜靜吞掉**：那樣「真的沒有下一頁」與「key schema 不是 userId」逐字相同 |
+
+`baseline.txt` **9 → 0 筆**。棘輪實質上變成「一律禁止」；`-update` 的出口留著，
+是給將來真的必須寫的地方**帶理由**用，而不是讓人把整條測試註解掉。
+
+#### 🔴 修完才發現的那一半：棘輪出生至今，一次都沒有被自動跑過
+
+`grep -rn 'go test' infra/*.sh` ⇒ 只有 `mutation_auth_line.sh`／`mutation_ws_maintenance.sh`
+跑**它們自己那一包**，沒有任何一支跑 `./cmd/lambdas/bareassert/`。
+
+🔴🔴 **但我第一版在這裡寫「CI 也沒有」，那是假的，訂正留著當例子。**
+`.github/workflows/backend-go.yml` 跑的是 `go test -count=1 ./...`（push 到 `master`、
+paths `backend/**`）⇒ **設定上它涵蓋棘輪**，我沒去看 `.github/` 就下了結論。
+
+🔴 **而真相比「沒有觸發點」更難看**：實查 git ——
+
+| 讀數 | 值 |
+|---|---|
+| `origin/master` | `ada57fa`，**2026-09-06** |
+| 本地 `master` 領先 | **101 顆** |
+| `origin/master` 領先 | 0 顆（是祖先，不是分岔） |
+
+⇒ **最後一次 push 是 09-06，而棘輪是 09-11 出生的** —— 那支 workflow 從來沒有
+看過它一眼。「設定裡有一個觸發點」與「它真的會跑」差了 101 顆 commit，
+而**在 `.github/` 的檔案上這兩者逐字相同**。
+
+⇒ 正是本檔別處記過的「**有算、有印、有測試，仍然不等於有接上**」，
+只是這次的斷點不在程式裡，在「東西沒被推出去」。
+
+**接法**：`infra/build_all.sh` 開頭加一道閘，棘輪紅就 `exit 3`、**一顆 binary 都不建**。
+擺在 build **之前**而不是之後：紅的時候產物不存在，就不可能被下一班 `sam deploy` 帶上去。
+臨時放行 `BAREASSERT_GATE_OFF=1`，訊息裡印四條出路（誤擋不給出路會訓練出繞過）。
+
+**突變驗收**（`/tmp/ba-mutate.sh`，三格全過）：
+
+| 格 | 做什麼 | 讀數 |
+|---|---|---|
+| **M1** | 生產碼加一處裸斷言 | `build_all.sh` **rc=3**、印 BLOCKED、`build/` 底下**被碰過的 bootstrap = 0 顆** |
+| **C2** | 同一個突變 ＋ `BAREASSERT_GATE_OFF=1` | 放行、印 WARN、不出現 BLOCKED ⇒ 分得開「閘門擋的」與「腳本本來就壞」 |
+| **C1** | 乾淨樹 | 不出現 BLOCKED ⇒ 分得開「擋對了」與「恆擋」 |
+
+🔴 **`build_all.sh` 的 rc 不是通過訊號**：它 `set -uo pipefail` **沒有 `-e`**，
+迴圈自己數 `fail` 然後以一行 `echo` 收尾 ⇒ **84 顆全失敗它照樣 rc=0**。
+承重的讀數是最後那行 **`DONE ok=84 fail=0`**（清樹實跑，10.5 秒）。
+我第一版的 C1 格子就是拿 rc 當判準的，那條斷言其實零鑑別力。
+
+⚠️ **界線**：這一輪驗到的是「不會再新增」＋「新增了會擋住出貨」。
+**沒有驗行為** —— 那 10 處改完之後線上實際回什麼碼，本輪沒量
+（前一輪 `verify_bare_assert_live.py` 量的是 registration 那三支，不是這 8 支 admin）。
+而且**這 10 處尚未部署**：`build_all.sh` 建出來的 binary 還沒 `sam deploy`。
+
+⚠️ baseline 是 0 筆之後，「一處都沒有」與「`scan()` 瞎了回空集合」在
+`TestBareAssertRatchet` 上**逐字相同**。撐住這個區別的是 `TestRatchetHasTeeth`
+那道正控（已在測試檔註解寫明），不是棘輪本身。
+
+#### ⚠️ 順手量到、**本輪沒動**的兩件事
+
+1. **`backend-go.yml` 的下限守衛已經鬆了 17 格。** 它寫 `MIN=6`（「跑起來的 package
+   不得少於 6 個」），而本機實跑 `ALLOW_DEV_JWT_SECRET=true go test -count=1 ./...`
+   是 **23 個 ok、0 個 FAIL**。⇒ 現在可以有 **17 個 package 的測試全部消失**
+   而那道守衛照樣綠。它自己的註解就預告了這件事（「新增有測試的 package 時把 MIN
+   一起調高，否則這道守衛會隨時間鬆掉」）—— **預告了，然後就真的發生了**。
+   沒有順手改成 23，是因為那會在「一週沒推、一推 101 顆」的當下多一個變因；
+   要改的話請連同第 2 點一起排。
+2. **101 顆未推。** 這不只是 CI 的事：本檔記過的所有「已部署／已驗過」都是從
+   **本機工作樹**出發的，而 GitHub 上那份停在 09-06。
 
 ### 🔴 搬 §5 不是重構，是修東西：App 結構上打不到任何 HTTP_V2 路由（2026-09-11 量到）
 
