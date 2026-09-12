@@ -576,6 +576,27 @@ check "⓸【正控】主辦人帶 JWT → note 可見" \
   "$(printf '%s' "$GD_AUTH" | gd_ci note)" VISIBLE
 
 echo
+echo "══ G-5 驗證腳本自己的 exit code 約定（rc=2 閘）══"
+# 約定：0 通過／1 被測物壞了（去看程式）／2 前提已變或設備問題（去看基礎設施）。
+# 每支 infra/verify_*.py 都要有一條通往 rc=2 的路，除非它自己寫 `# RC2-EXEMPT: 理由`。
+#
+# 🔴 **這裡有一個我沒辦法消掉的取捨，寫明白**：本腳本只有「通過／失敗」兩態，
+#    表達不出第三態。閘門回 2（掃描器自己讀不懂某個檔）時我仍然只能記成 FAIL ——
+#    也就是本節自己犯了它要防的那個錯。折衷是**把訊息前綴改成 ⚠️**（每日排程
+#    會把 `^  ❌|^  ⚠️` 兩種都貼到 Discord），讓人看得出「這是儀器問題不是回歸」。
+#    要真的分三態，得先改 security_regression_daily.sh 的 classify()，那是另一件事。
+RC2_OUT=$(python3 "$(dirname "$0")/scan_verifier_exit_codes.py" --gate 2>&1); RC2=$?
+TOTAL=$((TOTAL+1))
+case "$RC2" in
+  0) echo "  ✅ $(printf '%s' "$RC2_OUT" | grep -m1 '^✅' | sed 's/^✅ //')" ;;
+  1) echo "  ❌ 有 verify_*.py 沒有通往 rc=2 的路（見下）"; FAIL=$((FAIL+1))
+     printf '%s\n' "$RC2_OUT" | grep -E '^🔴|^     ' | head -6 | sed 's/^/       /' ;;
+  *) echo "  ⚠️ rc=2 閘門自己沒跑成（掃描器讀不懂某個檔）—— 儀器問題，不是回歸"
+     FAIL=$((FAIL+1))
+     printf '%s\n' "$RC2_OUT" | tail -3 | sed 's/^/       /' ;;
+esac
+
+echo
 echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL）══"
 if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
 # ⚠️ TOTAL 是「跑到的斷言數」不是「應有的斷言數」——腳本若在中途 exit，
