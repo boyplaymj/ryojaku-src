@@ -19,7 +19,7 @@
 - **未捕捉的例外一律 rc=1，而本支看不到它們** —— 那是無窮多種寫法，列不完。
   所以「掃出 0/1/2」不等於「rc=2 真的涵蓋了所有設備問題」。
 """
-import ast, io, os, sys, glob
+import ast, io, os, sys, glob, tokenize
 
 def const_codes(node, fnreturns):
     """把一個 exit/return 的引數化約成可判讀的描述。"""
@@ -53,6 +53,38 @@ def const_codes(node, fnreturns):
 #    不驗「設備問題真的會走到它」—— `sys.exit(2)` 寫在一條死分支裡也會過。
 #    它擋的是「新腳本從頭到尾沒想過這件事」，那是便宜又真實的失效模式。
 EXEMPT_MARK = "RC2-EXEMPT:"
+
+
+def find_exempt(src):
+    """回 (reason, reject_note)。只認**真正的註解 token** ＋ **非空理由**。
+
+    🔴 第一版寫 `if EXEMPT_MARK in ln`（任意行的 substring），比我自己宣告的格式
+    `# RC2-EXEMPT: <理由>` **寬得多**（2026-09-12 Codex 覆驗抓到 P2）：
+    docstring 裡提到它、字串常數裡寫它、理由留空，全都會放行。
+    ⇒ **宣告與實作不符，而不符的方向是「豁免通道被誤開」** —— 那比漏擋更糟，
+    因為它看起來完全正常（清單上就是一行 🟡 豁免）。
+
+    🔴 用 `tokenize` 而不是自己判「這行是不是註解」：後者要處理字串裡的 `#`、
+    行內註解、三引號…… 那又是一份手寫規則。`tokenize` 的 COMMENT token 就是答案。
+
+    ⚠️ 刻意**不**加「理由至少 N 個字」這種長度門檻 —— 那個數字沒有證據撐著。
+    品質靠「理由會被印出來給人看」，不靠字數。
+    """
+    rejected = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type != tokenize.COMMENT or EXEMPT_MARK not in tok.string:
+                continue
+            reason = tok.string.split(EXEMPT_MARK, 1)[1].strip()
+            if reason:
+                return reason, None
+            rejected.append("第 %d 行：註解裡有標記但**理由是空的**" % tok.start[0])
+    except (tokenize.TokenError, IndentationError, SyntaxError) as e:
+        return None, "tokenize 失敗（%s）⇒ 不給豁免" % type(e).__name__
+    # 標記出現在非註解處（docstring／字串常數）也要講出來，否則作者會以為標記壞了
+    if EXEMPT_MARK in src and not rejected:
+        rejected.append("原始碼裡有標記，但**不在註解裡**（docstring／字串不算）")
+    return None, "；".join(rejected) if rejected else None
 
 
 def has_rc2(codes):
@@ -106,12 +138,8 @@ for p in sorted(glob.glob(os.path.join(ROOT, "verify_*.py"))):
                         codes |= {"SystemExit:" + c for c in const_codes(a, fnreturns)}
                 else:
                     codes.add("SystemExit:0")
-    exempt = None
-    for ln in src.splitlines():
-        if EXEMPT_MARK in ln:
-            exempt = ln.split(EXEMPT_MARK, 1)[1].strip() or "(沒寫理由)"
-            break
-    rows.append((os.path.basename(p), codes, exempt))
+    exempt, reject_note = find_exempt(src)
+    rows.append((os.path.basename(p), codes, exempt, reject_note))
     print("%-42s %s" % (os.path.basename(p), " ".join(sorted(codes)) or "（掃不到任何結束行程的點）"))
 
 
@@ -120,14 +148,18 @@ if GATE:
     if not rows:
         print("⚠️ rc=2：一支 verify_*.py 都沒掃到（路徑給錯？）—— 不可讀成通過。")
         sys.exit(2)
-    bad = [(n, c) for n, c, ex in rows if ex is None and not has_rc2(c)]
-    exempted = [(n, ex) for n, c, ex in rows if ex is not None]
+    bad = [(n, c, note) for n, c, ex, note in rows if ex is None and not has_rc2(c)]
+    exempted = [(n, ex) for n, c, ex, note in rows if ex is not None]
     for n, ex in exempted:
         print("🟡 豁免 %-38s 理由：%s" % (n, ex))
     if bad:
         print("🔴 rc=1：下列 %d 支沒有任何通往 rc=2 的路：" % len(bad))
-        for n, c in bad:
+        for n, c, note in bad:
             print("     %-40s 目前只有：%s" % (n, " ".join(sorted(c)) or "（無）"))
+            if note:
+                # 🔴 標記寫了卻不算數時一定要講出來，否則「豁免沒生效」與
+                #    「我根本沒寫標記」在輸出上逐字相同，作者會以為機制壞了。
+                print("       ↳ 豁免不成立：%s" % note)
         print("   約定：0 通過／1 被測物壞了（去看程式）／2 前提已變或設備問題（去看基礎設施）。")
         print("   真的不需要 → 在該檔加一行  # RC2-EXEMPT: <為什麼這支不會有設備問題>")
         sys.exit(1)
