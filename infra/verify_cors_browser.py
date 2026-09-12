@@ -85,7 +85,40 @@ async ([url, body, token, extra]) => {
 """
 
 
+
+# 🔴 這支有一個**假綠**方向，比 exit code 那件事更嚴重（2026-09-12 補）。
+#    瀏覽器裡「CORS 被擋」與「網路根本不通」**都是 TypeError: Failed to fetch**，
+#    形狀逐字相同。於是對「預期被擋」那幾格（`extra` 為真），端點掛掉時
+#    fetch 一樣 reject ⇒ 判成 ✅「如預期被擋」—— **端點根本沒回應，而報告是綠的**。
+#    而「預期通過」那幾格會失敗 ⇒ 舊版算 rc=1「CORS 壞了」，把不可達講成回歸。
+#
+#    ⇒ 出路是**不能在瀏覽器裡分**，要一道 out-of-band 的可達性前提：
+#    先用 Python 直接打 REST（不經瀏覽器、不受 CORS 管），確認它活著。
+#    活著 ⇒ 瀏覽器端的失敗才可以歸因給 CORS（rc=1）。
+#    不活 ⇒ rc=2，而且**必須明講「預期被擋那幾格的綠燈這一輪不可信」**。
+def reachability_precheck():
+    """回 (ok, 說明)。刻意不經瀏覽器 —— CORS 是瀏覽器施加的，伺服器端不受它管。"""
+    import urllib.request, urllib.error
+    url = REST + "/venues"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return True, "GET %s → HTTP %d" % (url, r.status)
+    except urllib.error.HTTPError as e:
+        # 401/403 也算「活著」—— 我們要的是「有沒有回應」，不是「有沒有權限」
+        return True, "GET %s → HTTP %d（有回應即可）" % (url, e.code)
+    except Exception as e:
+        return False, "GET %s 打不通：%r" % (url, e)
+
+
 def main():
+    ok, why = reachability_precheck()
+    print("可達性前提：%s %s" % ("✅" if ok else "⚠️", why))
+    if not ok:
+        print("⚠️ rc=2 —— 端點不可達，這一輪不是判定。")
+        print("   🔴 特別注意：『預期被擋』那幾格在端點掛掉時**也會印 ✅**")
+        print("      （瀏覽器對 CORS 拒絕與網路不通都丟 TypeError），所以不要讀那些綠燈。")
+        return 2
     token = os.environ.get("TOKEN") or mint_token()
     failed = []
     with sync_playwright() as p:
@@ -107,6 +140,8 @@ def main():
         browser.close()
 
     print("\n判定:", "全數通過" if not failed else f"{len(failed)} 項失敗 → {failed}")
+    # 走到這裡代表可達性前提成立 ⇒ 瀏覽器端的失敗可以歸因給 CORS（rc=1），
+    # 而不是「我量不到」。前提不成立的那條路在上面就 return 2 了。
     return 1 if failed else 0
 
 

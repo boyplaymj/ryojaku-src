@@ -213,8 +213,27 @@ def invoke_probe(fn: str, method: str, path: str, kind: str, token: str):
     return resp.get("statusCode", "?"), str(resp.get("body", ""))[:100]
 
 
-def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
+# 🔴 「我量不到」不是「它退步了」（2026-09-12 補）。
+#    http_probe() 網路層例外回 **0**、invoke_probe() 的 aws CLI 失敗回 **"ERR"** ——
+#    舊版把這兩個哨兵值直接拿去跟 401/403/200 比，比不過就進 `bad` ⇒ rc=1「未通過」。
+#    ⇒ 網路斷一下、AWS 憑證過期、被 throttle，讀起來全都像「授權閘回歸了」。
+#    而 rc=1 的處置是「去看程式」，rc=2 的處置是「去看基礎設施」，兩者相反。
+#    ⚠️ 這支是我部署前後拿來當迴歸尺的那一支 —— 當時 rc=0 所以結論沒受影響，
+#    但只要那兩次有一次網路抖動，我就會回報一個不存在的授權回歸。
+EQUIP_SENTINELS = (0, "ERR")
+
+
+def equip_hit(*codes):
+    """任何一格落在哨兵值 ⇒ 這一輪有「沒量到」的格子。"""
+    return [c for c in codes if c in EQUIP_SENTINELS]
+
+
+def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list, equip: list):
     """P1：authorizer 層。gated 者無 token/user 被擋、admin 通過；route-missing 者三者皆 403。"""
+    hit = equip_hit(none_code, user_code, admin_code)
+    if hit:
+        equip.append(f"[HTTP] {fn}: 有格子沒量到（{hit}）—— 網路／端點不可達，不是回歸")
+        return
     if mode == "route-missing":
         # 這裡刻意連 admin 也斷言 403：等 P3 把 route-missing 端點搬進 REST API，本行會 fail，
         # 提醒把該支從 route-missing 改回 gated，而不是讓已修好的缺口悄悄留著標記。
@@ -232,7 +251,7 @@ def check_http(fn: str, mode: str, none_code, user_code, admin_code, bad: list):
         bad.append(f"[HTTP] {fn}: admin token 被擋下 ({admin_code})，authorizer 應放行")
 
 
-def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list):
+def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list, equip: list):
     """P0：Lambda 內的程式碼閘。繞開路由，每支都要擋住 user token 且不 panic。
 
     ⚠️ D5 之後期望值由「403」放寬為「401 或 403」：兩把金鑰分離後，user token 在**驗簽階段**
@@ -240,6 +259,10 @@ def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list):
     真正還在驗 role 閘的是 check_norole —— 那支用 admin 金鑰簽但缺 role claim，
     是 D5 之後唯一打得到程式碼閘的形狀。
     """
+    hit = equip_hit(user_code, admin_code)
+    if hit:
+        equip.append(f"[INVOKE] {fn}: invoke 失敗（{hit}）{user_body} —— 沒量到，不是回歸")
+        return
     if user_code not in BLOCKED:
         bad.append(f"[INVOKE] {fn}: user token 得到 {user_code} (want 401/403) {user_body}")
     if user_code == "PANIC":
@@ -248,21 +271,28 @@ def check_invoke(fn: str, user_code, admin_code, user_body: str, bad: list):
         bad.append(f"[INVOKE] {fn}: admin token 得到 {admin_code} (不該被擋)")
 
 
-def check_norole(fn: str, code, body: str, bad: list):
+def check_norole(fn: str, code, body: str, bad: list, equip: list):
     """P0 的真正回歸網（D5 後）：admin 金鑰簽、但缺 role claim → 必須 403，且絕不 panic。"""
+    if equip_hit(code):
+        equip.append(f"[NOROLE] {fn}: invoke 失敗（{code}）{body} —— 沒量到，不是回歸")
+        return
     if code == "PANIC":
         bad.append(f"[NOROLE] {fn}: 缺 role claim 造成 panic（P0 的 502 回歸了）{body}")
     elif code != 403:
         bad.append(f"[NOROLE] {fn}: 缺 role claim 得到 {code} (want 403) {body}")
 
 
-def check_forged(fn: str, http_code, invoke_code, invoke_body: str, bad: list):
+def check_forged(fn: str, http_code, invoke_code, invoke_body: str, bad: list, equip: list):
     """D5：用 **user 金鑰** 簽的 role=super_admin token 必須在驗簽階段就被打掉。
 
     這是整份腳本裡唯一能證明「兩把金鑰真的分離」的斷言。只驗「admin token 能通過」
     是不夠的 —— 共用同一把金鑰時它一樣會通過。若哪天有人把 admin 支改回讀 JWT_SECRET，
     或誤把兩個 SSM 參數設成同一個值，這裡就會 fail。
     """
+    hit = equip_hit(http_code, invoke_code)
+    if hit:
+        equip.append(f"[FORGED] {fn}: 有格子沒量到（{hit}）{invoke_body} —— 不是回歸")
+        return
     if http_code not in BLOCKED:
         bad.append(f"[FORGED/HTTP] {fn}: 用 user 金鑰簽的 super_admin token 得到 {http_code}，"
                    f"應被擋（D5 金鑰分離失效？檢查該支是否還在讀 JWT_SECRET）")
@@ -284,6 +314,7 @@ def main():
           f"{'I:user':>7} {'I:admin':>7} {'I:forge':>7} {'I:norole':>8}  mode")
     print("-" * 122)
     bad = []
+    equip = []   # 沒量到的格子（rc=2），與 bad（rc=1）刻意分開
     for fn, method, path, kind, mode in TARGETS:
         hn, _ = http_probe(method, path, kind, None)
         hu, _ = http_probe(method, path, kind, user_tok)
@@ -294,10 +325,10 @@ def main():
         if_, if_body = invoke_probe(fn, method, path, kind, forged_tok)
         inr, inr_body = invoke_probe(fn, method, path, kind, norole_tok)
         print(f"{fn:38} {hn!s:>7} {hu!s:>7} {ha!s:>7} {hf!s:>7} {iu!s:>7} {ia!s:>7} {if_!s:>7} {inr!s:>7}  {mode}")
-        check_http(fn, mode, hn, hu, ha, bad)
-        check_invoke(fn, iu, ia, iu_body, bad)
-        check_forged(fn, hf, if_, if_body, bad)
-        check_norole(fn, inr, inr_body, bad)
+        check_http(fn, mode, hn, hu, ha, bad, equip)
+        check_invoke(fn, iu, ia, iu_body, bad, equip)
+        check_forged(fn, hf, if_, if_body, bad, equip)
+        check_norole(fn, inr, inr_body, bad, equip)
 
     print("-" * 122)
     # P0 是「每支 lambda 的程式碼閘」，P1 是「每條路由的 authorizer」——
@@ -305,6 +336,17 @@ def main():
     fns = len({t[0] for t in TARGETS})
     gated = sum(1 for t in TARGETS if t[4] == "gated")
     missing = len(TARGETS) - gated
+    # 🔴 equip 優先於 bad：有格子沒量到時，這一輪整體**不是一個判定**。
+    #    仍然把 bad 印出來（不要弄丟已經量到的失敗），但 exit code 是 2。
+    if equip:
+        print(f"⚠️ 沒量到（{len(equip)} 項）—— rc=2，去看基礎設施，不要讀成回歸：")
+        for e in equip:
+            print("   " + e)
+        if bad:
+            print(f"   （另有 {len(bad)} 項比對失敗，但本輪不完整，先解決上面那些再重跑）")
+            for b in bad:
+                print("   " + b)
+        return 2
     if bad:
         print(f"❌ 未通過（{len(bad)} 項）：")
         for b in bad:
