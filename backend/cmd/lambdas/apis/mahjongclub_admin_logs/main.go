@@ -105,7 +105,12 @@ func validateToken(authHeader string) (jwt.MapClaims, error) {
 		return nil, err
 	}
 
-	return token.Claims.(jwt.MapClaims), nil
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		// fail-closed：裸斷言失敗會 panic ⇒ Lambda Unhandled ⇒ 502 且零錯誤日誌。
+		return nil, fmt.Errorf("invalid claims type")
+	}
+	return claims, nil
 }
 
 func errorResponse(status int, message string) events.APIGatewayProxyResponse {

@@ -1,11 +1,3 @@
 # 裸型別斷言的既有清單（棘輪基線）。新增一處就會讓測試紅。
 # 格式：<相對 cmd/lambdas 的路徑>\t<斷言原文>
-apis/mahjongclub_admin_activities/main.go	token.Claims.(jwt.MapClaims)
-apis/mahjongclub_admin_admins/main.go	token.Claims.(jwt.MapClaims)
-apis/mahjongclub_admin_analysis/main.go	regionCounts[r.Name].(int)
-apis/mahjongclub_admin_logs/main.go	token.Claims.(jwt.MapClaims)
-apis/mahjongclub_admin_moderation/main.go	token.Claims.(jwt.MapClaims)
-apis/mahjongclub_admin_push_all/main.go	token.Claims.(jwt.MapClaims)
-apis/mahjongclub_admin_push_all/main.go	u.(*types.AttributeValueMemberS)
-apis/mahjongclub_admin_users/main.go	result.LastEvaluatedKey["userId"].(*types.AttributeValueMemberS)
-apis/mahjongclub_admin_vouchers/main.go	token.Claims.(jwt.MapClaims)
+

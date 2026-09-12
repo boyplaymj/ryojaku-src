@@ -77,7 +77,12 @@ func validateToken(tokenString, secret string) (jwt.MapClaims, error) {
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token")
 	}
-	return token.Claims.(jwt.MapClaims), nil
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		// fail-closed：裸斷言失敗會 panic ⇒ Lambda Unhandled ⇒ 502 且零錯誤日誌。
+		return nil, fmt.Errorf("invalid claims type")
+	}
+	return claims, nil
 }
 
 // worker 從 jobs channel 接收任務並發送推送
@@ -139,9 +144,8 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	resultOld, err := dbSvc.Scan(ctx, inputOld)
 	if err == nil {
 		for _, item := range resultOld.Items {
-			if u, ok := item["userId"]; ok {
-				userID := u.(*types.AttributeValueMemberS).Value
-				uniqueUsers[userID] = true
+			if u, ok := item["userId"].(*types.AttributeValueMemberS); ok {
+				uniqueUsers[u.Value] = true
 			}
 		}
 	} else {
@@ -158,9 +162,8 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	resultNew, err := dbSvc.Scan(ctx, inputNew)
 	if err == nil {
 		for _, item := range resultNew.Items {
-			if u, ok := item["userId"]; ok {
-				userID := u.(*types.AttributeValueMemberS).Value
-				uniqueUsers[userID] = true
+			if u, ok := item["userId"].(*types.AttributeValueMemberS); ok {
+				uniqueUsers[u.Value] = true
 			}
 		}
 	} else {

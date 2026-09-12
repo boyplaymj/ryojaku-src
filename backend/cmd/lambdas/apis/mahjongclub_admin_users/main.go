@@ -148,7 +148,11 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		}
 
 		if result.LastEvaluatedKey != nil {
-			newLastKey = result.LastEvaluatedKey["userId"].(*types.AttributeValueMemberS).Value
+			if k, ok := result.LastEvaluatedKey["userId"].(*types.AttributeValueMemberS); ok {
+				newLastKey = k.Value
+			} else {
+				log.Printf("LastEvaluatedKey 沒有字串型的 userId（%T），本次不回傳分頁游標", result.LastEvaluatedKey["userId"])
+			}
 		}
 
 		// If filtering by name, total count changes, but DynamoDB scan doesn't give total matching count easily without full scan.

@@ -7,20 +7,28 @@
 // 🔴 用 go/ast 而不是 grep：這是「哪些運算式是型別斷言」的問題，parser 才答得準。
 // grep 寫得出來的只是一份手挑清單（.(string) .(float64) …），漏掉的那種零徵兆。
 //
-// 🔴 為什麼是棘輪不是「一律禁止」：2026-09-11 修完兩支 registration handler 之後，
-// 全 repo 生產碼仍有 11 處。一次修完划不來（多半在 admin 那幾支，而且改動面大），
-// 但**不能讓它繼續長**。既有的收進 baseline.txt，新增的一律紅。
+// 🔴 2026-09-12：baseline 已經**清到 0 筆** —— admin 那 8 支的 10 處全部修掉了。
+// ⇒ 現在它實質上是「一律禁止」，而不再是棘輪。留著 baseline.txt 與 -update 機制，
+// 是因為將來真的有必須寫裸斷言的地方時，要有一個**帶理由**的出口，
+// 而不是讓人把整條測試註解掉。
+// （歷史：2026-09-11 修完兩支 registration handler 時還剩 11 處，一次修完划不來，
+// 所以先做成棘輪；隔天把剩下的補完。）
+//
+// 🔴 baseline 是 0 筆之後，「一處都沒有」與「scan() 瞎了回空集合」在本測試上**逐字相同**。
+// 撐住這個區別的是 TestRatchetHasTeeth（正控），以及 build_all.sh 那道閘門
+// —— 少了正控，這條測試會恆綠而看起來完全正常。
 //
 // 🔴 key 是「相對路徑 ＋ 斷言原文」，**不是行號**：行號會被上面任何一行編輯位移，
 // 那會讓 baseline 每次改動都假紅，而假紅訓練出「直接重建 baseline」的習慣。
 //
-// ⚠️ 已知代價：同一個檔裡**原文相同**的兩處會塌成一筆（admin_push_all 的
-// token.Claims.(jwt.MapClaims) 就是這樣：AST 掃到 3 處，baseline 只有 2 筆）。
+// ⚠️ 已知代價：同一個檔裡**原文相同**的兩處會塌成一筆。
+// （2026-09-11 的實例：admin_push_all 的 token.Claims.(jwt.MapClaims) AST 掃到 3 處、
+// baseline 只有 2 筆。那 3 處 2026-09-12 已全部修掉，此處只留形狀當說明。）
 // ⇒ 修掉三處中的一處不會被本測試看見。代價不對稱所以接受：
 // 行號當 key 的話每次上游編輯都假紅，而假紅訓練出「直接 -update」的習慣，
 // 那會讓真正的新增也一起被吞掉。
 //
-// 真的必須寫裸斷言時：把它加進 baseline.txt 並在該行留一句為什麼。
+// 真的必須寫裸斷言時（現在應該是 0 筆，所以這是例外不是常態）：加進 baseline.txt 並附理由。
 // 重建：go test ./cmd/lambdas/bareassert -run TestBareAssertRatchet -update
 package bareassert
 

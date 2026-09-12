@@ -633,7 +633,7 @@ func handleGamesAnalysis(ctx context.Context, now time.Time, getDayRange func(ti
 	// 3. Time Slot Analysis (Real Data) & Location Data
 	slotCounts := make([]int, 24) // 0-23 hours
 	var locations []map[string]interface{}
-	regionCounts := make(map[string]interface{})
+	regionCounts := make(map[string]int)
 
 	loc, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
@@ -729,10 +729,7 @@ func handleGamesAnalysis(ctx context.Context, now time.Time, getDayRange func(ti
 						matched := false
 						for _, key := range r.Keys {
 							if strings.Contains(address, key) {
-								if regionCounts[r.Name] == nil {
-									regionCounts[r.Name] = 0
-								}
-								regionCounts[r.Name] = regionCounts[r.Name].(int) + 1
+								regionCounts[r.Name]++
 								matched = true
 								break
 							}
