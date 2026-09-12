@@ -32,13 +32,22 @@ def reds():
     #    `FAIL\t./cmd/... [setup failed]` ⇒ **守衛被它滿足**，照樣印「基線綠」。
     #    （這不是假想：把 CWD 少算一層就會發生，我就地實測過。）
     if "[setup failed]" in out or "[build failed]" in out:
-        raise RuntimeError("package 沒建起來／找不到，一條測試都沒跑，不可讀成通過：\n" + out[:800])
+        raise PremiseError("package 沒建起來／找不到，一條測試都沒跑，不可讀成通過：\n" + out[:800])
     if not re.search(r'^\s*--- (PASS|FAIL):', out, re.M):
-        raise RuntimeError("找不到任何逐測試結果，測試沒有執行：\n" + out[:800])
+        raise PremiseError("找不到任何逐測試結果，測試沒有執行：\n" + out[:800])
     # 含縮排：子測試那行前面有空白
     return sorted(set(re.findall(r'^\s*--- FAIL: (\S+)', out, re.M)))
 
 def restore(): io.open(F, "w", encoding="utf-8").write(ORIG)
+
+class PremiseError(RuntimeError):
+    """前提／設備問題 —— 必須以 rc=2 收場，不可與 rc=1（有發沒殺掉）同碼。
+
+    🔴 舊版在 reds() 裡直接 raise RuntimeError，未捕捉 ⇒ Python 退 **1**，
+    而 rc=1 的意思是「有突變體活下來，去補測試」。兩者處置相反：
+    rc=2 要去看**跑測試這件事本身**壞在哪（package 沒建起來、cwd 算錯）。
+    （2026-09-12 Codex 在姊妹腳本的 AuthType 那格抓到同一個形狀，這是順手掃出的第三處。）
+    """
 
 try:
     if reds():
@@ -63,7 +72,10 @@ try:
             print("  ❌ %s → 期望 %s 紅，實得 %s" % (name, expect, got)); fail = 1
         restore()
     print("")
-    print("✅ 2 發全殺，歸因完全相等" if not fail else "🔴 有發沒殺掉")
+    print("✅ %d 發全殺，歸因完全相等" % len(MUTANTS) if not fail else "🔴 有發沒殺掉")
     sys.exit(fail)
+except PremiseError as e:
+    print("⚠️ 前提／設備問題（rc=2，不可讀成通過也不是「有發沒殺掉」）：%s" % e)
+    sys.exit(2)
 finally:
     restore()

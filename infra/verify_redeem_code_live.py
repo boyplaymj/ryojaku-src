@@ -60,7 +60,16 @@ def main():
                "--function-name", FN, "--query", "AuthType", "--output", "text"])
     print("Function URL AuthType = %s" % auth)
     if auth != "NONE":
-        print("⚠️ AuthType 不是 NONE —— 本腳本的前提變了，先去讀設計冊再改期望值")
+        # 🔴 前提變了要 **rc=2**，不可以警告完繼續跑（2026-09-12 Codex 覆驗抓到）。
+        #    舊版印一行 ⚠️ 就往下跑，而 ⚠️ 夾在中間、`✅ 全過` 在最後一行、rc=0
+        #    ⇒ 讀 tail 的人與讀 rc 的自動化**都會當成通過**。實測過，不是推論。
+        #    三種狀態要分得開：0 通過／1 handler 回歸失敗（去看程式）／
+        #    2 前提已變或設備問題（去看基礎設施，**不可讀成通過**）。
+        #    ⚠️ 這一格下面所有期望值（401/404）都是「閘在 handler 裡」推出來的；
+        #    AuthType 一變，擋下來的可能是 Function URL 那層，401 的意義就不同了。
+        print("⚠️ AuthType 不是 NONE（rc=2）—— 本腳本每一格的期望值都預設「閘在 handler 裡」。")
+        print("   前提已變 ⇒ 先去讀設計冊、重新決定期望值，**不要**把這次結果讀成通過或失敗。")
+        return 2
     secret = ssm("/ryojaku/stg/JWT_SECRET")
     admin_secret = ssm("/ryojaku/stg/ADMIN_JWT_SECRET")
 
