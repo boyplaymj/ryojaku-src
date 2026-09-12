@@ -106,6 +106,25 @@ func scan(t *testing.T, root string) map[string]bool {
 	return out
 }
 
+// renderBaseline 把 key 集合渲染成 baseline.txt 的內容。
+//
+// 🔴 抽出來是為了讓它**可測**。舊版把字串組在 `if *update` 裡面，而那段
+// 只在有人手打 `-update` 時才執行 ⇒ 沒有任何測試碰得到它。
+// 🔴 它有一個真的 bug，2026-09-12 Codex 覆驗抓到：舊版寫
+// `header + strings.Join(keys, "\n") + "\n"`，**keys 為空時 Join 回空字串**
+// ⇒ 產出 `header + "\n"`，尾巴多一行空白（`git diff --check` 會報
+// "new blank line at EOF"）。
+// ⚠️ 它在 baseline 有內容的那 9 個月都是對的 —— **清到 0 筆的那一刻才第一次浮出來**，
+// 而那正是我這一輪做的事。「以前沒出過問題」對退化情形零鑑別力。
+func renderBaseline(keys []string) string {
+	body := "# 裸型別斷言的既有清單（棘輪基線）。新增一處就會讓測試紅。\n" +
+		"# 格式：<相對 cmd/lambdas 的路徑>\\t<斷言原文>\n"
+	for _, k := range keys {
+		body += k + "\n"
+	}
+	return body
+}
+
 func load(t *testing.T, p string) map[string]bool {
 	t.Helper()
 	b, err := os.ReadFile(p)
@@ -133,10 +152,7 @@ func TestBareAssertRatchet(t *testing.T) {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		body := "# 裸型別斷言的既有清單（棘輪基線）。新增一處就會讓測試紅。\n" +
-			"# 格式：<相對 cmd/lambdas 的路徑>\\t<斷言原文>\n" +
-			strings.Join(keys, "\n") + "\n"
-		if err := os.WriteFile("baseline.txt", []byte(body), 0o644); err != nil {
+		if err := os.WriteFile("baseline.txt", []byte(renderBaseline(keys)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		t.Logf("已重建 baseline.txt（%d 筆）", len(keys))
@@ -193,5 +209,61 @@ func sw(v interface{}) string { switch v.(type) { case string: return "s" }; ret
 		if !strings.Contains(k, `m["a"].(string)`) {
 			t.Errorf("抓到的不是預期那一處：%s", k)
 		}
+	}
+}
+
+// TestRenderBaselineNoTrailingBlank 擋的是 renderBaseline 的**退化情形**。
+//
+// 🔴 兩格缺一不可：只驗 0 筆的話，`renderBaseline` 退化成「永遠只回檔頭」
+// 也會全綠；只驗 N 筆的話，正是 2026-09-12 那個 bug 的所在（Join 對空切片
+// 回空字串）結構上量不到。**退化情形要配一個非退化的控制組。**
+func TestRenderBaselineNoTrailingBlank(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want string
+	}{
+		{"空集合（baseline 清到 0 的那一格）", nil, header()},
+		{"兩筆（控制組：少了它，永遠只回檔頭也會綠）", []string{"a/main.go\tx.(int)", "b/main.go\ty.(string)"},
+			header() + "a/main.go\tx.(int)\n" + "b/main.go\ty.(string)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderBaseline(tc.keys)
+			if got != tc.want {
+				t.Errorf("渲染結果不符\n  got  %q\n  want %q", got, tc.want)
+			}
+			if strings.HasSuffix(got, "\n\n") {
+				t.Errorf("尾巴有多餘空白行（git diff --check 會報 new blank line at EOF）：%q", got)
+			}
+			if !strings.HasSuffix(got, "\n") {
+				t.Errorf("檔案必須以單一換行收尾：%q", got)
+			}
+		})
+	}
+}
+
+func header() string {
+	return "# 裸型別斷言的既有清單（棘輪基線）。新增一處就會讓測試紅。\n" +
+		"# 格式：<相對 cmd/lambdas 的路徑>\\t<斷言原文>\n"
+}
+
+// TestBaselineFileMatchesRenderer 是上面那條的**接線檢查**：磁碟上那份必須
+// 逐位元組等於 renderBaseline 對「它自己載入的那些 key」的輸出。
+//
+// 🔴 少了它，renderBaseline 可以修得很乾淨，而 baseline.txt 留著舊的壞尾巴
+// —— 兩者在 `go test` 上逐字相同（前一條照樣綠）。修了產生器不等於修了產物。
+func TestBaselineFileMatchesRenderer(t *testing.T) {
+	b, err := os.ReadFile("baseline.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := load(t, "baseline.txt")
+	keys := make([]string, 0, len(base))
+	for k := range base {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if got, want := string(b), renderBaseline(keys); got != want {
+		t.Errorf("baseline.txt 與 renderBaseline 的輸出不符（跑 -update 重建）\n  磁碟 %q\n  應為 %q", got, want)
 	}
 }
