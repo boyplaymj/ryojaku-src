@@ -91,12 +91,27 @@ jobs:
         run: |
           set -o pipefail
           go test -count=1 ./... 2>&1 | tee /tmp/gotest.log
-          MIN=6
-          ok=$(grep -c '^ok' /tmp/gotest.log || true)
-          echo "--- 實際跑起來的 package：$ok（下限 $MIN）---"
-          grep '^ok' /tmp/gotest.log || true
-          if [ "$ok" -lt "$MIN" ]; then
-            echo "::error::只有 $ok 個 package 跑了測試，少於下限 $MIN。"
-            echo "::error::測試檔可能被改名／搬走／漏進 build tag —— 這種情況 go test 仍會 rc=0，故單看 exit code 抓不到。"
+          # 🔴 MIN 2026-09-12 由 6 調到 23。舊值是 2026-09-01 寫的，而當天之後陸續
+          #    新增了有測試的 package ⇒ 本機實測 23 ok / 0 FAIL ⇒ 那道下限**鬆了 17 格**，
+          #    可以有 17 個 package 的測試全部消失而它照樣綠。它自己上面那句註解
+          #    （「新增有測試的 package 時把 MIN 一起調高」）預告過，然後就真的發生了。
+          MIN=23
+          # 🔴 數的是「**跑起來**的 package」，不是「通過的 package」。
+          #    舊版數 `^ok`，那把「沒跑」與「跑了但紅」混成同一格 —— MIN=6 時餘裕太大
+          #    看不出來，改成 23 之後**一支測試失敗就會讓 ok 掉到 22**，於是這道守衛
+          #    會印「測試檔可能被改名／搬走」，而真相是它跑了、只是紅了 ⇒ 把讀的人
+          #    指向錯的方向。實測（2026-09-12，真的弄紅一條再跑）：全綠 ok=23、
+          #    一支紅 ok=22 而「跑起來的」仍是 23。
+          #    ⚠️ `[setup failed]` / `[build failed]` 不算跑過（go 對它們也印 `FAIL<tab>`，
+          #    但一條測試都沒有執行）—— 這一格有反控驗過，讀數 0。
+          #    通過與否由 `go test` 自己的 exit code 回答（本步有 set -o pipefail）。
+          ran=$(grep -E '^(ok|FAIL)[[:space:]]' /tmp/gotest.log | grep -vcE '\[(setup|build) failed\]' || true)
+          echo "--- 實際跑起來的 package：$ran（下限 $MIN）---"
+          grep -E '^(ok|FAIL)[[:space:]]' /tmp/gotest.log || true
+          if [ "$ran" -lt "$MIN" ]; then
+            echo "::error::只有 $ran 個 package **跑起來**，少於下限 $MIN。"
+            echo "::error::測試檔可能被改名／搬走／漏進 build tag，或某個 package 根本沒建起來（[setup failed]）。"
+            echo "::error::⚠️ 這不是「測試失敗」—— 失敗的 package 仍算跑過。測試失敗看 go test 自己的 exit code。"
+            echo "::error::新增有測試的 package 時，把 MIN 一起調高，否則這道守衛會隨時間再鬆掉一次。"
             exit 1
           fi
