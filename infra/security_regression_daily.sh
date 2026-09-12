@@ -79,16 +79,24 @@ DRY=${SECREG_DRY_RUN:-0}          # 1 = 準備 worktree 但不真跑（給接線
 #    半行 summary）；shrunk 要排在最後（它是**全綠的形狀**，只有前面全部
 #    不成立時才輪得到它）。
 classify() {
-    local log="$1" rc="$2" best="$3" sumline total nfail kind
+    local log="$1" rc="$2" best="$3" sumline total nfail nequip kind
     sumline=$(grep -E '^══ 斷言：通過 ' "$log" 2>/dev/null | tail -1)
     total=$(printf '%s' "$sumline" | sed -n 's/.*共 \([0-9]\+\).*/\1/p')
     nfail=$(printf '%s' "$sumline" | sed -n 's/.*失敗 \([0-9]\+\).*/\1/p')
+    # 🔴 「儀器 N」是 2026-09-12 新增的欄位。**舊 log 沒有它 ⇒ 抓到空字串 ⇒ 當 0**，
+    #    所以這個改動對既有的歷史紀錄是向後相容的（selftest 有一條專門釘這件事）。
+    nequip=$(printf '%s' "$sumline" | sed -n 's/.*儀器 \([0-9]\+\).*/\1/p')
     if [ "$rc" = 124 ]; then
         kind=timeout
     elif [ -z "$sumline" ] || [ -z "$total" ]; then
         kind=precondition      # 沒跑到斷言階段 ⇒ 沒測到，不是回歸
     elif [ "${nfail:-0}" -gt 0 ]; then
-        kind=assert            # 斷言紅燈
+        kind=assert            # 斷言紅燈（真的量到了）
+    elif [ "${nequip:-0}" -gt 0 ]; then
+        # 🔴 必須排在 cleanup **之前**：儀器問題讓內層回 rc=2，
+        #    而 rc!=0 會被下一條判成 cleanup ——「儀器沒跑成」與「殘留沒清掉」
+        #    處置完全不同，混在一起等於這道分流白做。
+        kind=instrument        # 斷言全綠，但有格子沒跑成 ⇒ 不是回歸
     elif [ "$rc" != 0 ]; then
         kind=cleanup           # 斷言全綠，掛在清理／殘留
     elif [ "$total" -lt "$best" ]; then
@@ -96,7 +104,7 @@ classify() {
     else
         kind=green
     fi
-    printf 'KIND=%s; TOTAL=%s; NFAIL=%s\n' "$kind" "${total:-}" "${nfail:-}"
+    printf 'KIND=%s; TOTAL=%s; NFAIL=%s; NEQUIP=%s\n' "$kind" "${total:-}" "${nfail:-}" "${nequip:-0}"
 }
 
 # ── 安裝漂移檢查 ───────────────────────────────────────────────────────
@@ -156,6 +164,16 @@ if [ "${1:-}" = "--selftest" ]; then
     # 🔴 這條釘住「先看 nfail 再看 rc」：清理失敗與斷言紅燈的 rc 都是 1，
     #    只有 summary 裡的失敗數分得出來。順序寫反的話它會變成 cleanup。
     t "斷言紅＋rc=1 要判 assert 不是 cleanup" "$SUM_RED"         1   36 assert
+    # ── instrument（2026-09-12 新增的第三態）────────────────────────────
+    SUM_EQ='══ 斷言：通過 36 / 共 36（失敗 0，儀器 1）══'
+    t "儀器沒跑成（rc=2）"                    "$SUM_EQ"          2   36 instrument
+    # 🔴 排序反控：instrument 若排在 cleanup 之後，rc=2 會先被判成 cleanup。
+    #    這條與上一條是同一份輸入 ⇒ 少了它，把兩個分支對調也不會紅。
+    t "【反控】儀器＋rc=1 仍要判 instrument"   "$SUM_EQ"          1   36 instrument
+    # 🔴 FAIL 優先於 EQUIP：兩者同時有時，真的量到的回歸才是要講的那件事。
+    t "【反控】斷言紅＋儀器 1 要判 assert"     '══ 斷言：通過 26 / 共 36（失敗 10，儀器 1）══' 1 36 assert
+    # 🔴 向後相容：舊 log 沒有「儀器」欄，抓到空字串必須當 0，不可變成語法錯或 instrument。
+    t "【反控】舊格式 log（沒有儀器欄）仍是 green" "$SUM_OK"      0   36 green
     rm -rf "$T"
     echo "── 通過 $((n - bad)) / $n ──"
     [ "$bad" = 0 ] || exit 1
@@ -419,6 +437,11 @@ stg API 不可達、或 AWS／SSM 權限掉了。**這不是安全回歸。**" ;
   assert)
     HEAD="🛡️🔴 **両雀 安全回歸守衛：斷言紅燈**（連續第 $STREAK 次）"
     WHY="$NFAIL / $TOTAL 條斷言失敗。這是**真打 stg** 的讀數 —— 單元測試綠不代表線上是修好的那一版。" ;;
+  instrument)
+    HEAD="🛡️🟠 **両雀 安全回歸守衛：儀器沒跑成**（連續第 $STREAK 次）"
+    WHY="$TOTAL 條斷言全過，但有 **$NEQUIP** 項**儀器自己沒跑成**（例如 rc=2 閘門的掃描器
+讀不懂某個檔）。**這不是安全回歸** —— 要查的是那支工具，不是被測的程式。
+⚠️ 但也**不要讀成通過**：那幾格今天沒有判定。" ;;
   cleanup)
     HEAD="🛡️🟠 **両雀 安全回歸守衛：斷言全綠，但清理沒收乾淨**（連續第 $STREAK 次）"
     WHY="$TOTAL 條斷言全過，掛在清理階段（殘留未刪，或掃描期間 AWS 呼叫失敗）。

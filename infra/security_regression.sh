@@ -36,6 +36,11 @@ CLEAN_ORPHANS=0
 [ "${1:-}" = "--cleanup-orphans" ] && CLEAN_ORPHANS=1
 
 FAIL=0
+# 🔴 EQUIP 與 FAIL 刻意分開（2026-09-12）：
+#    FAIL＝被測物壞了（去看程式）／EQUIP＝儀器自己沒跑成（去看基礎設施）。
+#    合在一起的話，「掃描器讀不懂某個檔」會被外層通知成「安全回歸」——
+#    而假警報訓練出來的忽略是不可逆的。
+EQUIP=0
 # 🔴 斷言總數一律由程式自己數，不准手寫。
 #    先前的檢查點與報告寫「17 項」，實際只有 16 —— 沒有來源的手抄數字不會報錯，
 #    只會被複製（外部查驗者照著引用了一次）。TOTAL 掛在 pass/fail 上，
@@ -586,21 +591,35 @@ echo "══ G-5 驗證腳本自己的 exit code 約定（rc=2 閘）══"
 #    會把 `^  ❌|^  ⚠️` 兩種都貼到 Discord），讓人看得出「這是儀器問題不是回歸」。
 #    要真的分三態，得先改 security_regression_daily.sh 的 classify()，那是另一件事。
 RC2_OUT=$(python3 "$(dirname "$0")/scan_verifier_exit_codes.py" --gate 2>&1); RC2=$?
-TOTAL=$((TOTAL+1))
 case "$RC2" in
-  0) echo "  ✅ $(printf '%s' "$RC2_OUT" | grep -m1 '^✅' | sed 's/^✅ //')" ;;
-  1) echo "  ❌ 有 verify_*.py 沒有通往 rc=2 的路（見下）"; FAIL=$((FAIL+1))
+  0) TOTAL=$((TOTAL+1))
+     echo "  ✅ $(printf '%s' "$RC2_OUT" | grep -m1 '^✅' | sed 's/^✅ //')" ;;
+  1) TOTAL=$((TOTAL+1))
+     echo "  ❌ 有 verify_*.py 沒有通往 rc=2 的路（見下）"; FAIL=$((FAIL+1))
      printf '%s\n' "$RC2_OUT" | grep -E '^🔴|^     ' | head -6 | sed 's/^/       /' ;;
-  *) echo "  ⚠️ rc=2 閘門自己沒跑成（掃描器讀不懂某個檔）—— 儀器問題，不是回歸"
-     FAIL=$((FAIL+1))
+  *) # 🔴 **不計入 TOTAL** —— 它沒有產生判定，算進去會被「通過 N/N」當成通過了。
+     echo "  ⚠️ rc=2 閘門自己沒跑成（掃描器讀不懂某個檔）—— 儀器問題，不是回歸"
+     EQUIP=$((EQUIP+1))
      printf '%s\n' "$RC2_OUT" | tail -3 | sed 's/^/       /' ;;
 esac
 
 echo
-echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL）══"
-if [ "$FAIL" = "0" ]; then echo "══ 全部通過 ══"; else echo "══ 有 $FAIL 項失敗 ══"; fi
+# ⚠️ 「儀器 N」加在「失敗 N」**後面**：外層 classify() 舊的
+#    `失敗 \([0-9]\+\)` 樣式仍然抓得到失敗數，不會因為多一欄就解析錯。
+echo "══ 斷言：通過 $(( TOTAL - FAIL )) / 共 $TOTAL（失敗 $FAIL，儀器 $EQUIP）══"
+if [ "$FAIL" != "0" ]; then echo "══ 有 $FAIL 項失敗 ══"
+elif [ "$EQUIP" != "0" ]; then echo "══ 斷言全綠，但有 $EQUIP 項儀器沒跑成（不是回歸）══"
+else echo "══ 全部通過 ══"; fi
 # ⚠️ TOTAL 是「跑到的斷言數」不是「應有的斷言數」——腳本若在中途 exit，
 #    這個數會偏小。要判斷是否被截斷，看它跟上一次成功執行的數字有沒有掉。
 # 雙保險：這裡就把 FAIL 反映到退出碼，trap 再依 $? 與清理結果做最終判定。
 # 只靠 trap 讀 $FAIL 的話，日後有人改動 trap 就會再次假綠。
-exit $(( FAIL > 0 ? 1 : 0 ))
+# 🔴 三態：1＝被測物壞了（去看程式）／2＝儀器沒跑成（去看基礎設施）／0＝通過。
+#    **FAIL 優先於 EQUIP** —— 真的量到的回歸是更急的訊號，而且它有判定；
+#    儀器問題只影響它自己那一格，不使其餘上百條斷言失效。
+#    （⚠️ 這與 verify_admin_role_gate.py 的規則相反，那裡 equip 優先 ——
+#      因為在那支裡「沒量到」代表整個維度都沒跑，剩下的綠燈撐不起結論。
+#      判準是「沒量到的範圍有多大」，不是「哪個碼比較大」。）
+#    ⚠️ EXIT trap 會保留這個 rc（它第一件事就是 `local rc=$?`）。
+#    trap 裡不再補 EQUIP 判斷 —— 清理階段只會增加 FAIL，補了是死碼。
+if [ "$FAIL" -gt 0 ]; then exit 1; elif [ "$EQUIP" -gt 0 ]; then exit 2; else exit 0; fi
