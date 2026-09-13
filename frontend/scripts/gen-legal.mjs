@@ -8,8 +8,15 @@
 //   1. 前端走 HashRouter（App.tsx:2）⇒ 網址長成 https://…/#/privacy，而 `#` 後面那段
 //      **不會送到伺服器**。審核員貼上網址時只要 JS 沒跑起來就是一片白，
 //      而「白頁」與「頁面不存在」在審核員眼裡逐字相同。
-//   2. SPA 的 dist 就是 Capacitor 的 webDir ⇒ 進 SPA 等於燒進 binary，
-//      而這三頁依 MOBILE_RELEASE §9.3 本來就歸 Web 不歸 App。
+//   2. ~~進 SPA 等於燒進 binary，而這三頁本來就歸 Web~~
+//      🔴 **2026-09-13 訂正（Codex 覆驗推翻）：這條理由是假的，對本方案零鑑別力。**
+//      Vite 會把 public/ 原樣複製進 dist，而 capacitor.config.ts 的 webDir 正是 dist
+//      ⇒ **放 public/ 一樣會燒進 binary**。走 SPA 路由或走 public/，在這一點上完全相同。
+//      真正成立的只有 1. 與 3.（兩者都是「審核員貼上網址會看到什麼」的問題）。
+//      進 binary 的實際代價：約 35 KB 死重（App 內顯示條款走 TermsOfServiceModal，
+//      不讀這兩個 html），可接受 ⇒ 本次不改架構，只訂正這句話。
+//      留下刪節線是刻意的：我在 commit 8950f98 的訊息裡把它當成設計理由講過，
+//      而那顆 commit 改不了（共用工作樹禁止 amend）。
 //   3. CloudFront 設了 403/404 → /index.html 的 SPA fallback（provision-stg-cdn.sh:67-69）
 //      ⇒ **無副檔名的 /privacy 會被 fallback 吃掉變成 SPA**。所以輸出一律帶 .html，
 //      那是實體物件，S3 直接給，不經過 fallback。
@@ -208,8 +215,11 @@ export function render() {
 }
 
 export function main(argv) {
-    const check = argv.includes('--check');
     const gate = argv.includes('--gate');
+    // 🔴 --gate 蘊含 --check：一道會改動工作樹的閘不是閘。
+    //    （第一版把兩者寫成獨立旗標 ⇒ 只帶 --gate 時走的是寫入分支，
+    //     它會「順手把漂掉的產物修好」然後回報一切正常 —— 那正是它該擋下的狀態。）
+    const check = argv.includes('--check') || gate;
     let plan;
     try {
         plan = render();
@@ -241,6 +251,10 @@ export function main(argv) {
         return EXIT_DRIFT;
     }
     const pending = findPlaceholders(plan.raw);
+    if (gate && pending.length > 0 && process.env.LEGAL_GATE_OFF === '1') {
+        console.warn(`  ⚠️ LEGAL_GATE_OFF=1 ⇒ 放行 ${pending.length} 個佔位。這一包不可出貨。`);
+        return EXIT_OK;
+    }
     if (pending.length > 0) {
         const msg = `尚有 ${pending.length} 個未定案的佔位：${pending.join(' ')}`;
         if (gate) {
