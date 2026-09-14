@@ -144,6 +144,28 @@ function findRunner() {
     return null;
 }
 
+// ── `--print-node`：把「挑到哪個 node」單獨吐出來給別人用 ──────────────────
+// 🔴 存在的理由是**單一來源**。`../deploy.sh` 也需要一個夠新的 node
+//    （Vite 7 宣告要 20.19+ / 22.12+），而本機 /usr/bin/node 是 18。
+//    在 deploy.sh 裡再寫一份挑選邏輯的話，兩份會漂 —— 而漂掉的徵兆正是
+//    這次要修的那個：**部署用了不受支援的 node，卻照樣建成功**
+//    （2026-09-14 實際發生過一次，產物還出貨了）。
+// ⚠️ 一定要擋在 DEFAULT_TARGETS 那段**之前**：晚一步的話 `--print-node`
+//    會被當成 glob，下限檢查失敗而 rc=2 —— 呼叫端會把它讀成「找不到 node」，
+//    而那與真的找不到逐字相同。
+// ⚠️ 這裡的下限是 MIN（22.18，型別剝除的需求），**比 Vite 要的更嚴**。
+//    刻意的：多維護一個版本門檻＝多一個會各自漂的數字，而本機就有 node-22。
+//    真的只剩 20.19 的機器上它會 rc=1 並印出理由，**不會靜靜退回舊的**。
+if (process.argv.includes('--print-node')) {
+    const picked = findRunner();
+    if (!picked) {
+        console.error(`找不到 Node >= ${fmt(MIN)}（目前的是 v${process.versions.node}）`);
+        process.exit(1);
+    }
+    console.log(picked.exe);
+    process.exit(0);
+}
+
 const explicit = process.argv.slice(2);
 // 手動指定時下限一律 1：指定了卻一個檔都沒命中，那也該大聲，不該安靜跑 0 條。
 const useTargets =

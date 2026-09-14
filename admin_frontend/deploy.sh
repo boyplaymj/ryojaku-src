@@ -57,6 +57,51 @@ else
   esac
 fi
 
+# 🔴 用**受支援的** Node 來 build（2026-09-14 補）。
+#    起因是量出來的：這支腳本先前直接用 PATH 上的 node，而 SML 主機的
+#    /usr/bin/node 是 **18.20.8**，Vite 7 明講要 20.19+ / 22.12+。
+#    它印了一行警告然後**照樣建成功**，那包產物也真的出貨了 ——
+#    「能跑」與「受支援」是兩件事，而只有前者留得下痕跡。
+#
+# 🔴 挑選邏輯**不在這裡**：呼叫 scripts/run-tests.mjs --print-node，
+#    與測試用的是同一份 findRunner()。在這裡再寫一份 bash 版的話兩份會漂，
+#    而漂掉的方向就是上面那句（部署悄悄用了另一個 runtime）。
+#
+# 做法是搭一個只有 `node` 的暫存 bin 目錄插到 PATH 最前面 ——
+# 不能只 export NODE_BIN：`npm` / `tsc` / `vite` 的 shebang 都是
+# `#!/usr/bin/env node`，它們認的是 PATH。
+#
+# ⚠️ 顯式豁免：SKIP_NODE_PICK=1（例如在 CI 上 node 本來就夠新）。
+if [ "${SKIP_NODE_PICK:-0}" = "1" ]; then
+  echo "⚠️  SKIP_NODE_PICK=1 ⇒ 沿用 PATH 上的 node（顯式豁免）：$(node --version)"
+else
+  NODE_BIN="$(node scripts/run-tests.mjs --print-node)" || {
+    echo "❌ 挑不到夠新的 Node —— 上面那行是原因。" >&2
+    echo "   Vite 7 要 20.19+/22.12+，而挑選器的下限是 22.18（與測試共用）。" >&2
+    echo "   確定要用手上這個舊的建：SKIP_NODE_PICK=1 $0 $*" >&2
+    exit 1
+  }
+  NODE_ABS="$(command -v "$NODE_BIN" || echo "$NODE_BIN")"
+  [ -x "$NODE_ABS" ] || { echo "❌ 挑到的 node 不可執行：$NODE_ABS" >&2; exit 1; }
+  NODE_SHIM_DIR="$(mktemp -d)"
+  trap 'rm -rf "$NODE_SHIM_DIR"' EXIT
+  ln -s "$NODE_ABS" "$NODE_SHIM_DIR/node"
+  export PATH="$NODE_SHIM_DIR:$PATH"
+  # 🔴 裝完要回頭問一次「現在 PATH 上的 node 是誰」——
+  #    少了這一步，shim 沒生效（npm 有自己的 node、PATH 被誰蓋掉…）
+  #    與生效在輸出上逐字相同，而那正是這次要修掉的失效方式。
+  #    ⚠️ 這裡**不重寫版本比較**：那是 findRunner() 的工作，在 bash 再寫一份
+  #    就又多一個會漂的判準（我第一版真的寫了一個 `case` 樣式，而它會把
+  #    v22.100 誤判成太舊）。這裡只問一件 shim 自己答得了的事：
+  #    **PATH 上的 node 是不是就是挑到的那一個。**
+  ACTUAL_BIN="$(command -v node)"
+  if [ "$(readlink -f "$ACTUAL_BIN")" != "$(readlink -f "$NODE_ABS")" ]; then
+    echo "❌ shim 沒生效：PATH 上的 node 是 $ACTUAL_BIN（挑到的是 $NODE_ABS）" >&2
+    exit 1
+  fi
+  echo "▶ build 用的 node：$(node --version)（$NODE_ABS）"
+fi
+
 [ -d node_modules ] || npm ci
 VITE_API_BASE_URL="$API_BASE" npm run build
 
