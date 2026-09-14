@@ -19,14 +19,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     ClipboardCheck, Loader2, RefreshCw, XCircle, Layers, BookOpen,
-    Sparkles, UserCheck, ArrowRight, HeartPulse, Inbox,
+    Sparkles, UserCheck, ArrowRight, HeartPulse, Inbox, Download,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { collectPages, countLabel, MAX_PAGES, type VoicePage } from '../utils/voiceUsage.ts';
 import {
-    buildReview, MIN_COUNT,
-    type FanTable, type ReviewPage, type ReviewSummary,
+    buildReview, flattenPages, MIN_COUNT,
+    type FanTable, type ReviewPage, type ReviewRecord, type ReviewSummary,
 } from '../utils/voiceReview.ts';
+import { buildExportBundle, bundleFilename, serializeBundle } from '../utils/voiceExport.ts';
 import fanTableJson from '../engine/mahjong-tai/fan_table.json';
 
 // 🔴 這份表是**同步副本**（src/engine/mahjong-tai/，由正典的 sync_to_app.sh 產生），
@@ -52,6 +53,10 @@ const VoiceTaiReview: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [summary, setSummary] = useState<ReviewSummary | null>(null);
+    // 🔴 留著原始列是為了匯出：`ReviewSummary` 只有**算完的結果**，而回灌工單要帶的是
+    //    **算之前的輸入**（見 voiceExport.ts 的檔頭）。從 summary 反推是做不到的。
+    const [rows, setRows] = useState<ReviewRecord[]>([]);
+    const [exporting, setExporting] = useState(false);
     const [hitCap, setHitCap] = useState(false);
     const [pagesScanned, setPagesScanned] = useState(0);
 
@@ -66,16 +71,50 @@ const VoiceTaiReview: React.FC = () => {
             const complete = pages.length > 0 && !last?.nextCursor;
             setHitCap(hitCap);
             setPagesScanned(pages.length);
+            setRows(flattenPages(pages as ReviewPage[]));
             setSummary(buildReview(pages as ReviewPage[], TABLE, complete));
         } catch (e) {
             // 失敗時清成 null，不留上一次的數字 —— 留著的話「後端掛了」
             // 會長得像「這批資料沒有新的訂正」。
             setSummary(null);
+            setRows([]);
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setLoading(false);
         }
     }, []);
+
+    /**
+     * 下載回灌工單。
+     *
+     * 🔴 **這一顆不會改任何線上資料。** §5c 紀律 1：DDB 那一列只有 `seed_ruleset.py`
+     *    一個寫入者。這裡產出的是「拿回 repo 套用」的輸入檔 —— 後台直接寫的話會多出
+     *    第二條寫入路徑，而下一次播種就會把它沖掉且零徵兆（見 voiceExport.ts 檔頭）。
+     * ⚠️ `crypto.subtle` 需要 secure context（https 或 localhost）。拿不到時要**講出來**，
+     *    不可以退回「不雜湊直接出檔」—— 那會把使用者 id 靜靜寫進檔案。
+     */
+    const doExport = useCallback(async () => {
+        if (!summary || rows.length === 0) return;
+        setExporting(true);
+        setError(null);
+        try {
+            if (!globalThis.crypto?.subtle) {
+                throw new Error('這個頁面不在 secure context（需要 https 或 localhost），無法雜湊 userId ⇒ 拒絕出檔');
+            }
+            const bundle = await buildExportBundle(rows, summary, MIN_COUNT);
+            const blob = new Blob([serializeBundle(bundle)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = bundleFilename(bundle);
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setExporting(false);
+        }
+    }, [rows, summary]);
 
     useEffect(() => { void load(); }, [load]);
 
@@ -107,13 +146,26 @@ const VoiceTaiReview: React.FC = () => {
                         判錯在哪 —— 哪些台種最常被補上（漏判）、被刪掉（誤判）
                     </p>
                 </div>
-                <button
-                    onClick={() => void load()}
-                    className="px-4 py-2 bg-slate-800/50 border border-white/10 rounded-xl text-slate-300 text-sm font-bold hover:bg-slate-700/50 transition-all flex items-center gap-2 w-fit"
-                >
-                    <RefreshCw size={16} />
-                    重新掃描
-                </button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => void doExport()}
+                        disabled={exporting || rows.length === 0}
+                        title={rows.length === 0
+                            ? '沒有任何訂正紀錄可以打包 —— 這個 0 也可能只是還沒有人用'
+                            : '下載給 repo 端套用的輸入檔。這一顆不會改線上資料'}
+                        className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-2 w-fit disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {exporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                        下載回灌工單
+                    </button>
+                    <button
+                        onClick={() => void load()}
+                        className="px-4 py-2 bg-slate-800/50 border border-white/10 rounded-xl text-slate-300 text-sm font-bold hover:bg-slate-700/50 transition-all flex items-center gap-2 w-fit"
+                    >
+                        <RefreshCw size={16} />
+                        重新掃描
+                    </button>
+                </div>
             </div>
 
             {error && (
@@ -174,6 +226,13 @@ const VoiceTaiReview: React.FC = () => {
                                 <span className="text-sm font-bold uppercase tracking-widest">可自動回灌</span>
                                 <span className="text-xs text-slate-500">add_confusion</span>
                             </div>
+                            <p className="text-[11px] text-slate-500 mb-3 leading-relaxed">
+                                🔴 <strong>這一頁不會自己改線上的表。</strong> 按上面的「下載回灌工單」拿到檔，
+                                在 repo 跑 <code className="text-slate-400">node apply.js &lt;檔&gt; --write --bump</code> →
+                                <code className="text-slate-400"> seed_ruleset.py --stage stg --write</code> →
+                                <code className="text-slate-400"> check_ruleset_seeded.py</code> 綠即生效（App 下次開頁就吃到）。
+                                線上只有播種那一支能寫，這是刻意的 —— 多一條路徑，下次播種就會把回灌沖掉且零徵兆。
+                            </p>
                             {auto.length === 0 ? (
                                 <p className="text-slate-500 text-sm">
                                     沒有。門檻是「{MIN_COUNT} 個<strong>不同</strong>使用者各講過一次」

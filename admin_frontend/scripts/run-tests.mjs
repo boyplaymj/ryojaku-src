@@ -50,7 +50,8 @@ const DEFAULT_TARGETS = [
     //    這道守衛只擋得住「掉到下限以下」，而下限停在舊值時它擋的是舊的那批。
     // ⚠️ B1-f3 加了 venueReview.test.ts（9 條）⇒ 3→4 檔、70→86 條。理由同上一句：
     //    我照著那句警告抬了，不抬的話那 9 條被整檔刪掉一樣不會有東西轉紅。
-    { glob: 'src/utils/*.test.ts', min: 4, minTests: 86 },
+    // ⚠️ B案回灌工單加了 voiceExport.test.ts（16 條）⇒ 4→5 檔、86→102 條。
+    { glob: 'src/utils/*.test.ts', min: 5, minTests: 102 },
     // 🔴 引擎副本的漂移守衛。**必須列進來** —— 這支是「會自己跑」的那道，
     //    沒進 DEFAULT_TARGETS 的話它跟不存在逐字相同（檔案在、內容對、從沒被執行）。
     { glob: 'src/engine/*.test.ts', min: 1, minTests: 6 },
