@@ -199,6 +199,49 @@ fi
 rm -f "$SECPAT"
 echo "✔ bundle 位址檢查通過"
 
+# 🔐 來源身分錨點（Ed25519）—— 契約 /opt/sml/repo/tools/ryojaku-webapp/modules/distribution.md §10.4。
+#    產 dist/.well-known/ryojaku-origin.json：簽下「這包 index.html 出自我方部署金鑰、而且是為
+#    https://$SUBDOMAIN 簽的」。驗證端是 A3（checks/origin_anchor_verify.sh），本檔只負責產。
+#
+# 🔴 接在**這裡**（build 與 bundle 檢查之後、三條 s3 sync/cp 之前）：index_sha256 要簽的是
+#    **真的會上傳的那份** dist/index.html；放在 build 之前簽的是上一版的。
+# 🔴 origin 取 $SUBDOMAIN **不可寫死**：preview 與 stg 共用本檔，寫死會讓 preview 簽出一份
+#    宣稱自己是 stg 的錨點（A3 ③ 反而會替鏡像背書）。
+# 🔴 私鑰**絕不進 argv**（同上面 SECPAT 那段的理由）：SSM 取值寫進 umask 077 暫存檔，
+#    只把**路徑**交給產生器；trap 刪掉。
+# 🔴 缺金鑰 ⇒ **中止**，不是跳過 —— 靜默跳過的守衛與從沒裝過長得一模一樣。
+#    顯式豁免：SKIP_ORIGIN_ANCHOR=1。
+#    ⚠️ 豁免的代價要明講：桶裡**上一版**的錨點會留著（下面的 sync 把它排除在 --delete 之外），
+#      它的 index_sha256 對不上新的 index.html ⇒ A3 ④ 轉紅。那是刻意的：跳過要有人看到。
+ORIGIN_ANCHOR_GEN="${ORIGIN_ANCHOR_GEN:-$(pwd)/gen-origin-anchor.sh}"
+ORIGIN_KEY=$(umask 077; mktemp "${TMPDIR:-/tmp}/.ryojaku-oakey.XXXXXX")
+trap 'rm -f "$SECPAT" "$ORIGIN_KEY"' EXIT INT TERM
+rm -f dist/.well-known/ryojaku-origin.json   # 不讓任何殘留的舊錨點混進這次的產物
+if [ "${SKIP_ORIGIN_ANCHOR:-0}" = "1" ]; then
+  echo "⚠️  SKIP_ORIGIN_ANCHOR=1 ⇒ 跳過來源身分錨點（顯式豁免）—— 桶裡的舊錨點會留著，A3 ④ 會轉紅"
+elif [ ! -x "$ORIGIN_ANCHOR_GEN" ]; then
+  echo "❌ 找不到（或不可執行）錨點產生器 $ORIGIN_ANCHOR_GEN（要換路徑用 ORIGIN_ANCHOR_GEN=...）" >&2
+  echo "   確定要跳過：SKIP_ORIGIN_ANCHOR=1 $0 $*" >&2
+  exit 1
+else
+  aws ssm get-parameter --region ap-southeast-1 --name /ryojaku/stg/ORIGIN_SIGNING_KEY       --with-decryption --query 'Parameter.Value' --output text > "$ORIGIN_KEY" 2>/dev/null || : > "$ORIGIN_KEY"
+  # 同 SECPAT：取不到是 0 byte、空值是 1 byte（只有換行），兩者都算缺。
+  if [ "$(wc -c < "$ORIGIN_KEY")" -le 1 ]; then
+    echo "❌ 取不到 SSM /ryojaku/stg/ORIGIN_SIGNING_KEY（ap-southeast-1）⇒ 簽不出來源身分錨點，中止部署" >&2
+    echo "   金鑰保管與產生方式見 distribution.md §10.3；確定要跳過：SKIP_ORIGIN_ANCHOR=1 $0 $*" >&2
+    exit 1
+  fi
+  oarc=0
+  "$ORIGIN_ANCHOR_GEN" --key "$ORIGIN_KEY" --origin "https://$SUBDOMAIN" --env "$ENV"       --index dist/index.html --out dist --frontend-dir "$(pwd)" || oarc=$?
+  rm -f "$ORIGIN_KEY"
+  case "$oarc" in
+    0) ;;
+    1) echo "❌ 來源身分錨點：產出或自我驗證失敗（見上方），中止部署" >&2; exit 1 ;;
+    *) echo "❌ 來源身分錨點產生器**沒量到**（rc=$oarc，設備問題）—— 讀數作廢，不是「沒問題」，一樣中止" >&2; exit 1 ;;
+  esac
+  [ -s dist/.well-known/ryojaku-origin.json ] || { echo "❌ 產生器回 0 但錨點檔不在，中止" >&2; exit 1; }
+fi
+
 # 快取分三層。這裡跟 Console 版不同 —— 玩家端是 PWA，多了 sw.js / manifest 兩個「不可長快取」的檔：
 #   assets/**            檔名帶 hash → 可永久快取
 #   其餘圖檔（public/）  檔名不帶 hash → 只給 1 小時，改圖才不會卡住
@@ -209,6 +252,7 @@ aws s3 sync dist/assets/ "${S3_PREFIX}assets/" --delete \
 
 aws s3 sync dist/ "$S3_PREFIX" --delete \
   --exclude "assets/*" --exclude "index.html" --exclude "sw.js" --exclude "manifest.webmanifest" \
+  --exclude ".well-known/ryojaku-origin.json" \
   --cache-control "public,max-age=3600" --only-show-errors
 
 aws s3 cp dist/index.html "${S3_PREFIX}index.html" \
@@ -217,6 +261,12 @@ aws s3 cp dist/sw.js "${S3_PREFIX}sw.js" \
   --cache-control "no-cache,must-revalidate" --content-type "application/javascript; charset=utf-8" --only-show-errors
 aws s3 cp dist/manifest.webmanifest "${S3_PREFIX}manifest.webmanifest" \
   --cache-control "no-cache,must-revalidate" --content-type "application/manifest+json" --only-show-errors
+# 錨點單獨上傳、不可快取（§10.4 第 5 點）：它落在 dist/ 裡，不從上面那條 sync 排除的話會吃到
+# 1 小時快取，回滾後 A3 會讀到上一版的錨點。SKIP_ORIGIN_ANCHOR=1 時檔案不存在 ⇒ 不傳。
+if [ -s dist/.well-known/ryojaku-origin.json ]; then
+  aws s3 cp dist/.well-known/ryojaku-origin.json "${S3_PREFIX}.well-known/ryojaku-origin.json" \
+    --cache-control "no-cache,must-revalidate" --content-type "application/json" --only-show-errors
+fi
 
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" \
   --query "Invalidation.{id:Id,status:Status}" --output json
