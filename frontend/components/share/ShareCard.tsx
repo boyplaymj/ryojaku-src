@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { GroupEvent, Post } from '../../types';
+import { currentShareOrigin } from '../../services/shareOrigin';
 import { MapPin, Clock, Users, Coins, Heart, MessageSquare, ShieldAlert, Sparkles, ScrollText, Loader2 } from 'lucide-react';
 
 interface ShareCardProps {
@@ -45,8 +46,8 @@ const ShareCard: React.FC<ShareCardProps> = ({
 
     // 獲取當前網址作為 QR Code 內容
     const shareUrl = isEvent
-        ? `${window.location.origin}/#/event/${event?.id}`
-        : `${window.location.origin}/#/post/${post?.postId}`;
+        ? `${currentShareOrigin()}/#/event/${event?.id}`
+        : `${currentShareOrigin()}/#/post/${post?.postId}`;
 
     return (
         <div className="fixed -left-[125rem] top-0 pointer-events-none">

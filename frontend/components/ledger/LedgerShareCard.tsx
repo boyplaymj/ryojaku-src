@@ -12,6 +12,7 @@ import React from 'react';
 import { TrendingUp, Trophy, User as UserIcon, Coins } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { User } from '../../types';
+import { currentShareOrigin } from '../../services/shareOrigin';
 import { LedgerStats } from '../../utils/ledgerStats';
 
 export interface LedgerShareCardProps {
@@ -166,7 +167,7 @@ const LedgerShareCard = React.forwardRef<HTMLDivElement, LedgerShareCardProps>(
                             <div className="text-[0.5625rem] text-neutral-400 font-medium leading-tight">加入頂尖雀友社群。</div>
                         </div>
                         <div className="p-2 bg-white rounded-lg shadow-sm border border-black/[0.02] flex-shrink-0">
-                            <QRCodeSVG value={`${window.location.origin}/#/ledger?userId=${currentUser?.userId}`} size={60} level="H" includeMargin={false} />
+                            <QRCodeSVG value={`${currentShareOrigin()}/#/ledger?userId=${currentUser?.userId}`} size={60} level="H" includeMargin={false} />
                         </div>
                     </div>
                 </div>

@@ -34,6 +34,10 @@ jobs:
       #    已安裝的 App 會同時變磚（下面的護欄會擋，含我方自己的 ID）。
       VITE_API_BASE_URL: https://ryojaku-api.boyplaymj.com
       VITE_WS_BASE_URL: wss://ryojaku-ws.boyplaymj.com
+      # 分享連結用的公開網域。原生殼的 window.location.origin 是 https://localhost，
+      # 沒有這一項的話從 App 分享出去的連結全部打不開（frontend/utils/shareUrl.ts）。
+      # ⚠️ 這是 debug／stg 的值。正式版要換成正式網域 —— 它烘進 binary 之後改不了。
+      VITE_PUBLIC_WEB_ORIGIN: https://ryojaku-stg.boyplaymj.com
 
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +101,12 @@ jobs:
           for want in ryojaku-api.boyplaymj.com ryojaku-ws.boyplaymj.com; do
             grep -q "$want" $BUNDLE || { echo "❌ bundle 沒烘進 $want" >&2; exit 1; }
           done
+          # 分享連結的公開網域：沒設或設成空值時 Vite 不會報錯，App 會安靜地分享出 localhost 連結。
+          SHARE_ORIGIN="${VITE_PUBLIC_WEB_ORIGIN:-}"
+          SHARE_HOST="${SHARE_ORIGIN#https://}"
+          [ -n "$SHARE_HOST" ] && [ "$SHARE_HOST" != "$SHARE_ORIGIN" ] \
+            || { echo "❌ VITE_PUBLIC_WEB_ORIGIN 沒設或不是 https://…（$SHARE_ORIGIN）" >&2; exit 1; }
+          grep -q "$SHARE_HOST" $BUNDLE || { echo "❌ bundle 沒烘進分享網域 $SHARE_HOST" >&2; exit 1; }
           if grep -qE "yg7y0xkb50|00pox0hvv4|5yas775i27|ek5dythoh9" $BUNDLE; then
             echo "❌ bundle 殘留工程師正式環境位址" >&2; exit 1
           fi

@@ -4,6 +4,7 @@ import { X, Copy, Share2, Download, Check, Loader2, MessageCircle } from 'lucide
 import html2canvas from 'html2canvas';
 import ShareCard from './ShareCard';
 import { GroupEvent, Post } from '../../types';
+import { currentShareOrigin } from '../../services/shareOrigin';
 
 interface ShareActionSheetProps {
     isOpen: boolean;
@@ -83,8 +84,8 @@ const ShareActionSheet: React.FC<ShareActionSheetProps> = ({ isOpen, onClose, ty
     const post = !isEvent ? (data as Post) : null;
 
     const shareUrl = isEvent
-        ? `${window.location.origin}/#/event/${event?.id}`
-        : `${window.location.origin}/#/post/${post?.postId}`;
+        ? `${currentShareOrigin()}/#/event/${event?.id}`
+        : `${currentShareOrigin()}/#/post/${post?.postId}`;
 
     const handleCopyLink = async () => {
         try {
