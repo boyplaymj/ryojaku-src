@@ -180,8 +180,22 @@ test('D4g-14 🔴 接線：判台頁把整個 settle 物件交給 buildEvent，�
   );
   assert.equal(HANDPICKED_ASR.test(page), false, '頁面又在手挑 asr 欄位 —— 新增的欄位會在那一行靜靜消失');
   // 而且真的有交出去：整段被刪掉也會讓上一條變綠。
-  const from = page.indexOf('buildEvent({');
-  assert.notEqual(from, -1, '找不到 buildEvent 的呼叫');
-  const call = page.slice(from, page.indexOf('});', from));
-  assert.match(call, /^\s*asr,\s*$/m, 'buildEvent 的引數裡沒有把 asr 交出去');
+  // 🔴 2026-10-11 Codex 覆驗：第一版只排除那一種三元運算式、只看第一個呼叫 ——
+  //    換一種手挑寫法（先組成另一個變數再 `asr: 那個變數`）照樣全綠。
+  //    ⇒ 改成看**每一個** buildEvent 呼叫，引數裡只准出現簡寫的 `asr,`，
+  //    任何 `asr: …` 一律不准；函式裡也不准對 asr 重新賦值。
+  const calls = [...page.matchAll(/buildEvent\(\{[\s\S]*?\}\);/g)].map((m) => m[0]);
+  assert.ok(calls.length >= 1, '找不到 buildEvent 的呼叫');
+  for (const call of calls) {
+    assert.equal(/\basr\s*:/.test(call), false, 'buildEvent 的引數裡出現 `asr: …` —— 只准簡寫的 `asr,`');
+    assert.match(call, /^\s*asr,\s*$/m, 'buildEvent 的引數裡沒有把 asr 交出去');
+  }
+  // 只看 sendEvent 這支函式到呼叫為止的那一段：頁面後面另有一個同名的
+  // `const asr = useVoiceAsr(…)`，那是別的東西，整頁掃會誤中它。
+  const head = page.indexOf('const sendEvent = useCallback(');
+  assert.notEqual(head, -1, '找不到 sendEvent');
+  const body = page.slice(head, page.indexOf('buildEvent({', head));
+  assert.equal(/\basr\s*=[^=>]/.test(body), false, 'sendEvent 在交出去之前對 asr 重新賦值了');
+  // ⚠️ 仍然是形狀：在呼叫之前就地改掉 asr 的屬性（asr.x = …／delete）這裡看不到。
+  //    量得到執行期行為的是資料庫裡那一筆有沒有帶欄位。
 });
