@@ -104,3 +104,53 @@ export function evaluateVersionGate(input: VersionGateInput): VersionGateResult 
     }
     return { blocked: true, action, suppressedReason: null };
 }
+
+/** 平台別選完之後、要交給 VersionGuard 的那一組。 */
+export interface SelectedVersionConfig {
+    minVersion: string;
+    updateUrl: string | null;
+}
+
+/**
+ * 從後端的版本設定裡挑出「這個平台」該用的最低版本與更新出口。
+ *
+ * 為什麼需要（2026-10-11）：後端原本只有一組 `minRequiredVersion`／`updateUrl`，三個平台共用。
+ * 上了商店之後這兩個值**不可能**共用：
+ *   - 更新出口：iOS 要開 App Store、Android 要開 Google Play，是兩個網址；
+ *   - 最低版本：兩家審核時間不同，某一版在 Play 上架時 App Store 可能還在審
+ *     ⇒ 共用一個最低版本，等於把還拿不到新版的那一邊擋在一個沒有更新可裝的商店頁上。
+ * 讀哪個欄位是**烘進 binary 的**，所以第一版就要會讀平台別的欄位；後端哪天補上都不必重新送審。
+ *
+ * 形狀（都是選填，沒有就整個沿用頂層 ⇒ 與舊後端完全相容）：
+ *   { minRequiredVersion, updateUrl,
+ *     platforms: { ios: { minRequiredVersion?, updateUrl? }, android: {…}, web: {…} } }
+ * key 是 `Capacitor.getPlatform()` 的回傳值。
+ *
+ * 🔴 規則是「有寫就用它，沒寫才繼承頂層」——**寫壞了也不退回頂層**。
+ *    寫壞的值交給下游：版本解析不出來 ⇒ isOutdated 不擋；連結不合格 ⇒ 原生殼沒有出路 ⇒ 不擋。
+ *    退回頂層的話，「iOS 那格打錯字」會變成「iOS 改用 Android 的最低版本」，
+ *    而那正是上面第二點要避免的事。方向與本模組一致：擋錯比放行錯貴。
+ */
+export function selectVersionConfig(config: unknown, platform: unknown): SelectedVersionConfig {
+    const top = isRecord(config) ? config : {};
+    let minVersion: unknown = top.minRequiredVersion;
+    let updateUrl: unknown = top.updateUrl;
+
+    const platforms = top.platforms;
+    if (typeof platform === 'string' && isRecord(platforms)) {
+        const override = platforms[platform];
+        if (isRecord(override)) {
+            if (Object.hasOwn(override, 'minRequiredVersion')) minVersion = override.minRequiredVersion;
+            if (Object.hasOwn(override, 'updateUrl')) updateUrl = override.updateUrl;
+        }
+    }
+
+    return {
+        minVersion: typeof minVersion === 'string' ? minVersion : '',
+        updateUrl: typeof updateUrl === 'string' ? updateUrl : null,
+    };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

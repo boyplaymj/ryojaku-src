@@ -8,6 +8,7 @@ import {
     isOutdated,
     normalizeUpdateUrl,
     resolveUpdateAction,
+    selectVersionConfig,
 } from './versionGate.ts';
 
 test('isOutdated：基本大小比較', () => {
@@ -122,4 +123,61 @@ test('版本沒過舊時不擋，且 suppressedReason 為 null（不可跟 no-ex
     const gate = evaluateVersionGate({ currentVersion: '2.0.4', minVersion: '2.0.4', isNative: true, updateUrl: '' });
     assert.equal(gate.blocked, false);
     assert.equal(gate.suppressedReason, null, '沒過舊跟「過舊但沒出路」要分得出來');
+});
+
+// ── 平台別設定 ────────────────────────────────────────────────
+
+const TOP = { success: true, minRequiredVersion: '2.0.0', updateUrl: 'https://example.com/top' };
+
+test('selectVersionConfig：沒有 platforms（舊後端）⇒ 整個沿用頂層', () => {
+    assert.deepEqual(selectVersionConfig(TOP, 'ios'), { minVersion: '2.0.0', updateUrl: 'https://example.com/top' });
+});
+
+test('selectVersionConfig：各平台拿到自己的那一格，沒列到的平台沿用頂層', () => {
+    const cfg = {
+        ...TOP,
+        platforms: {
+            ios: { minRequiredVersion: '2.1.0', updateUrl: 'itms-apps://apps.apple.com/app/id1' },
+            android: { minRequiredVersion: '2.3.0', updateUrl: 'market://details?id=com.boyplaymj.ryojaku' },
+        },
+    };
+    assert.deepEqual(selectVersionConfig(cfg, 'ios'), { minVersion: '2.1.0', updateUrl: 'itms-apps://apps.apple.com/app/id1' });
+    assert.deepEqual(selectVersionConfig(cfg, 'android'), { minVersion: '2.3.0', updateUrl: 'market://details?id=com.boyplaymj.ryojaku' });
+    assert.deepEqual(selectVersionConfig(cfg, 'web'), { minVersion: '2.0.0', updateUrl: 'https://example.com/top' });
+});
+
+test('selectVersionConfig：只覆寫其中一格時，另一格繼承頂層', () => {
+    const cfg = { ...TOP, platforms: { ios: { updateUrl: 'https://apps.apple.com/app/id1' } } };
+    assert.deepEqual(selectVersionConfig(cfg, 'ios'), { minVersion: '2.0.0', updateUrl: 'https://apps.apple.com/app/id1' });
+});
+
+test('selectVersionConfig：平台那格寫壞了不退回頂層 ⇒ 下游不擋（iOS 不會被套上別人的最低版本）', () => {
+    const cfg = { ...TOP, minRequiredVersion: '9.0.0', platforms: { ios: { minRequiredVersion: 'oops', updateUrl: 42 } } };
+    const picked = selectVersionConfig(cfg, 'ios');
+    assert.deepEqual(picked, { minVersion: 'oops', updateUrl: null });
+    const gate = evaluateVersionGate({ currentVersion: '2.0.4', isNative: true, ...picked });
+    assert.equal(gate.blocked, false);
+    // 對照：同一份設定下沒有覆寫的平台照頂層擋 —— 少了這條，「不擋」與「這份設定誰都不擋」分不開。
+    const web = evaluateVersionGate({ currentVersion: '2.0.4', isNative: false, ...selectVersionConfig(cfg, 'web') });
+    assert.equal(web.blocked, true);
+});
+
+test('selectVersionConfig：形狀不對的輸入一律當成沒有覆寫，不拋例外', () => {
+    for (const platforms of [null, 'ios', 7, [], ['ios'], { ios: null }, { ios: 'x' }, { ios: [] }]) {
+        assert.deepEqual(selectVersionConfig({ ...TOP, platforms }, 'ios'), { minVersion: '2.0.0', updateUrl: 'https://example.com/top' }, JSON.stringify(platforms));
+    }
+    for (const config of [null, undefined, 'x', 3, []]) {
+        assert.deepEqual(selectVersionConfig(config, 'ios'), { minVersion: '', updateUrl: null });
+    }
+    assert.deepEqual(selectVersionConfig({ ...TOP, platforms: { ios: { minRequiredVersion: '5.0.0' } } }, undefined), { minVersion: '2.0.0', updateUrl: 'https://example.com/top' });
+});
+
+// 判準有尺不等於接線有尺：App.tsx 若沒有經過 selectVersionConfig、或沒把平台傳進去，
+// 上面那幾條照樣全綠，而 binary 讀的仍是頂層那一組。
+test('接線：App.tsx 的版本設定經過 selectVersionConfig，平台來自 Capacitor.getPlatform()', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    assert.match(src, /selectVersionConfig\(response,\s*Capacitor\.getPlatform\(\)\)/);
+    assert.doesNotMatch(src, /setMinRequiredVersion\(response\.minRequiredVersion\)/, '舊寫法還留著 ⇒ 平台別設定沒有被讀');
+    assert.doesNotMatch(src, /setUpdateUrl\(response\.updateUrl/, '舊寫法還留著 ⇒ 平台別更新出口沒有被讀');
 });

@@ -156,6 +156,8 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
 export interface VersionConfig {
   minRequiredVersion: string;
   updateUrl: string;
+  /** 各平台的覆寫（key 是 Capacitor.getPlatform()）。選填；怎麼挑見 utils/versionGate.ts 的 selectVersionConfig。 */
+  platforms?: Record<string, { minRequiredVersion?: string; updateUrl?: string }>;
   inviterPoints?: string;
   inviteePoints?: string;
 }

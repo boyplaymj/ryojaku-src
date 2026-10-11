@@ -32,6 +32,8 @@ import { GroupEvent, User } from './types';
 import DailyBonusModal from './components/DailyBonusModal';
 import { useDailyBonus } from './hooks/useDailyBonus';
 import VersionGuard from './components/VersionGuard';
+import { Capacitor } from '@capacitor/core';
+import { selectVersionConfig } from './utils/versionGate';
 import { api } from './services/dataService';
 import { authService } from './services/authService';
 import { Loader2 } from 'lucide-react';
@@ -98,8 +100,10 @@ function App() {
     try {
       const response = await api.getVersionConfig();
       if (response.success && response.minRequiredVersion) {
-        setMinRequiredVersion(response.minRequiredVersion);
-        setUpdateUrl(response.updateUrl ?? null);
+        // 最低版本與更新出口是平台別的（iOS／Android 各有自己的商店與審核時程），見 utils/versionGate.ts。
+        const picked = selectVersionConfig(response, Capacitor.getPlatform());
+        setMinRequiredVersion(picked.minVersion);
+        setUpdateUrl(picked.updateUrl);
         if (response.inviterPoints && response.inviteePoints) {
           setInvitePoints({
             inviter: response.inviterPoints,
