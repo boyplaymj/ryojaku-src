@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Smartphone, Monitor, Share, PlusSquare, Menu, Download, ArrowDown, X, Compass, Chrome } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { shouldRenderApp } from '../utils/installGate';
 
 interface PWAInstallPromptProps {
     children: React.ReactNode;
@@ -65,7 +67,8 @@ const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({ children }) => {
     if (!mounted) return null;
 
     // If installed or bypassed, show app
-    if (isStandalone || devBypass) {
+    // 原生殼（商店版）也一律放行：它不是 standalone，沒有這一項會整個卡在安裝引導（utils/installGate.ts）。
+    if (shouldRenderApp({ isNative: Capacitor.isNativePlatform(), isStandalone, devBypass })) {
         return <>{children}</>;
     }
 
