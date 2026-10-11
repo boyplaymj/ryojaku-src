@@ -197,8 +197,15 @@ export function render() {
     const privacy = readFileSync(privacySrc, 'utf8').trim();
     if (!privacy) throw new InstrumentError('legal/privacy.txt 是空的');
 
+    const deleteSrc = join(ROOT, 'legal', 'delete-account.txt');
+    if (!existsSync(deleteSrc)) {
+        throw new InstrumentError(`來源不存在：${deleteSrc}`);
+    }
+    const deleteAccount = readFileSync(deleteSrc, 'utf8').trim();
+    if (!deleteAccount) throw new InstrumentError('legal/delete-account.txt 是空的');
+
     return {
-      raw: `${terms}\n${privacy}`,
+      raw: `${terms}\n${privacy}\n${deleteAccount}`,
       files: {
         'public/terms.html': renderPage({
             title: '服務條款',
@@ -209,6 +216,12 @@ export function render() {
             title: '隱私權政策',
             subtitle: '我們蒐集哪些資料、為什麼蒐集、存在哪裡，以及你可以要求我們做什麼。',
             body: renderBody(privacy),
+        }),
+        // 檔名與頁尾連結（renderPage 的 footer）是同一個字串，改名要兩邊一起改。
+        'public/delete-account.html': renderPage({
+            title: '刪除帳號',
+            subtitle: '怎麼提出、提出後多久生效，以及哪些資料會清除、哪些會保留。',
+            body: renderBody(deleteAccount),
         }),
       },
     };
