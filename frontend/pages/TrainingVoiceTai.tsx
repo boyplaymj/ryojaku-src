@@ -124,7 +124,12 @@ const TrainingVoiceTai: React.FC = () => {
         kind,
         ts: nowTs(Date.now()),
         rulesetVersion: ruleset.version,
-        asr: asr ? { ok: asr.ok, track: asr.track, errorCode: asr.errorCode } : undefined,
+        // 🔴 整個物件往下傳，不手挑欄位（2026-10-11 訂正）。
+        //    這裡原本是 `{ ok, track, errorCode }` 三欄重組 ⇒ `candidateCount`／`chosenIndex`
+        //    在這一行被丟掉，後台 N-best 四格因此只會落在「缺欄」；而兩欄都是選填，
+        //    TypeScript 不會轉紅。`AsrSettle` 與 `AsrOutcome` 逐欄相同，直接交出去就不會再漏。
+        //    守衛：utils/voiceTaiMetrics.test.ts 的 D4g-14。
+        asr,
       });
       void postVoiceTaiEvent(payload).catch((err) => {
         console.warn('[voice-tai] 漏斗事件送不出去（不影響判台）:', kind, err);

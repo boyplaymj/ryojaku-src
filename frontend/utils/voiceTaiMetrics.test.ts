@@ -10,6 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { EVENT_KINDS, buildEvent } from './voiceTaiMetrics.ts';
 import { buildCorrection } from './voiceCorrection.ts';
 import type { Heard } from './voiceTaiAsr.ts';
@@ -155,4 +156,32 @@ test('D4g-12 壞掉的數字整個不帶，不 clamp 成 0（誠實地落進「�
 test('D4g-13 open 事件不得長出 N-best 欄位（它們是 asr 專屬）', () => {
   const p = buildEvent({ kind: 'open', ts: 1756800000, rulesetVersion: '0.1.0' });
   assert.deepEqual(Object.keys(p).sort(), ['engineVersion', 'kind', 'rulesetVersion', 'ts']);
+});
+
+// ── 接線守衛（2026-10-11）──────────────────────────────────────────────
+//
+// 上面每一條都只問 `buildEvent` 拿到完整輸入時對不對 —— 而缺口長在它的**呼叫端**：
+// `pages/TrainingVoiceTai.tsx` 的 `sendEvent` 曾經手挑三個欄位重組物件，
+// `candidateCount`／`chosenIndex` 在那一行被丟掉。上面那些測試全綠，
+// 因為它們自己把五個欄位都餵進來了。pages/ 不在 runner 的 glob 裡，
+// 所以這裡用讀原始碼的方式釘住（同 rulesetSource.test.ts 的作法）。
+//
+// ⚠️ 這條釘的是**形狀**，不是執行期行為：它看不到「欄位有帶但值是錯的」。
+//    真正量得到的是瀏覽器端到端去抓 POST 的 body，那一格目前沒有
+//    （無頭瀏覽器沒有 Web Speech，既有 e2e 自己寫著 asr 事件驗不到）。
+const HANDPICKED_ASR = /asr:\s*asr\s*\?\s*\{/;
+
+test('D4g-14 🔴 接線：判台頁把整個 settle 物件交給 buildEvent，不手挑欄位', () => {
+  const page = readFileSync(new URL('../pages/TrainingVoiceTai.tsx', import.meta.url), 'utf8');
+  // 尺的正控：樣式咬得到當初那一行。少了它，「頁面沒有那個形狀」與「樣式寫錯了」同形。
+  assert.equal(
+    HANDPICKED_ASR.test('asr: asr ? { ok: asr.ok, track: asr.track, errorCode: asr.errorCode } : undefined,'),
+    true,
+  );
+  assert.equal(HANDPICKED_ASR.test(page), false, '頁面又在手挑 asr 欄位 —— 新增的欄位會在那一行靜靜消失');
+  // 而且真的有交出去：整段被刪掉也會讓上一條變綠。
+  const from = page.indexOf('buildEvent({');
+  assert.notEqual(from, -1, '找不到 buildEvent 的呼叫');
+  const call = page.slice(from, page.indexOf('});', from));
+  assert.match(call, /^\s*asr,\s*$/m, 'buildEvent 的引數裡沒有把 asr 交出去');
 });
