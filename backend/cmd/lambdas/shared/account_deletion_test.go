@@ -122,10 +122,14 @@ type fakeDeletionDB struct {
 	gets      int
 	updates   []*dynamodb.UpdateItemInput
 	lastGet   *dynamodb.GetItemInput
+	onGet     func() // 每次 GetItem 回應之前呼叫（用來讓時間在「讀」的期間往前走）
 }
 
 func (f *fakeDeletionDB) GetItem(_ context.Context, in *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	f.lastGet = in
+	if f.onGet != nil {
+		f.onGet()
+	}
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -187,7 +191,7 @@ func TestResolveAccountDeletionOnLogin(t *testing.T) {
 				"deleteRequestedAt": &types.AttributeValueMemberS{Value: "1800000000"}})}}, req, errAny, 0},
 	}
 	for _, c := range cases {
-		err := resolveAccountDeletionOnLogin(context.Background(), c.db, "P_", "u1", time.Unix(c.now, 0), true)
+		err := resolveAccountDeletionOnLogin(context.Background(), c.db, "P_", "u1", fixedClock(c.now), true)
 		switch {
 		case c.wantErr == nil && err != nil:
 			t.Errorf("%s: 應放行，得到 %v", c.name, err)
@@ -203,10 +207,55 @@ func TestResolveAccountDeletionOnLogin(t *testing.T) {
 
 	// 讀取必須是強一致、打在 Users 表上。
 	db := &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(nil)}}
-	_ = resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", time.Unix(req, 0), true)
+	_ = resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", fixedClock(req), true)
 	if db.lastGet == nil || db.lastGet.ConsistentRead == nil || !*db.lastGet.ConsistentRead || *db.lastGet.TableName != "P_Users" {
 		t.Errorf("GetItem 不是對 P_Users 的強一致讀取：%+v", db.lastGet)
 	}
 }
 
 var errAny = errors.New("any non-nil error")
+
+func fixedClock(sec int64) func() time.Time {
+	return func() time.Time { return time.Unix(sec, 0) }
+}
+
+// 提出刪除的同一秒內登入：不可以撤回、不可以放行（發出去的 JWT 會當場作廢），
+// 也不可以說成「已刪除」。下一秒就照常撤回。
+func TestResolveAccountDeletionOnLogin_SameSecondAsRequest(t *testing.T) {
+	req := int64(1_800_000_000)
+	item := userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(req), "pwChangedAt": nAttr(req)})
+
+	db := &fakeDeletionDB{items: []map[string]types.AttributeValue{item}}
+	err := resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", fixedClock(req), true)
+	if !errors.Is(err, ErrLoginTooSoonAfterDeletionRequest) {
+		t.Errorf("同秒：got %v，要 ErrLoginTooSoonAfterDeletionRequest", err)
+	}
+	if len(db.updates) != 0 {
+		t.Errorf("同秒不該撤回，卻寫了 %d 次", len(db.updates))
+	}
+
+	db = &fakeDeletionDB{items: []map[string]types.AttributeValue{item}}
+	if err := resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", fixedClock(req+1), true); err != nil {
+		t.Errorf("下一秒應該放行，得到 %v", err)
+	}
+	if len(db.updates) != 1 {
+		t.Errorf("下一秒應該撤回一次，實得 %d 次", len(db.updates))
+	}
+}
+
+// 判定用的時間要在讀完之後才取：讀取期間跨過期限的帳號不可以被撤回。
+func TestResolveAccountDeletionOnLogin_ClockIsReadAfterTheRead(t *testing.T) {
+	req := int64(1_800_000_000)
+	grace := int64(30 * 24 * 3600)
+	now := req + grace - 1 // 開始登入時還差一秒
+	db := &fakeDeletionDB{items: []map[string]types.AttributeValue{
+		userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(req)})}}
+	db.onGet = func() { now = req + grace } // 讀回來的時候已經到期
+	err := resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", func() time.Time { return time.Unix(now, 0) }, true)
+	if !errors.Is(err, ErrAccountDeleted) {
+		t.Errorf("got %v，要 ErrAccountDeleted", err)
+	}
+	if len(db.updates) != 0 {
+		t.Errorf("已到期不該撤回，卻寫了 %d 次", len(db.updates))
+	}
+}

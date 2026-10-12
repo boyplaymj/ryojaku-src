@@ -67,6 +67,7 @@ func fakeReset() {
 	fakeMu.Lock()
 	defer fakeMu.Unlock()
 	fakeCalls = nil
+	fakeUsersUpdates = nil
 	fakeCounts = map[string]int{}
 	fakeUser = nil
 	fakeStateful = false
@@ -112,6 +113,9 @@ func fakeDDBHandler(w http.ResponseWriter, r *http.Request) {
 			RLKey struct {
 				S string `json:"S"`
 			} `json:"rlKey"`
+			UserID struct {
+				S string `json:"S"`
+			} `json:"userId"`
 		} `json:"Key"`
 	}
 	_ = json.Unmarshal(body, &req)
@@ -119,6 +123,9 @@ func fakeDDBHandler(w http.ResponseWriter, r *http.Request) {
 	rl := stripBucket(req.Key.RLKey.S)
 
 	fakeMu.Lock()
+	if target == "UpdateItem" && strings.HasSuffix(req.TableName, "Users") {
+		fakeUsersUpdates = append(fakeUsersUpdates, string(body))
+	}
 	fakeCalls = append(fakeCalls, ddbCall{Target: target, Table: req.TableName, RLKey: rl})
 	count, hasCount := fakeCounts[rl]
 	user := fakeUser
@@ -169,7 +176,9 @@ func fakeDDBHandler(w http.ResponseWriter, r *http.Request) {
 	case target == "GetItem" && strings.HasSuffix(req.TableName, "Users"):
 		// 登入成功後、發 JWT 之前的那次強一致讀取（shared.ResolveAccountDeletionOnLogin）。
 		// 回的是同一筆假使用者：它沒有 deleteRequestedAt ⇒ 走「沒提出過刪除」那條路。
-		if user == nil {
+		// 只認假使用者自己的 key：對任意 userId 都回同一個人的話，
+		// 「入口拿錯 userId 去問」會跟拿對的讀數逐字相同（2026-10-12 Codex 覆驗）。
+		if user == nil || !strings.Contains(string(user), fmt.Sprintf(`"userId":{"S":%q}`, req.Key.UserID.S)) {
 			io.WriteString(w, `{}`)
 			return
 		}
@@ -603,6 +612,15 @@ func TestLogin_LineBranch_UsesSeparateBurstBucket(t *testing.T) {
 
 // ── 帳號刪除（先停用、30 天後清除）──────────────────────────────
 
+// 對 Users 的每一筆 UpdateItem 的原始請求內容（看得到 UpdateExpression 與條件式）。
+var fakeUsersUpdates []string
+
+func usersUpdateBodies() []string {
+	fakeMu.Lock()
+	defer fakeMu.Unlock()
+	return append([]string(nil), fakeUsersUpdates...)
+}
+
 func usersCalls(target string) int {
 	n := 0
 	for _, c := range calls() {
@@ -647,6 +665,23 @@ func TestLogin_PendingDeletion_IsCancelledByLogin(t *testing.T) {
 	}
 	if got := usersCalls("UpdateItem"); got != baseWrites+1 {
 		t.Errorf("對 Users 的 UpdateItem = %d 次，期望比對照臂的 %d 次多一次（撤回那一筆）", got, baseWrites)
+	}
+	// 只數次數的話，「多寫了一筆別的東西」也會過。多出來的那一筆必須真的是撤回：
+	// 移除 deleteRequestedAt、帶停用期的條件式、打在這個人身上。
+	cancels := 0
+	for _, b := range usersUpdateBodies() {
+		if strings.Contains(b, "REMOVE deleteRequestedAt") {
+			cancels++
+			if !strings.Contains(b, "deleteRequestedAt \u003e :cutoff") && !strings.Contains(b, "deleteRequestedAt > :cutoff") {
+				t.Errorf("撤回那一筆沒有帶停用期的條件式：%s", b)
+			}
+			if !strings.Contains(b, `"userId":{"S":"APP_test"}`) {
+				t.Errorf("撤回那一筆不是打在 APP_test 身上：%s", b)
+			}
+		}
+	}
+	if cancels != 1 {
+		t.Errorf("撤回的 UpdateItem 有 %d 筆，期望恰好 1 筆；全部內容=%v", cancels, usersUpdateBodies())
 	}
 }
 

@@ -106,6 +106,9 @@ func BuildAccountDeletionCancel(tablePrefix, userID string, now time.Time) *dyna
 // ErrAccountDeleted：停用期已滿，這個帳號不可以再登入。
 var ErrAccountDeleted = errors.New("account deleted")
 
+// ErrLoginTooSoonAfterDeletionRequest：剛提出刪除的同一秒內登入。不是「已刪除」，隔一秒再試就會成功。
+var ErrLoginTooSoonAfterDeletionRequest = errors.New("login within the same second as the deletion request")
+
 // accountDeletionDB 是 ResolveAccountDeletionOnLogin 用到的那兩個 DynamoDB 動作（測試用假件替換）。
 type accountDeletionDB interface {
 	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
@@ -123,15 +126,20 @@ func ResolveAccountDeletionOnLogin(ctx context.Context, userID string) error {
 	if c == nil {
 		return ErrAuthDDBUnavailable
 	}
-	return resolveAccountDeletionOnLogin(ctx, c, tablePrefix(), userID, time.Now(), true)
+	return resolveAccountDeletionOnLogin(ctx, c, tablePrefix(), userID, time.Now, true)
 }
 
-func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, prefix, userID string, now time.Time, retry bool) error {
+// clock 是函式不是時間點：判定用的「現在」要在讀完之後才取（2026-10-12 Codex 覆驗）。
+// 先取再讀的話，讀取花掉的時間會讓一個已經到期的帳號照舊的時間被撤回。
+// ⚠️ 仍然留著的窗：取完時間到 DynamoDB 套用條件式之間的那一次網路往返。條件式的 cutoff
+//
+//	是這一端算好送過去的，DynamoDB 沒有伺服器時間可比 ⇒ 這個窗關不掉，只能縮到一次請求。
+func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, prefix, userID string, clock func() time.Time, retry bool) error {
 	// ConsistentRead：剛提出刪除就登入時不可以讀到舊值（理由同 auth.go 的 getUserPwChangedAt）。
 	out, err := db.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName:            aws.String(prefix + "Users"),
 		Key:                  map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
-		ProjectionExpression: aws.String("userId, deleteRequestedAt"),
+		ProjectionExpression: aws.String("userId, deleteRequestedAt, pwChangedAt"),
 		ConsistentRead:       aws.Bool(true),
 	})
 	if err != nil {
@@ -155,11 +163,21 @@ func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, pr
 		return fmt.Errorf("deleteRequestedAt is not an integer: %w", err)
 	}
 
+	now := clock()
 	switch AccountDeletionStatusAt(requestedAt, now) {
 	case DeletionNone:
 		return nil
 	case DeletionExpired:
 		return ErrAccountDeleted
+	}
+
+	// 提出刪除時寫了 pwChangedAt，而 JWT 的閘是 iat <= pwChangedAt 就作廢（auth.go，秒精度）。
+	// 同一秒內就登入的話，這次會撤回刪除、回 200，發出去的卻是一張當場作廢的 JWT
+	// （2026-10-12 Codex 覆驗）。⇒ 還沒過那一秒就不撤回、不發，讓呼叫端回「稍後再試」。
+	if pw, ok := out.Item["pwChangedAt"].(*types.AttributeValueMemberN); ok {
+		if sec, perr := strconv.ParseInt(pw.Value, 10, 64); perr == nil && now.Unix() <= sec {
+			return ErrLoginTooSoonAfterDeletionRequest
+		}
 	}
 
 	_, err = db.UpdateItem(ctx, BuildAccountDeletionCancel(prefix, userID, now))
@@ -173,7 +191,7 @@ func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, pr
 	// 條件不成立有兩種：剛好在這一瞬間到期，或同一個人的另一個登入搶先撤回了。
 	// 重讀一次分得開；只重讀一次。
 	if retry {
-		return resolveAccountDeletionOnLogin(ctx, db, prefix, userID, now, false)
+		return resolveAccountDeletionOnLogin(ctx, db, prefix, userID, clock, false)
 	}
 	return ErrAccountDeleted
 }
