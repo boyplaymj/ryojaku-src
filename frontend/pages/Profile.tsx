@@ -1054,7 +1054,7 @@ const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUserUpdate, inviter
                         <ChevronRight size="1rem" className="text-neutral-200 group-hover:text-[#c5a059]" />
                     </button>
 
-                    <div className="mt-3"><AccountSecurity /></div>
+                    <div className="mt-3"><AccountSecurity onAccountDeletionRequested={onLogout} /></div>
                     <div className="mt-3"><GoogleLinkCard /></div>
 
                     <div className="pt-2">

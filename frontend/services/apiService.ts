@@ -6,6 +6,7 @@ import { Capacitor } from '@capacitor/core';
 import { MOCK_GAMES, MOCK_MY_GAMES, MOCK_NOTIFICATIONS } from './mockData';
 import { STORAGE_KEYS, APP_VERSION } from '../constants';
 import { clientPlatformHeader } from '../utils/clientPlatform';
+import { friendlyAccountError } from '../utils/accountDeletion';
 import { authParamFor } from '../utils/authParam';
 import type { CorrectionPayload } from '../utils/voiceCorrection';
 import type { MetricEventPayload } from '../utils/voiceTaiMetrics';
@@ -131,7 +132,7 @@ async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}):
       //    classifyRulesetResponse）。靠 parse 錯誤字串去分辨，是把一個協定層的事實
       //    寄生在一句人話上 —— 那句話改個字就會靜靜失效。
       //    ⚠️ 只加不減：既有呼叫端全部只讀 success/error/data，多一個欄位不影響它們。
-      return { success: false, status: response.status, error: data.error || `HTTP error! status: ${response.status}` };
+      return { success: false, status: response.status, error: friendlyAccountError(data.error) ?? (data.error || `HTTP error! status: ${response.status}`) };
     }
 
     // 曾被 403 擋過的那條路自己通了 ⇒ 維護結束。
@@ -233,6 +234,11 @@ export async function changePassword(currentPassword: string, newPassword: strin
 // 登出所有其他裝置（需登入）
 export async function logoutAllDevices() {
   return apiRequest('/auth/logout-all', { method: 'POST' });
+}
+
+// 提出刪除帳號（需登入）：帳號立即停用並登出所有裝置；停用期內重新登入＝撤回。
+export async function requestAccountDeletion() {
+  return apiRequest('/auth/delete-account', { method: 'POST' });
 }
 
 // Google 登入/註冊/合併：傳 Google ID token

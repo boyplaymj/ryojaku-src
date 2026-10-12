@@ -1,7 +1,7 @@
 import { User } from '../types';
 import { verifyUser, loginUser, registerUser, LoginRequest, RegisterRequest,
   forgotPassword as apiForgotPassword, resetPassword as apiResetPassword, verifyEmail as apiVerifyEmail,
-  changePassword as apiChangePassword, logoutAllDevices as apiLogoutAll, googleAuth as apiGoogleAuth,
+  changePassword as apiChangePassword, logoutAllDevices as apiLogoutAll, requestAccountDeletion as apiRequestAccountDeletion, googleAuth as apiGoogleAuth,
   bindGoogle as apiBindGoogle, unbindProvider as apiUnbind, resendVerify as apiResendVerify, getUserProfile,
   lineAuth as apiLineAuth, bindLine as apiBindLine } from './apiService';
 import { STORAGE_KEYS } from '../constants';
@@ -185,6 +185,12 @@ export const authService = {
   // 登出所有其他裝置（需登入）
   logoutAllDevices: async (): Promise<void> => {
     const resp = await apiLogoutAll();
+    if (!resp.success) throw new Error(resp.error || '操作失敗');
+  },
+
+  // 提出刪除帳號（需登入）。成功後這台裝置的 JWT 也已作廢，呼叫端要接著做本機登出。
+  requestAccountDeletion: async (): Promise<void> => {
+    const resp = await apiRequestAccountDeletion();
     if (!resp.success) throw new Error(resp.error || '操作失敗');
   },
 
