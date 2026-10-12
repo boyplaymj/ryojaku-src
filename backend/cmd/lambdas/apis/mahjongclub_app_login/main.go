@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -520,6 +521,19 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 			Headers:    headers,
 			Body:       string(body),
 		}, nil
+	}
+
+	// 帳號刪除：停用期內登入＝撤回；已到期的不可登入。必須在發 JWT 之前（shared/account_deletion.go）。
+	// 🔴 不可以用 403：前端把裸 403 當成維護中的訊號。
+	if derr := shared.ResolveAccountDeletionOnLogin(ctx, user.UserID); derr != nil {
+		status, msg := http.StatusServiceUnavailable, "service unavailable"
+		if errors.Is(derr, shared.ErrAccountDeleted) {
+			status, msg = http.StatusGone, "account_deleted"
+		} else {
+			log.Printf("ResolveAccountDeletionOnLogin failed for %s: %v", user.UserID, derr)
+		}
+		body, _ := json.Marshal(Response{Success: false, Error: msg})
+		return events.APIGatewayProxyResponse{StatusCode: status, Headers: headers, Body: string(body)}, nil
 	}
 
 	// Update last login timestamp and version info

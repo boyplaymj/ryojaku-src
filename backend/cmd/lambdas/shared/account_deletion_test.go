@@ -1,12 +1,15 @@
 package shared
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
@@ -109,3 +112,101 @@ func TestGraceMatchesPublicDeletePage(t *testing.T) {
 		}
 	}
 }
+
+// ── 登入時的處理 ─────────────────────────────────────────────
+
+type fakeDeletionDB struct {
+	items     []map[string]types.AttributeValue // 每次 GetItem 依序回一筆；用完就重複最後一筆
+	getErr    error
+	updateErr []error // 每次 UpdateItem 依序回；用完回 nil
+	gets      int
+	updates   []*dynamodb.UpdateItemInput
+	lastGet   *dynamodb.GetItemInput
+}
+
+func (f *fakeDeletionDB) GetItem(_ context.Context, in *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	f.lastGet = in
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	i := f.gets
+	if i >= len(f.items) {
+		i = len(f.items) - 1
+	}
+	f.gets++
+	return &dynamodb.GetItemOutput{Item: f.items[i]}, nil
+}
+
+func (f *fakeDeletionDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	f.updates = append(f.updates, in)
+	if n := len(f.updates); n <= len(f.updateErr) {
+		return nil, f.updateErr[n-1]
+	}
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
+func userItem(extra map[string]types.AttributeValue) map[string]types.AttributeValue {
+	m := map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: "u1"}}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
+
+func nAttr(v int64) types.AttributeValue {
+	return &types.AttributeValueMemberN{Value: strconv.FormatInt(v, 10)}
+}
+
+func TestResolveAccountDeletionOnLogin(t *testing.T) {
+	req := int64(1_800_000_000)
+	grace := int64(30 * 24 * 3600)
+	ccf := &types.ConditionalCheckFailedException{}
+	boom := errors.New("boom")
+	pending := userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(req)})
+
+	cases := []struct {
+		name        string
+		db          *fakeDeletionDB
+		now         int64
+		wantErr     error // nil＝放行；errAny＝任何非 nil 且不是 ErrAccountDeleted
+		wantUpdates int
+	}{
+		{"沒提出過 ⇒ 放行，不寫任何東西", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(nil)}}, req, nil, 0},
+		{"停用期內 ⇒ 撤回後放行", &fakeDeletionDB{items: []map[string]types.AttributeValue{pending}}, req + 10, nil, 1},
+		{"差一秒到期 ⇒ 仍可撤回", &fakeDeletionDB{items: []map[string]types.AttributeValue{pending}}, req + grace - 1, nil, 1},
+		{"剛好到期 ⇒ 拒絕，而且不去寫", &fakeDeletionDB{items: []map[string]types.AttributeValue{pending}}, req + grace, ErrAccountDeleted, 0},
+		{"撤回時發生非條件式錯誤 ⇒ 不可放行", &fakeDeletionDB{items: []map[string]types.AttributeValue{pending}, updateErr: []error{boom}}, req + 10, boom, 1},
+		{"條件不成立、重讀後欄位已不在（另一個登入搶先撤回）⇒ 放行",
+			&fakeDeletionDB{items: []map[string]types.AttributeValue{pending, userItem(nil)}, updateErr: []error{ccf}}, req + 10, nil, 1},
+		{"條件連兩次不成立 ⇒ 拒絕，不無限重試",
+			&fakeDeletionDB{items: []map[string]types.AttributeValue{pending}, updateErr: []error{ccf, ccf}}, req + 10, ErrAccountDeleted, 2},
+		{"讀取失敗 ⇒ 不可放行", &fakeDeletionDB{getErr: boom}, req, boom, 0},
+		{"查無此人 ⇒ 不可放行", &fakeDeletionDB{items: []map[string]types.AttributeValue{{}}}, req, errAny, 0},
+		{"欄位是字串 ⇒ 不可當成沒提出過",
+			&fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(map[string]types.AttributeValue{
+				"deleteRequestedAt": &types.AttributeValueMemberS{Value: "1800000000"}})}}, req, errAny, 0},
+	}
+	for _, c := range cases {
+		err := resolveAccountDeletionOnLogin(context.Background(), c.db, "P_", "u1", time.Unix(c.now, 0), true)
+		switch {
+		case c.wantErr == nil && err != nil:
+			t.Errorf("%s: 應放行，得到 %v", c.name, err)
+		case c.wantErr == errAny && (err == nil || errors.Is(err, ErrAccountDeleted)):
+			t.Errorf("%s: 應是「判不出來」的錯誤，得到 %v", c.name, err)
+		case c.wantErr != nil && c.wantErr != errAny && !errors.Is(err, c.wantErr):
+			t.Errorf("%s: got %v want %v", c.name, err, c.wantErr)
+		}
+		if len(c.db.updates) != c.wantUpdates {
+			t.Errorf("%s: UpdateItem 次數 %d，期望 %d", c.name, len(c.db.updates), c.wantUpdates)
+		}
+	}
+
+	// 讀取必須是強一致、打在 Users 表上。
+	db := &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(nil)}}
+	_ = resolveAccountDeletionOnLogin(context.Background(), db, "P_", "u1", time.Unix(req, 0), true)
+	if db.lastGet == nil || db.lastGet.ConsistentRead == nil || !*db.lastGet.ConsistentRead || *db.lastGet.TableName != "P_Users" {
+		t.Errorf("GetItem 不是對 P_Users 的強一致讀取：%+v", db.lastGet)
+	}
+}
+
+var errAny = errors.New("any non-nil error")

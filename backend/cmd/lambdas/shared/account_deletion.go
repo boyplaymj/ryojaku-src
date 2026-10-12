@@ -8,11 +8,17 @@ package shared
 //   有，未滿 30 天 ⇒ 停用中；這段期間重新登入＝撤回
 //   有，已滿 30 天 ⇒ 該清除了；**不可以**再被登入救回來（清除工作可能還沒輪到它）
 //
-// 🔴 這個檔只有判定與 UpdateItem 的組法，沒有接上任何端點。
-//    還沒做的：提出刪除的端點、三個登入入口（app_login／auth_google／auth_line）的撤回、
-//    個人檔案對外隱藏、到期清除的排程工作。
+// 接上的地方：
+//   提出  apis/mahjongclub_auth_delete_account
+//   撤回  每一個發 JWT 的登入入口，發之前先呼叫 ResolveAccountDeletionOnLogin
+//         （哪幾支由 account_deletion_wiring_test.go 掃出來，不是手列的）
+// 🔴 還沒做的：個人檔案對外隱藏、到期清除的排程工作、推播訂閱的清除、
+//    「主辦人有未舉行的團局要先取消」的檢查。
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -95,4 +101,79 @@ func BuildAccountDeletionCancel(tablePrefix, userID string, now time.Time) *dyna
 			":now":    &types.AttributeValueMemberS{Value: now.Format(time.RFC3339)},
 		},
 	}
+}
+
+// ErrAccountDeleted：停用期已滿，這個帳號不可以再登入。
+var ErrAccountDeleted = errors.New("account deleted")
+
+// accountDeletionDB 是 ResolveAccountDeletionOnLogin 用到的那兩個 DynamoDB 動作（測試用假件替換）。
+type accountDeletionDB interface {
+	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
+// ResolveAccountDeletionOnLogin 要在「身分已經驗過、JWT 還沒發」的那一刻呼叫。
+//
+//	nil               ⇒ 可以發 JWT（沒提出過刪除，或還在停用期內而這次登入已經把它撤回）
+//	ErrAccountDeleted ⇒ 停用期已滿，不可登入
+//	其他 error        ⇒ 判不出來。呼叫端**必須拒絕這次登入**：照樣發 JWT 的話，
+//	                    使用者以為帳號救回來了，而它仍掛著刪除、到期照樣被清掉。
+func ResolveAccountDeletionOnLogin(ctx context.Context, userID string) error {
+	c := getAuthDDBClient()
+	if c == nil {
+		return ErrAuthDDBUnavailable
+	}
+	return resolveAccountDeletionOnLogin(ctx, c, tablePrefix(), userID, time.Now(), true)
+}
+
+func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, prefix, userID string, now time.Time, retry bool) error {
+	// ConsistentRead：剛提出刪除就登入時不可以讀到舊值（理由同 auth.go 的 getUserPwChangedAt）。
+	out, err := db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:            aws.String(prefix + "Users"),
+		Key:                  map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+		ProjectionExpression: aws.String("userId, deleteRequestedAt"),
+		ConsistentRead:       aws.Bool(true),
+	})
+	if err != nil {
+		return err
+	}
+	if len(out.Item) == 0 {
+		return errors.New("user not found")
+	}
+	raw, present := out.Item["deleteRequestedAt"]
+	if !present {
+		return nil
+	}
+	// 型別不對不可以當成「沒提出過」：條件式對字串與數字的比較永遠不成立，
+	// 那會讓一個掛著刪除的帳號看起來像正常帳號。
+	num, ok := raw.(*types.AttributeValueMemberN)
+	if !ok {
+		return fmt.Errorf("deleteRequestedAt has unexpected type %T", raw)
+	}
+	requestedAt, err := strconv.ParseInt(num.Value, 10, 64)
+	if err != nil {
+		return fmt.Errorf("deleteRequestedAt is not an integer: %w", err)
+	}
+
+	switch AccountDeletionStatusAt(requestedAt, now) {
+	case DeletionNone:
+		return nil
+	case DeletionExpired:
+		return ErrAccountDeleted
+	}
+
+	_, err = db.UpdateItem(ctx, BuildAccountDeletionCancel(prefix, userID, now))
+	if err == nil {
+		return nil
+	}
+	var ccf *types.ConditionalCheckFailedException
+	if !errors.As(err, &ccf) {
+		return err
+	}
+	// 條件不成立有兩種：剛好在這一瞬間到期，或同一個人的另一個登入搶先撤回了。
+	// 重讀一次分得開；只重讀一次。
+	if retry {
+		return resolveAccountDeletionOnLogin(ctx, db, prefix, userID, now, false)
+	}
+	return ErrAccountDeleted
 }

@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -165,6 +166,14 @@ func fakeDDBHandler(w http.ResponseWriter, r *http.Request) {
 			n = count
 		}
 		fmt.Fprintf(w, `{"Attributes":{"count":{"N":"%d"}}}`, n)
+	case target == "GetItem" && strings.HasSuffix(req.TableName, "Users"):
+		// 登入成功後、發 JWT 之前的那次強一致讀取（shared.ResolveAccountDeletionOnLogin）。
+		// 回的是同一筆假使用者：它沒有 deleteRequestedAt ⇒ 走「沒提出過刪除」那條路。
+		if user == nil {
+			io.WriteString(w, `{}`)
+			return
+		}
+		fmt.Fprintf(w, `{"Item":%s}`, user)
 	case target == "Query":
 		if user == nil {
 			io.WriteString(w, `{"Count":0,"Items":[]}`)
@@ -589,5 +598,72 @@ func TestLogin_LineBranch_UsesSeparateBurstBucket(t *testing.T) {
 	}
 	if has(up, loginBurstKey(testIP)) {
 		t.Errorf("LINE 分支計進了密碼登入的突發閘 %v ⇒ 兩條路會互相擋", up)
+	}
+}
+
+// ── 帳號刪除（先停用、30 天後清除）──────────────────────────────
+
+func usersCalls(target string) int {
+	n := 0
+	for _, c := range calls() {
+		if c.Target == target && strings.HasSuffix(c.Table, "Users") {
+			n++
+		}
+	}
+	return n
+}
+
+func loginAsDeletionUser(t *testing.T, deleteRequestedAt int64) events.APIGatewayProxyResponse {
+	t.Helper()
+	fakeReset()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-horse"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("產生 bcrypt hash 失敗：%v", err)
+	}
+	extra := ""
+	if deleteRequestedAt != 0 {
+		extra = fmt.Sprintf(`,"deleteRequestedAt":{"N":"%d"}`, deleteRequestedAt)
+	}
+	setUser(fmt.Sprintf(`{"userId":{"S":"APP_test"},"email":{"S":%q},"passwordHash":{"S":%q}%s}`,
+		testEmail, string(hash), extra))
+	return loginReq(t, `{"email":"`+testEmail+`","password":"correct-horse"}`, testIP)
+}
+
+// 停用期內用對的密碼登入 ⇒ 登入成功、拿得到 JWT，而且多了一筆對 Users 的寫入（撤回刪除）。
+func TestLogin_PendingDeletion_IsCancelledByLogin(t *testing.T) {
+	// 對照：沒提出過刪除的同一個人登入，對 Users 寫幾次（UpdateLastLogin）。
+	base := loginAsDeletionUser(t, 0)
+	if base.StatusCode != http.StatusOK {
+		t.Fatalf("對照臂狀態碼 = %d；body=%s", base.StatusCode, base.Body)
+	}
+	baseWrites := usersCalls("UpdateItem")
+
+	resp := loginAsDeletionUser(t, time.Now().Add(-24*time.Hour).Unix())
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("狀態碼 = %d, want 200；body=%s", resp.StatusCode, resp.Body)
+	}
+	if !strings.Contains(resp.Body, `"token":"`) {
+		t.Errorf("撤回後應該發 JWT；body=%s", resp.Body)
+	}
+	if got := usersCalls("UpdateItem"); got != baseWrites+1 {
+		t.Errorf("對 Users 的 UpdateItem = %d 次，期望比對照臂的 %d 次多一次（撤回那一筆）", got, baseWrites)
+	}
+}
+
+// 停用期已滿 ⇒ 密碼對也不可登入：410、沒有 JWT、不寫 Users（連 lastLogin 都不更新）。
+func TestLogin_ExpiredDeletion_IsRefused(t *testing.T) {
+	resp := loginAsDeletionUser(t, time.Now().Add(-31*24*time.Hour).Unix())
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("狀態碼 = %d, want 410；body=%s", resp.StatusCode, resp.Body)
+	}
+	// 🔴 不可以是 403：前端把裸 403 當成維護中的訊號。
+	if strings.Contains(resp.Body, `"token"`) {
+		t.Errorf("已到期的帳號拿到了 JWT；body=%s", resp.Body)
+	}
+	if !strings.Contains(resp.Body, "account_deleted") {
+		t.Errorf("body 沒有 account_deleted；body=%s", resp.Body)
+	}
+	if got := usersCalls("UpdateItem"); got != 0 {
+		t.Errorf("已到期的帳號不該有任何對 Users 的寫入，實得 %d 次", got)
 	}
 }

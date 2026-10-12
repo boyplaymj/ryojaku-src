@@ -57,8 +57,10 @@ func getEnv(k, d string) string {
 }
 
 // lineRequest：兩種憑證形狀，**剛好給一個**（shared.ValidateLineCredential 強制）。
-//   web    → {"code","redirectUri","nonce"}   後端拿 channel secret 換 id_token
-//   原生App → {"idToken","nonce"}             LINE SDK 直接給 id_token
+//
+//	web    → {"code","redirectUri","nonce"}   後端拿 channel secret 換 id_token
+//	原生App → {"idToken","nonce"}             LINE SDK 直接給 id_token
+//
 // redirectUri 必須跟授權當下逐字相同，否則 LINE 回 invalid_grant。
 type lineRequest struct {
 	IDToken     string `json:"idToken"`
@@ -82,7 +84,16 @@ func jsonResp(headers map[string]string, code int, payload map[string]interface{
 
 // respondAuth：發 JWT 並回 200。mode = login | signup（供前端/除錯）。
 // email 傳空字串：LINE 帳號沒有權威 email，JWT 內不放未驗證的值。
-func respondAuth(headers map[string]string, uid, mode string) events.APIGatewayProxyResponse {
+func respondAuth(ctx context.Context, headers map[string]string, uid, mode string) events.APIGatewayProxyResponse {
+	// 帳號刪除：停用期內登入＝撤回；已到期的不可登入。必須在發 JWT 之前（shared/account_deletion.go）。
+	// 🔴 不可以用 403：前端把裸 403 當成維護中的訊號。
+	if derr := shared.ResolveAccountDeletionOnLogin(ctx, uid); derr != nil {
+		if errors.Is(derr, shared.ErrAccountDeleted) {
+			return jsonResp(headers, http.StatusGone, map[string]interface{}{"success": false, "error": "account_deleted"})
+		}
+		log.Printf("ResolveAccountDeletionOnLogin failed for %s: %v", uid, derr)
+		return jsonResp(headers, http.StatusServiceUnavailable, map[string]interface{}{"success": false, "error": "service unavailable"})
+	}
 	token, err := shared.GenerateToken(uid, "")
 	if err != nil {
 		log.Printf("GenerateToken failed for %s: %v", uid, err)
@@ -193,7 +204,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// ① 已綁 line 身分 → 登入
 	if uid, rerr := shared.ResolveIdentity(ctx, identity); rerr == nil && uid != "" {
-		return respondAuth(headers, uid, "login"), nil
+		return respondAuth(ctx, headers, uid, "login"), nil
 	}
 
 	// ② 全新帳號（刻意不做 email 合併，見檔頭）
@@ -210,13 +221,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		if errors.As(err, &tce) {
 			// line 身分被搶(競態) → 重解析登入
 			if u2, _ := shared.ResolveIdentity(ctx, identity); u2 != "" {
-				return respondAuth(headers, u2, "login"), nil
+				return respondAuth(ctx, headers, u2, "login"), nil
 			}
 		}
 		log.Printf("createLineUser failed: %v", err)
 		return jsonResp(headers, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": "internal error"}), nil
 	}
-	return respondAuth(headers, uid, "signup"), nil
+	return respondAuth(ctx, headers, uid, "signup"), nil
 }
 
 func main() {

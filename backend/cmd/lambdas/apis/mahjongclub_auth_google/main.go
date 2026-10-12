@@ -67,7 +67,16 @@ func jsonResp(headers map[string]string, code int, payload map[string]interface{
 }
 
 // respondAuth：發 JWT 並回 200。mode = login | merged | signup（供前端/除錯）。
-func respondAuth(headers map[string]string, uid, email, mode string) events.APIGatewayProxyResponse {
+func respondAuth(ctx context.Context, headers map[string]string, uid, email, mode string) events.APIGatewayProxyResponse {
+	// 帳號刪除：停用期內登入＝撤回；已到期的不可登入。必須在發 JWT 之前（shared/account_deletion.go）。
+	// 🔴 不可以用 403：前端把裸 403 當成維護中的訊號。
+	if derr := shared.ResolveAccountDeletionOnLogin(ctx, uid); derr != nil {
+		if errors.Is(derr, shared.ErrAccountDeleted) {
+			return jsonResp(headers, http.StatusGone, map[string]interface{}{"success": false, "error": "account_deleted"})
+		}
+		log.Printf("ResolveAccountDeletionOnLogin failed for %s: %v", uid, derr)
+		return jsonResp(headers, http.StatusServiceUnavailable, map[string]interface{}{"success": false, "error": "service unavailable"})
+	}
 	token, err := shared.GenerateToken(uid, email)
 	if err != nil {
 		log.Printf("GenerateToken failed for %s: %v", uid, err)
@@ -150,7 +159,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// ① 已綁 google 身分 → 登入
 	if uid, rerr := shared.ResolveIdentity(ctx, identity); rerr == nil && uid != "" {
-		return respondAuth(headers, uid, g.Email, "login"), nil
+		return respondAuth(ctx, headers, uid, g.Email, "login"), nil
 	}
 
 	// ② email 已驗證且命中既有帳號 → 自動合併(掛 google 鑰匙到既有帳號)
@@ -160,7 +169,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 				if errors.Is(berr, shared.ErrIdentityTaken) {
 					// 競態:剛被別處綁上 → 重解析登入
 					if u2, _ := shared.ResolveIdentity(ctx, identity); u2 != "" {
-						return respondAuth(headers, u2, g.Email, "login"), nil
+						return respondAuth(ctx, headers, u2, g.Email, "login"), nil
 					}
 				}
 				log.Printf("merge BindIdentity failed for %s: %v", existing, berr)
@@ -178,7 +187,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 			}); uerr != nil {
 				log.Printf("merge: mark emailVerified failed for %s: %v", existing, uerr)
 			}
-			return respondAuth(headers, existing, g.Email, "merged"), nil
+			return respondAuth(ctx, headers, existing, g.Email, "merged"), nil
 		}
 	}
 
@@ -196,13 +205,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		if errors.As(err, &tce) {
 			// google 身分被搶(競態) → 重解析登入
 			if u2, _ := shared.ResolveIdentity(ctx, identity); u2 != "" {
-				return respondAuth(headers, u2, g.Email, "login"), nil
+				return respondAuth(ctx, headers, u2, g.Email, "login"), nil
 			}
 		}
 		log.Printf("createGoogleUser failed: %v", err)
 		return jsonResp(headers, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": "internal error"}), nil
 	}
-	return respondAuth(headers, uid, g.Email, "signup"), nil
+	return respondAuth(ctx, headers, uid, g.Email, "signup"), nil
 }
 
 func main() {
