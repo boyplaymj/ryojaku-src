@@ -158,3 +158,25 @@ test('N3-8 web：空的候選陣列不動既有清單，且結果不超過上限
   const wide = reduceWebCandidates([], ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   assert.equal(wide.length, MAX_CANDIDATES);
 });
+
+// ── Web 軌收尾（2026-10-12 真機實測：有即時文字、沒有定稿 ⇒ 被當成沒聽到）──
+import { webErrorIsBenign as _benign, webSettleText as _settle } from './asrTrack.ts';
+
+test('W1 有定稿就用定稿，不碰即時文字', () => {
+  assert.deepEqual(_settle('門清自摸', '門清自摸 嗯'), { text: '門清自摸', fromInterim: false });
+});
+test('W2 🔴 沒有定稿 ⇒ 退回最後看到的即時文字（這就是實測壞掉的那一格）', () => {
+  assert.deepEqual(_settle('', ' 莊家連一拉一 '), { text: '莊家連一拉一', fromInterim: true });
+});
+test('W3 反控：兩邊都空 ⇒ 仍然是空（真的沒講話不可以變成有字）', () => {
+  assert.deepEqual(_settle('  ', ''), { text: '', fromInterim: false });
+});
+test('W4 aborted／no-speech 只有在手上有字時才不算失敗', () => {
+  assert.equal(_benign('aborted', true), true);
+  assert.equal(_benign('no-speech', true), true);
+  assert.equal(_benign('aborted', false), false);
+  assert.equal(_benign('no-speech', false), false);
+});
+test('W5 反控：權限與裝置類的錯誤，有字也照樣算失敗', () => {
+  for (const c of ['not-allowed', 'audio-capture', 'network', 'unknown']) assert.equal(_benign(c, true), false, c);
+});

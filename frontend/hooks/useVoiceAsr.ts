@@ -28,6 +28,8 @@ import {
   reduceNativePartial,
   reduceWebCandidates,
   reduceWebFinal,
+  webErrorIsBenign,
+  webSettleText,
   type AsrTrack,
 } from '../utils/asrTrack';
 import { nativeTailStep, tailIdle, type TailEvent, type TailState } from '../utils/asrTail';
@@ -153,6 +155,8 @@ export function useVoiceAsr(
    *    不成立的話，畫面上顯示的即時文字會與判台吃的第 0 條不是同一句。
    */
   const candidatesRef = useRef<string[]>([]);
+  /** Web 軌：最後一次 onresult 當下畫面上的整句。沒有定稿時的退路（見 asrTrack.webSettleText）。 */
+  const interimRef = useRef('');
   const pressedRef = useRef(false);
   const listeningRef = useRef(false);
   const webRecRef = useRef<SpeechRecognitionLike | null>(null);
@@ -279,7 +283,13 @@ export function useVoiceAsr(
       setListening(true);
       setError('');
     };
-    rec.onerror = (e) => fail(e.error || 'unknown', micErrorMessage(e.error));
+    rec.onerror = (e) => {
+      const code = e.error || 'unknown';
+      // 🔴 手上已經有字的 aborted／no-speech 不是失敗，交給 onend 收尾（asrTrack.webErrorIsBenign）。
+      const hasText = (textRef.current || interimRef.current).trim() !== '';
+      if (webErrorIsBenign(code, hasText)) return;
+      fail(code, micErrorMessage(e.error));
+    };
     rec.onresult = (e) => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -294,11 +304,14 @@ export function useVoiceAsr(
           candidatesRef.current = reduceWebCandidates(candidatesRef.current, alts);
         } else interim += t;
       }
-      setPartial(textRef.current + interim);
+      interimRef.current = textRef.current + interim;
+      setPartial(interimRef.current);
     };
     rec.onend = () => {
       listeningRef.current = false;
       setListening(false);
+      // 🔴 放開後瀏覽器不一定會再送 isFinal（2026-10-12 真機實測）⇒ 沒有定稿就用最後看到的即時文字。
+      textRef.current = webSettleText(textRef.current, interimRef.current).text;
       finish();
     };
 
@@ -398,6 +411,7 @@ export function useVoiceAsr(
     pressedRef.current = true;
     textRef.current = '';
     candidatesRef.current = []; // 上一次按壓的候選不可以留到這一次
+    interimRef.current = ''; // 上一次按壓的即時文字也不可以（否則這次沒講話會撿到上一句）
     settledRef.current = false; // 新的一次按壓＝新的一次嘗試
     pressIdRef.current += 1; // §3.5c：上一次按壓排的尾巴計時器就此作廢
     clearTailTimer();

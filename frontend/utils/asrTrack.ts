@@ -168,3 +168,36 @@ export function nativeErrorMessage(raw: string): string | null {
   }
   return null;
 }
+
+/**
+ * Web 軌收尾時要用哪一段字（2026-10-12，gameboy 第一次真機實測抓到）。
+ *
+ * 🔴 `reduceWebFinal` 只累加 `isFinal` 的片段，而**放開按鈕時我們叫的是 `rec.stop()`**：
+ *    實測（手機瀏覽器、stg）畫面上即時文字一直在跑，放開之後瀏覽器卻沒有再送一個
+ *    `isFinal` 的結果就結束了 ⇒ 累加出來是空字串 ⇒「沒聽到內容，再試一次」，
+ *    而使用者明明看著字出現過。資料庫那四筆是 `aborted`×2、`no-speech`×2，一筆成功都沒有。
+ *    ⇒ 沒有定稿時退回**最後一次看到的即時文字**。它可能比定稿差幾個字，
+ *    但判台本來就有拼音容錯，而且使用者還有確認關卡；整句丟掉才是最壞的。
+ *
+ * @param finalText   `isFinal` 片段累加出來的字
+ * @param lastInterim 最後一次 `onresult` 當下畫面上顯示的整句（定稿＋未定稿）
+ */
+export function webSettleText(finalText: string, lastInterim: string): { text: string; fromInterim: boolean } {
+  const f = (finalText || '').trim();
+  if (f) return { text: f, fromInterim: false };
+  const i = (lastInterim || '').trim();
+  return { text: i, fromInterim: i !== '' };
+}
+
+/**
+ * Web 軌的 `onerror` 要不要當成這次按壓失敗。
+ *
+ * 🔴 `aborted`／`no-speech` 在「手上已經有字」的時候不是失敗：前者是我們自己放開按鈕
+ *    造成的收尾方式之一，後者是瀏覽器在尾巴那一小段沒再聽到聲音。舊版一律 `fail()`，
+ *    而 `fail()` 會先把這次按壓記成失敗（`settledRef`），之後就算 `onend` 拿得到字，
+ *    埋點也已經寫成失敗、錯誤訊息也蓋不掉。
+ * ⚠️ 其他代碼（`not-allowed`、`audio-capture`、`network`…）不論有沒有字都照樣算失敗。
+ */
+export function webErrorIsBenign(code: string, hasText: boolean): boolean {
+  return hasText && (code === 'aborted' || code === 'no-speech');
+}
