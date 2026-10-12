@@ -506,7 +506,9 @@ const TrainingVoiceTai: React.FC = () => {
           {sending ? '送出中…' : submitted ? '已送出' : `確認送出 ${total} 台`}
         </button>
 
-        <div className="flex items-center gap-2">
+        {/* 2026-10-12 gameboy 真機實測後要求放大：這顆是整頁唯一要「按住」的東西，
+            原本與旁邊的清空鈕同高（約 48px），按住時拇指容易滑出去。 */}
+        <div className="flex items-stretch gap-2">
           <button
             type="button"
             disabled={!supported}
@@ -525,7 +527,7 @@ const TrainingVoiceTai: React.FC = () => {
             }}
             // 🔴 §9 禁做②：狀態切換，不是循環動畫。這裡只有 transition-colors，
             //    沒有 animate-pulse／animate-ping 之類無條件播放的東西。
-            className={`flex-1 select-none touch-none rounded-[0.8125rem] py-3.5 text-[0.875rem] font-black tracking-wide flex items-center justify-center gap-2 transition-colors ${
+            className={`flex-1 select-none touch-none rounded-[1rem] py-7 text-[1.25rem] font-black tracking-wide flex items-center justify-center gap-3 transition-colors ${
               !supported
                 ? 'bg-[#f2f2f0] text-neutral-300'
                 : listening
@@ -533,7 +535,7 @@ const TrainingVoiceTai: React.FC = () => {
                   : 'bg-neutral-900 text-white active:bg-black'
             }`}
           >
-            <Mic size="1rem" strokeWidth={2.6} />
+            <Mic size="1.75rem" strokeWidth={2.6} />
             {listening ? '聆聽中…放開結束' : '按住講話'}
           </button>
 
@@ -542,7 +544,7 @@ const TrainingVoiceTai: React.FC = () => {
             onClick={reset}
             disabled={picked.length === 0 && !heard}
             aria-label="清空重算"
-            className={`flex-none rounded-[0.8125rem] px-4 py-3.5 transition-colors ${
+            className={`flex-none rounded-[1rem] px-5 flex items-center transition-colors ${
               picked.length === 0 && !heard
                 ? 'bg-[#f2f2f0] text-neutral-300'
                 : 'bg-[#f2f2f0] text-neutral-900 active:bg-[#e6e6e2]'
