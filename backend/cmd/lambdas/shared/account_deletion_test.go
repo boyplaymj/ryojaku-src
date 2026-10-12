@@ -259,3 +259,92 @@ func TestResolveAccountDeletionOnLogin_ClockIsReadAfterTheRead(t *testing.T) {
 		t.Errorf("已到期不該撤回，卻寫了 %d 次", len(db.updates))
 	}
 }
+
+// ── 對別人隱藏 ──────────────────────────────────────────────
+
+func TestAccountHiddenFromOthers(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name    string
+		db      *fakeDeletionDB
+		want    bool
+		wantErr bool
+	}{
+		{"沒提出過 ⇒ 不隱藏", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(nil)}}, false, false},
+		{"停用中 ⇒ 隱藏", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(1_800_000_000)})}}, true, false},
+		{"到期很久（清除還沒輪到）⇒ 仍然隱藏", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(1)})}}, true, false},
+		{"欄位是字串 ⇒ 隱藏", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(map[string]types.AttributeValue{"deleteRequestedAt": &types.AttributeValueMemberS{Value: "x"}})}}, true, false},
+		{"欄位是 0 ⇒ 不隱藏（與登入端的判定一致）", &fakeDeletionDB{items: []map[string]types.AttributeValue{userItem(map[string]types.AttributeValue{"deleteRequestedAt": nAttr(0)})}}, false, false},
+		{"查無此人 ⇒ 不隱藏，交回端點處理", &fakeDeletionDB{items: []map[string]types.AttributeValue{{}}}, false, false},
+		{"讀取失敗 ⇒ 回錯誤", &fakeDeletionDB{getErr: boom}, false, true},
+	}
+	for _, c := range cases {
+		got, err := accountHiddenFromOthers(context.Background(), c.db, "P_", "u1")
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("%s: got (%v, %v) want (%v, err=%v)", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+// ── 停掉推播 ────────────────────────────────────────────────
+
+type fakePushDB struct {
+	pages     [][]string // 每一頁的 deviceId
+	queries   int
+	updated   []string
+	failOn    string // 更新到這台時回錯誤
+	lastTable string
+}
+
+func (f *fakePushDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	f.lastTable = *in.TableName
+	page := f.pages[f.queries]
+	f.queries++
+	out := &dynamodb.QueryOutput{}
+	for _, d := range page {
+		out.Items = append(out.Items, map[string]types.AttributeValue{
+			"userId": &types.AttributeValueMemberS{Value: "u1"}, "deviceId": &types.AttributeValueMemberS{Value: d}})
+	}
+	if f.queries < len(f.pages) {
+		out.LastEvaluatedKey = map[string]types.AttributeValue{"deviceId": &types.AttributeValueMemberS{Value: page[len(page)-1]}}
+	}
+	return out, nil
+}
+
+func (f *fakePushDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	dev := in.Key["deviceId"].(*types.AttributeValueMemberS).Value
+	if dev == f.failOn {
+		return nil, errors.New("boom")
+	}
+	if b, ok := in.ExpressionAttributeValues[":false"].(*types.AttributeValueMemberBOOL); !ok || b.Value {
+		return nil, errors.New("isActive 沒有被設成 false")
+	}
+	f.updated = append(f.updated, dev)
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
+func TestDeactivateAllPushSubscriptions(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+
+	// 兩頁：第二頁也要處理到，不可以只停第一頁。
+	db := &fakePushDB{pages: [][]string{{"a", "b"}, {"c"}}}
+	n, err := DeactivateAllPushSubscriptions(context.Background(), db, "P_", "u1", now)
+	if err != nil || n != 3 || strings.Join(db.updated, ",") != "a,b,c" {
+		t.Errorf("兩頁：n=%d err=%v updated=%v", n, err, db.updated)
+	}
+	if db.lastTable != "P_PushSubscriptions_MultiDevice" {
+		t.Errorf("table = %s", db.lastTable)
+	}
+
+	// 沒有任何訂閱 ⇒ 0 台、不是錯誤。
+	db = &fakePushDB{pages: [][]string{{}}}
+	if n, err := DeactivateAllPushSubscriptions(context.Background(), db, "P_", "u1", now); err != nil || n != 0 {
+		t.Errorf("沒有訂閱：n=%d err=%v", n, err)
+	}
+
+	// 中途失敗 ⇒ 回錯誤，並且講得出已經停了幾台。
+	db = &fakePushDB{pages: [][]string{{"a", "b", "c"}}, failOn: "b"}
+	if n, err := DeactivateAllPushSubscriptions(context.Background(), db, "P_", "u1", now); err == nil || n != 1 {
+		t.Errorf("中途失敗：n=%d err=%v", n, err)
+	}
+}

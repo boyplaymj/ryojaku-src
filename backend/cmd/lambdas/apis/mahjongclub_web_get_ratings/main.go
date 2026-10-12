@@ -171,6 +171,21 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		finalUserID = userID
 	}
 
+	// 只擋「查某個人收到的全部評價」（下面的 Case 3）。帶 gameId 的兩種是某一場團局的紀錄，
+	// 那是別人牌局裡的歷史，刪除頁寫明會保留。
+	if gameID == "" && finalUserID != "" {
+		// 已提出刪除的帳號（停用中或等清除）不可以再被別人查看（shared/account_deletion.go）。
+		// 🔴 不可以用 403：前端把裸 403 當成維護中的訊號。
+		if hidden, herr := shared.AccountHiddenFromOthers(ctx, finalUserID); herr != nil {
+			log.Printf("AccountHiddenFromOthers failed for %s: %v", finalUserID, herr)
+			body, _ := json.Marshal(Response{Success: false, Error: "service unavailable"})
+			return events.APIGatewayProxyResponse{StatusCode: http.StatusServiceUnavailable, Headers: headers, Body: string(body)}, nil
+		} else if hidden {
+			body, _ := json.Marshal(Response{Success: false, Error: "找不到用戶"})
+			return events.APIGatewayProxyResponse{StatusCode: http.StatusNotFound, Headers: headers, Body: string(body)}, nil
+		}
+	}
+
 	var ratings []*Rating
 
 	if gameID != "" && finalUserID != "" {

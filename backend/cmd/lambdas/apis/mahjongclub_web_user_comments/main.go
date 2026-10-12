@@ -90,6 +90,17 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}, nil
 	}
 
+	// 已提出刪除的帳號（停用中或等清除）不可以再被別人查看（shared/account_deletion.go）。
+	// 🔴 不可以用 403：前端把裸 403 當成維護中的訊號。
+	if hidden, herr := shared.AccountHiddenFromOthers(ctx, userID); herr != nil {
+		log.Printf("AccountHiddenFromOthers failed for %s: %v", userID, herr)
+		body, _ := json.Marshal(Response{Success: false, Error: "service unavailable"})
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusServiceUnavailable, Headers: headers, Body: string(body)}, nil
+	} else if hidden {
+		body, _ := json.Marshal(Response{Success: false, Error: "找不到用戶"})
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusNotFound, Headers: headers, Body: string(body)}, nil
+	}
+
 	// Get comments
 	limitStr := request.QueryStringParameters["limit"]
 	limit := 10

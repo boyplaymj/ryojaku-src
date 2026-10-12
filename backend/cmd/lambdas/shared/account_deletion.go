@@ -195,3 +195,108 @@ func resolveAccountDeletionOnLogin(ctx context.Context, db accountDeletionDB, pr
 	}
 	return ErrAccountDeleted
 }
+
+// ── 對別人隱藏 ──────────────────────────────────────────────
+
+// AccountHiddenFromOthers：這個帳號是否已提出刪除（停用中或已到期）⇒ 不可以再被別人查看。
+// 給「拿別人的 userId 當查詢對象」的讀取端用（評價、評語、個人貼文）。
+//
+//	(true, nil)  ⇒ 當成查無此人
+//	(false, nil) ⇒ 照常
+//	(_, err)     ⇒ 判不出來。呼叫端要拒絕這次查詢，不可以照常回資料。
+//
+// ⚠️ 管不到的：團局、聊天、貼文列表裡**已經寫進去**的顯示名稱與大頭貼。那些是各筆紀錄自己存的副本，
+//
+//	停用期間照舊顯示，要等到期清除時才會改成「已刪除的使用者」。
+func AccountHiddenFromOthers(ctx context.Context, userID string) (bool, error) {
+	c := getAuthDDBClient()
+	if c == nil {
+		return false, ErrAuthDDBUnavailable
+	}
+	return accountHiddenFromOthers(ctx, c, tablePrefix(), userID)
+}
+
+func accountHiddenFromOthers(ctx context.Context, db accountDeletionDB, prefix, userID string) (bool, error) {
+	out, err := db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:            aws.String(prefix + "Users"),
+		Key:                  map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+		ProjectionExpression: aws.String("userId, deleteRequestedAt"),
+		ConsistentRead:       aws.Bool(true),
+	})
+	if err != nil {
+		return false, err
+	}
+	// 查無此人不是這支要管的事，交回給端點原本的處理。
+	if len(out.Item) == 0 {
+		return false, nil
+	}
+	raw, present := out.Item["deleteRequestedAt"]
+	if !present {
+		return false, nil
+	}
+	// 欄位在、但不是正整數（型別不對、寫壞了）也一律隱藏：這裡猜錯的代價是把一個要求刪除的人繼續秀給別人看。
+	if num, ok := raw.(*types.AttributeValueMemberN); ok {
+		if v, perr := strconv.ParseInt(num.Value, 10, 64); perr == nil && v <= 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// ── 停掉推播 ────────────────────────────────────────────────
+
+type pushSubscriptionDB interface {
+	Query(ctx context.Context, in *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
+// DeactivateAllPushSubscriptions 把這個人每一台裝置的推播訂閱設成 isActive=false
+// （與 web_unsubscribe_push 同一個做法；發送端 push_notification.go 會跳過 isActive=false）。
+// 回傳停掉幾台。中途失敗就回錯誤與已停掉的台數 —— 呼叫端自己決定要不要讓整個請求失敗。
+//
+// ⚠️ 管不到的：舊的單裝置表 PushSubscriptions（發送端在多裝置表查無資料時會退回去讀它，
+//
+//	而且一律當成有效）；以及不經過 push_notification.go 的發送路徑。
+func DeactivateAllPushSubscriptions(ctx context.Context, db pushSubscriptionDB, prefix, userID string, now time.Time) (int, error) {
+	table := prefix + "PushSubscriptions_MultiDevice"
+	done := 0
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := db.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(table),
+			KeyConditionExpression:    aws.String("userId = :u"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":u": &types.AttributeValueMemberS{Value: userID}},
+			ProjectionExpression:      aws.String("userId, deviceId"),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return done, err
+		}
+		for _, item := range out.Items {
+			dev, ok := item["deviceId"].(*types.AttributeValueMemberS)
+			if !ok {
+				continue
+			}
+			_, err := db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+				TableName: aws.String(table),
+				Key: map[string]types.AttributeValue{
+					"userId":   &types.AttributeValueMemberS{Value: userID},
+					"deviceId": &types.AttributeValueMemberS{Value: dev.Value},
+				},
+				UpdateExpression: aws.String("SET isActive = :false, updatedAt = :now"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":false": &types.AttributeValueMemberBOOL{Value: false},
+					":now":   &types.AttributeValueMemberN{Value: strconv.FormatInt(now.Unix(), 10)},
+				},
+			})
+			if err != nil {
+				return done, err
+			}
+			done++
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			return done, nil
+		}
+		startKey = out.LastEvaluatedKey
+	}
+}

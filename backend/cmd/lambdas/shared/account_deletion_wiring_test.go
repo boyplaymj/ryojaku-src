@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -115,6 +116,69 @@ func TestEveryTokenIssuerResolvesAccountDeletionFirst(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("例外 %s 已經不呼叫 shared.GenerateToken，請從例外清單移除", rel)
+		}
+	}
+}
+
+// 讀了 ?userId=／?targetUserId= 卻不需要問「這個人是不是已提出刪除」的端點。每一筆都要寫理由。
+var userIDParamReadersExemptFromHiding = map[string]string{
+	"apis/mahjongclub_admin_point_history/main.go":       "後台：管理員查帳，不是使用者互看",
+	"apis/mahjongclub_admin_users/main.go":               "後台：管理員管理使用者，停用中的帳號也要看得到",
+	"apis/mahjongclub_chat_ws_connect/main.go":           "只剩註解提到；身分取自 authorizer",
+	"apis/mahjongclub_community_get_post_detail/main.go": "userId 是「誰在看」（算按讚狀態），不是被看的人",
+	"apis/mahjongclub_community_get_posts/main.go":       "userId 是「誰在看」（算按讚狀態），不是被看的人",
+	"apis/mahjongclub_web_user_info/main.go":             "只回登入者自己的資料；query 的 userId 只拿來記錄",
+	"apis/mahjongclub_web_verify_user/main.go":           "必須是驗證過的身分，只回自己",
+}
+
+// TestUserIDParamReadersHideDeletedAccounts 釘住刪除頁第三條「其他用戶看不到您的個人檔案」。
+//
+// App 沒有單一的「看別人個人檔案」端點 —— 別人的評價、評語、貼文是三支各自吃
+// ?userId=／?targetUserId= 的端點。掃的是「誰讀了那兩個參數」：以後多一支，
+// 沒接上也沒寫例外理由的話這條會紅。
+//
+// 🔴 照不到的：從 body、path 參數或別的參數名拿到「別人的 userId」的端點；
+//
+//	以及團局、聊天、貼文列表裡各筆紀錄自己存的顯示名稱與大頭貼。
+func TestUserIDParamReadersHideDeletedAccounts(t *testing.T) {
+	root := ".."
+	files, err := filepath.Glob(filepath.Join(root, "apis", "*", "main.go"))
+	if err != nil || len(files) < 50 {
+		t.Fatalf("只掃到 %d 個檔（err=%v）⇒ 掃描範圍不對，下面的結論不算數", len(files), err)
+	}
+	reads := func(src string) bool {
+		return strings.Contains(src, `QueryStringParameters["userId"]`) ||
+			strings.Contains(src, `QueryStringParameters["targetUserId"]`)
+	}
+	var guarded []string
+	seen := map[string]bool{}
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		if !reads(src) {
+			continue
+		}
+		rel := filepath.ToSlash(path[len(root)+1:])
+		seen[rel] = true
+		if _, ok := userIDParamReadersExemptFromHiding[rel]; ok {
+			continue
+		}
+		if !strings.Contains(src, "shared.AccountHiddenFromOthers(") {
+			t.Errorf("%s 讀了 ?userId=／?targetUserId= 卻沒有呼叫 shared.AccountHiddenFromOthers，也不在例外清單裡", rel)
+			continue
+		}
+		guarded = append(guarded, rel)
+	}
+	sort.Strings(guarded)
+	if len(guarded) < 3 {
+		t.Fatalf("只找到 %d 支受守的端點（%v）⇒ 這條的掃法可能已經照不到東西", len(guarded), guarded)
+	}
+	for rel := range userIDParamReadersExemptFromHiding {
+		if !seen[rel] {
+			t.Errorf("例外 %s 已經不讀那兩個參數，請從例外清單移除", rel)
 		}
 	}
 }

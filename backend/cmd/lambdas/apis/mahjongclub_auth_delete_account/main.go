@@ -4,8 +4,10 @@ package main
 // POST（需登入，僅接受 JWT 身分）→ 寫 deleteRequestedAt 與 pwChangedAt（＝登出所有裝置）。
 // 停用期內重新登入＝撤回，那一半在各登入入口（shared.ResolveAccountDeletionOnLogin）。
 //
+// 提出後同時把每一台裝置的推播訂閱停掉（shared.DeactivateAllPushSubscriptions）。
+//
 // 🔴 這支還沒做的（刪除頁已經寫了，行為還沒跟上）：
-//    推播訂閱的清除、「主辦人有未舉行的團局要先取消」的檢查（Games 沒有主辦人索引）。
+//    「主辦人有未舉行的團局要先取消」的檢查（Games 沒有主辦人索引）。
 
 import (
 	"context"
@@ -90,6 +92,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if err != nil {
 		log.Printf("UpdateItem failed for user %s: %v", userID, err)
 		return errorResponse(headers, http.StatusInternalServerError, "service unavailable"), nil
+	}
+
+	// 停掉推播（刪除頁第三條：提出後不再收到通知）。
+	// 失敗不讓整個請求失敗：刪除已經記下、裝置也都登出了，這時回錯誤只會讓使用者以為沒提出成功。
+	// 代價是那幾台可能還會收到推播 ⇒ 一定要留下紀錄。
+	if n, perr := shared.DeactivateAllPushSubscriptions(ctx, dynamoClient, tablePrefix, userID, now); perr != nil {
+		log.Printf("[account-deletion] 推播訂閱只停了 %d 台就失敗 user=%s: %v", n, userID, perr)
 	}
 
 	// 回的是「提出時間＋停用期」算出來的期限；重複提出時 deleteRequestedAt 不會往後延，
