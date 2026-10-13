@@ -809,6 +809,18 @@
       ]
     },
     {
+      "name": "auth-delete-account",
+      "projectPath": "cmd/lambdas/apis/mahjongclub_auth_delete_account",
+      "apiType": "REST_V1",
+      "method": "POST",
+      "path": "/auth/delete-account",
+      "auth": "user",
+      "tables": [
+        "Users",
+        "PushSubscriptions_MultiDevice"
+      ]
+    },
+    {
       "name": "auth-google",
       "projectPath": "cmd/lambdas/apis/mahjongclub_auth_google",
       "apiType": "REST_V1",

@@ -2263,6 +2263,34 @@ Resources:
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: '*'
 
+  FnAuthDeleteAccount:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/apis__mahjongclub_auth_delete_account
+      FunctionName: !Sub 'ryojaku-${Stage}-auth-delete-account'
+      Events:
+        Rest0:
+          Type: Api
+          Properties: { RestApiId: !Ref RestApi, Path: '/auth/delete-account', Method: post }
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:*]
+              Resource:
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LineBotTablePrefix}*/index/*'
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-assets/*'
+                - !Sub 'arn:aws:s3:::ryojaku-${Stage}-community/*'
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: '*'
+
   FnAuthGoogle:
     Type: AWS::Serverless::Function
     Properties:
