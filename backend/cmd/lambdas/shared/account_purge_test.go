@@ -27,6 +27,8 @@ type memDB struct {
 	afterPut   func()
 	beforeUpd  func(table string, key map[string]types.AttributeValue)
 	updates    int
+	// 沒帶過濾條件的整表 Scan（＝掃別人紀錄的那種）裡，沒開強一致讀取的次數。
+	inconsistentScans int
 }
 
 func sAttr(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
@@ -49,6 +51,9 @@ func (m *memDB) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynam
 	m.scans[*in.TableName]++
 	// 只支援 account_purge.go 用到的幾種 Scan；換了寫法就要回來改這裡。
 	if in.FilterExpression == nil {
+		if in.ConsistentRead == nil || !*in.ConsistentRead {
+			m.inconsistentScans++
+		}
 		return &dynamodb.ScanOutput{Items: append([]map[string]types.AttributeValue(nil), m.tables[*in.TableName]...)}, nil
 	}
 	switch *in.FilterExpression {
@@ -516,8 +521,8 @@ func TestRunAccountPurge(t *testing.T) {
 			t.Errorf("%s 被整表掃了 %d 次，應為 1（處理了 61 個人）", tb.name, m.scans["P_"+tb.name])
 		}
 	}
-	// 走完整個排程流程之後，墓碑上多一個 anonymizedAt（名字副本處理過的記號）。
-	if got := attrNames(userRow(m, "u-del")); got != "anonymizedAt,deleteRequestedAt,displayName,purgedAt,userId" {
+	// 剛寫上的墓碑還沒有 anonymizedAt：名字副本要等過一段時間、再掃一次確認乾淨才記。
+	if got := attrNames(userRow(m, "u-del")); got != "deleteRequestedAt,displayName,purgedAt,userId" {
 		t.Errorf("到期的人沒有變成墓碑：%s", got)
 	}
 	if run.Tombstones != 60 || run.Swept != 60 {

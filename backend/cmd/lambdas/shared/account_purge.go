@@ -414,7 +414,7 @@ func purgeScanTablesFor(ctx context.Context, db accountPurgeDB, prefix string, u
 		table := prefix + t.name
 		var startKey map[string]types.AttributeValue
 		for {
-			out, err := db.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(table), ExclusiveStartKey: startKey})
+			out, err := db.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(table), ExclusiveStartKey: startKey, ConsistentRead: aws.Bool(true)})
 			if err != nil {
 				return counts, fmt.Errorf("%s: %w", t.name, err)
 			}

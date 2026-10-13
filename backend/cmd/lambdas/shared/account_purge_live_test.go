@@ -231,10 +231,8 @@ func TestAnonymizeNameCopiesLive(t *testing.T) {
 	for _, u := range []string{del, keep} {
 		add("Registrations", map[string]types.AttributeValue{"registrationId": sAttr("reg-" + u)},
 			map[string]types.AttributeValue{"userId": sAttr(u), "displayName": sAttr("名字-" + u)})
-		for _, tb := range []string{"Ratings", "RatingComments"} {
-			add(tb, map[string]types.AttributeValue{"gameId": sAttr("anonprobe-" + tag), "fromUserId": sAttr(u)},
-				map[string]types.AttributeValue{"fromDisplayName": sAttr("名字-" + u)})
-		}
+		add("RatingComments", map[string]types.AttributeValue{"gameId": sAttr("anonprobe-" + tag), "fromUserId": sAttr(u)},
+			map[string]types.AttributeValue{"fromDisplayName": sAttr("名字-" + u)})
 		add("ChatMessages", map[string]types.AttributeValue{"RoomID": sAttr("anonprobe-" + tag), "Timestamp#MessageID": sAttr("t-" + u)},
 			map[string]types.AttributeValue{"SenderID": sAttr(u), "SenderName": sAttr("名字-" + u)})
 	}
@@ -265,7 +263,7 @@ func TestAnonymizeNameCopiesLive(t *testing.T) {
 	if err != nil || len(incomplete) != 0 {
 		t.Fatalf("anonymize：counts=%v incomplete=%v err=%v", counts, incomplete, err)
 	}
-	for _, what := range []string{"Registrations.displayName", "Ratings.fromDisplayName", "RatingComments.fromDisplayName",
+	for _, what := range []string{"Registrations.displayName", "RatingComments.fromDisplayName",
 		"ChatMessages.SenderName", "Games.hostDisplayName", "Games.joinedPlayers"} {
 		if counts[del][what] != 1 {
 			t.Errorf("%s 改了 %d 列，應為 1（全部：%v）", what, counts[del][what], counts[del])
@@ -275,7 +273,7 @@ func TestAnonymizeNameCopiesLive(t *testing.T) {
 		t.Errorf("回報裡出現了別人：%v", counts)
 	}
 	// 讀回每一列：被刪的人的名字欄位都換了、旁邊那個人的都沒動。
-	nameAttrOf := map[string][2]string{"Registrations": {"userId", "displayName"}, "Ratings": {"fromUserId", "fromDisplayName"},
+	nameAttrOf := map[string][2]string{"Registrations": {"userId", "displayName"},
 		"RatingComments": {"fromUserId", "fromDisplayName"}, "ChatMessages": {"SenderID", "SenderName"}, "Games": {"hostUserId", "hostDisplayName"}}
 	for _, r := range rows {
 		out, err := db.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.table), Key: r.key, ConsistentRead: aws.Bool(true)})

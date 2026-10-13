@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,10 +24,11 @@ func seedNameCopies(m *memDB) {
 		name := "名字-" + u
 		m.tables["P_Registrations"] = append(m.tables["P_Registrations"],
 			map[string]types.AttributeValue{"registrationId": sAttr("reg-" + u), "userId": sAttr(u), "displayName": sAttr(name)})
-		for _, tb := range []string{"P_Ratings", "P_RatingComments"} {
-			m.tables[tb] = append(m.tables[tb],
-				map[string]types.AttributeValue{"gameId": sAttr("g1"), "fromUserId": sAttr(u), "fromDisplayName": sAttr(name)})
-		}
+		m.tables["P_RatingComments"] = append(m.tables["P_RatingComments"],
+			map[string]types.AttributeValue{"gameId": sAttr("g1"), "fromUserId": sAttr(u), "fromDisplayName": sAttr(name)})
+		// 報名紀錄裡有一列本來就沒有 displayName 欄位：不可以替它長出一個。
+		m.tables["P_Registrations"] = append(m.tables["P_Registrations"],
+			map[string]types.AttributeValue{"registrationId": sAttr("reg-noname-" + u), "userId": sAttr(u)})
 		m.tables["P_ChatMessages"] = append(m.tables["P_ChatMessages"],
 			map[string]types.AttributeValue{"RoomID": sAttr("r1"), "Timestamp#MessageID": sAttr("t-" + u), "SenderID": sAttr(u), "SenderName": sAttr(name)})
 	}
@@ -58,13 +60,16 @@ func playersOf(row map[string]types.AttributeValue) []map[string]types.Attribute
 func checkNameCopies(t *testing.T, m *memDB, wantDelName string) {
 	t.Helper()
 	for tb, cols := range map[string][2]string{
-		"P_Registrations": {"userId", "displayName"}, "P_Ratings": {"fromUserId", "fromDisplayName"},
+		"P_Registrations":  {"userId", "displayName"},
 		"P_RatingComments": {"fromUserId", "fromDisplayName"}, "P_ChatMessages": {"SenderID", "SenderName"},
 	} {
 		for _, row := range m.tables[tb] {
 			want := "名字-u-keep"
 			if strOf(row, cols[0]) == "u-del" {
 				want = wantDelName
+			}
+			if strings.HasPrefix(strOf(row, "registrationId"), "reg-noname-") {
+				want = "<無>" // 本來沒有名字欄位的列，前後都不該有
 			}
 			if got := strOf(row, cols[1]); got != want {
 				t.Errorf("%s：%s 的名字是 %q，應為 %q", tb, strOf(row, cols[0]), got, want)
@@ -121,7 +126,7 @@ func TestRunAccountPurge_AnonymizesNameCopies(t *testing.T) {
 	if _, has := del["lineId"]; has {
 		t.Errorf("成員名單裡被刪的人還留著 lineId")
 	}
-	want := map[string]int{"Registrations.displayName": 1, "Ratings.fromDisplayName": 1, "RatingComments.fromDisplayName": 1,
+	want := map[string]int{"Registrations.displayName": 1, "RatingComments.fromDisplayName": 1,
 		"ChatMessages.SenderName": 1, "Games.hostDisplayName": 1, "Games.joinedPlayers": 1}
 	for k, n := range want {
 		if run.NameCopies["u-del"][k] != n {
@@ -131,17 +136,59 @@ func TestRunAccountPurge_AnonymizesNameCopies(t *testing.T) {
 	if len(run.NameCopies) != 1 {
 		t.Errorf("回報裡出現了別人：%v", run.NameCopies)
 	}
-	if _, has := userRow(m, "u-del")["anonymizedAt"]; !has {
-		t.Errorf("做完沒有在墓碑上記 anonymizedAt")
+	// 剛改完的這一次不可以記成做完：墓碑寫上那一刻還在路上的請求，可能之後才把舊名字寫進來。
+	if _, has := userRow(m, "u-del")["anonymizedAt"]; has {
+		t.Errorf("改完當次就記成做完了")
 	}
+	// 模擬那種遲到的寫入：一列帶著舊名字的報名紀錄，在第一次掃完之後才出現。
+	m.tables["P_Registrations"] = append(m.tables["P_Registrations"],
+		map[string]types.AttributeValue{"registrationId": sAttr("reg-late"), "userId": sAttr("u-del"), "displayName": sAttr("名字-u-del")})
 
-	// 做過的人不再掃：第二次執行那幾張表一次都不可以被 Scan。
-	before := m.scans["P_Games"] + m.scans["P_ChatMessages"] + m.scans["P_Registrations"]
-	if _, err := RunAccountPurge(context.Background(), m, "P_", now, 20, false); err != nil {
+	scans := func() int { return m.scans["P_Games"] + m.scans["P_ChatMessages"] + m.scans["P_Registrations"] }
+	// 第二次（還沒過 settle）：把遲到的那一列改掉；有改到東西 ⇒ 仍然不記。
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(10*time.Minute), 20, false); err != nil {
 		t.Fatal(err)
 	}
-	if after := m.scans["P_Games"] + m.scans["P_ChatMessages"] + m.scans["P_Registrations"]; after != before {
-		t.Errorf("沒有新清除的人，名字副本那幾張表卻又被整表掃了（%d → %d）", before, after)
+	checkNameCopies(t, m, DeletedUserDisplayName)
+	if _, has := userRow(m, "u-del")["anonymizedAt"]; has {
+		t.Errorf("這一次有改到東西，卻記成做完了")
+	}
+	// 第三次（仍沒過 settle）：一列都沒改到，但墓碑還不夠久 ⇒ 不記。
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(20*time.Minute), 20, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := userRow(m, "u-del")["anonymizedAt"]; has {
+		t.Errorf("墓碑寫上還不到 settle 就記成做完了")
+	}
+	// 第四次（過了 settle）而這時又冒出一列舊名字：這一次有改到東西 ⇒ 還是不記。
+	// 少了這一格，「墓碑夠久」與「這次一列都沒改到」兩個條件分不開（實測：拿掉後者時前三次照樣全綠）。
+	m.tables["P_Registrations"] = append(m.tables["P_Registrations"],
+		map[string]types.AttributeValue{"registrationId": sAttr("reg-late2"), "userId": sAttr("u-del"), "displayName": sAttr("名字-u-del")})
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(accountAnonymizeSettle+time.Minute), 20, false); err != nil {
+		t.Fatal(err)
+	}
+	checkNameCopies(t, m, DeletedUserDisplayName)
+	if _, has := userRow(m, "u-del")["anonymizedAt"]; has {
+		t.Errorf("過了 settle 但這一次有改到東西，卻記成做完了")
+	}
+	// 第五次：一列都沒改到 ⇒ 記。
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(accountAnonymizeSettle+2*time.Minute), 20, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := userRow(m, "u-del")["anonymizedAt"]; !has {
+		t.Errorf("確認乾淨之後沒有記 anonymizedAt")
+	}
+	// 記了之後不再掃。
+	before := scans()
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(2*accountAnonymizeSettle), 20, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := scans(); after != before {
+		t.Errorf("已經確認乾淨的人，名字副本那幾張表卻又被整表掃了（%d → %d）", before, after)
+	}
+	// 每一次 Scan 都要是強一致讀取。
+	if m.inconsistentScans != 0 {
+		t.Errorf("有 %d 次對別人紀錄的 Scan 沒有開強一致讀取", m.inconsistentScans)
 	}
 }
 
@@ -171,8 +218,11 @@ func TestAnonymize_ListChangedUnderneathIsRetriedNextRun(t *testing.T) {
 	if _, has := userRow(m, "u-del")["anonymizedAt"]; has {
 		t.Errorf("有一列沒改成，卻被記成做完")
 	}
-	// 下一次補上。
+	// 下一次補上；再下一次（過了 settle、一列都沒改到）才記成做完。
 	if _, err := RunAccountPurge(context.Background(), m, "P_", now, 20, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunAccountPurge(context.Background(), m, "P_", now.Add(accountAnonymizeSettle+time.Minute), 20, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range playersOf(m.tables["P_Games"][1]) {

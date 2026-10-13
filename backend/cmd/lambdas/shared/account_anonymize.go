@@ -6,7 +6,7 @@ package shared
 //
 //	Games.hostDisplayName、Games.joinedPlayers[].displayName／pictureUrl／lineId
 //	Registrations.displayName
-//	Ratings.fromDisplayName、RatingComments.fromDisplayName
+//	RatingComments.fromDisplayName
 //	ChatMessages.SenderName
 //
 // 哪些不是副本、所以不必處理：貼文與留言的作者名字／大頭貼、報名與團局主辦人的大頭貼
@@ -14,8 +14,15 @@ package shared
 //
 // 這幾張表都沒有依使用者查詢的索引，只能整表掃。所以：
 //   - 每張表每次只掃一遍，一次處理名單上所有人；
-//   - 每個人只做一次：做完在墓碑上記 anonymizedAt，之後不再掃。
-//     墓碑寫上之後不會再有人把他的舊名字抄進新的列（抄的來源就是 Users，那裡已經是墓碑）。
+//   - 每個人做到「確認乾淨」為止：某一次掃完**一列都沒改到**、而且墓碑已經寫上超過
+//     accountAnonymizeSettle，才在墓碑上記 anonymizedAt，之後不再掃。
+//
+//     🔴 第一版是「改完當次就記」。Codex 覆驗（2026-10-13）指出那樣會留下舊名字卻標成做完：
+//        墓碑寫上的那一刻，可能有別人的請求已經讀到舊名字、還沒寫進去；
+//        而 Scan 預設是最終一致的，剛寫進去的列可能掃不到。
+//        所以改成至少掃兩次、隔開一段時間，第二次什麼都沒改到才算數；Scan 一律開強一致讀取。
+//        ⚠️ 強一致的 Scan 仍然不是快照：掃到一半才寫進來、而且落在已經掃過的那一段的列，這一次看不到 ——
+//           那正是要等下一次再確認的理由。
 //
 // 🔴 userId 本身沒有換掉。別人的紀錄仍然留著這個人的系統代號，只是它對不到名字了。
 
@@ -41,9 +48,14 @@ type nameCopyTable struct {
 }
 
 // 🔴 表名與鍵名抄自 stg 的 describe-table，欄位名抄自各自的 struct tag。
+// accountAnonymizeSettle：墓碑寫上之後至少過這麼久，「這次一列都沒改到」才算確認乾淨。
+// 墓碑寫上那一刻還在路上的請求（API Gateway 最長 29 秒、Lambda 最長 15 分鐘）這時候都結束了。
+const accountAnonymizeSettle = time.Hour
+
 var nameCopyTables = []nameCopyTable{
 	{"Registrations", []string{"registrationId"}, "userId", "displayName"},
-	{"Ratings", []string{"gameId", "fromUserId"}, "fromUserId", "fromDisplayName"},
+	// Ratings 不在這裡：真的寫入端（web_submit_rating）只在 RatingComments 存 fromDisplayName，
+	// Ratings 那張表沒有名字欄位（第一版照欄位名猜它有，覆驗指出是錯的）。
 	{"RatingComments", []string{"gameId", "fromUserId"}, "fromUserId", "fromDisplayName"},
 	{"ChatMessages", []string{"RoomID", "Timestamp#MessageID"}, "SenderID", "SenderName"},
 	{"Games", []string{"gameId"}, "hostUserId", "hostDisplayName"},
@@ -69,7 +81,7 @@ func anonymizeNameCopiesFor(ctx context.Context, db accountPurgeDB, prefix strin
 		table := prefix + t.name
 		var startKey map[string]types.AttributeValue
 		for {
-			out, serr := db.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(table), ExclusiveStartKey: startKey})
+			out, serr := db.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(table), ExclusiveStartKey: startKey, ConsistentRead: aws.Bool(true)})
 			if serr != nil {
 				return counts, incomplete, fmt.Errorf("%s: %w", t.name, serr)
 			}
@@ -85,7 +97,8 @@ func anonymizeNameCopiesFor(ctx context.Context, db accountPurgeDB, prefix strin
 
 				// ① 這一列「是這個人的」：把名字欄位換掉。
 				if owner, ok := item[t.userAttr].(*types.AttributeValueMemberS); ok && users[owner.Value] {
-					if cur, isS := item[t.nameAttr].(*types.AttributeValueMemberS); !isS || cur.Value != DeletedUserDisplayName {
+					// 只改「本來就有這個欄位」的列：沒有的話用 SET 會憑空替它長出一個名字欄位。
+					if cur, isS := item[t.nameAttr].(*types.AttributeValueMemberS); isS && cur.Value != DeletedUserDisplayName {
 						done, uerr := updateIfUnchanged(ctx, db, dryRun, &dynamodb.UpdateItemInput{
 							TableName: aws.String(table), Key: key,
 							UpdateExpression:          aws.String("SET #n = :name"),
@@ -228,6 +241,7 @@ func AnonymizePurgedAccounts(ctx context.Context, db accountPurgeDB, prefix stri
 		return nil, err
 	}
 	users := map[string]bool{}
+	purgedAt := map[string]int64{}
 	if dryRun {
 		for _, id := range previewAlso {
 			users[id] = true
@@ -246,6 +260,9 @@ func AnonymizePurgedAccounts(ctx context.Context, db accountPurgeDB, prefix stri
 		}
 		if isTombstone(got.Item) {
 			users[id] = true
+			if n, ok := got.Item["purgedAt"].(*types.AttributeValueMemberN); ok {
+				purgedAt[id], _ = strconv.ParseInt(n.Value, 10, 64)
+			}
 		}
 	}
 	counts, incomplete, err := anonymizeNameCopiesFor(ctx, db, prefix, users, dryRun)
@@ -253,7 +270,9 @@ func AnonymizePurgedAccounts(ctx context.Context, db accountPurgeDB, prefix stri
 		return counts, err
 	}
 	for id := range users {
-		if incomplete[id] {
+		// 記成做完的三個條件缺一不可：沒有列因為並行修改而沒改成、這一次一列都沒改到、墓碑已經夠久。
+		at, known := purgedAt[id]
+		if incomplete[id] || len(counts[id]) > 0 || !known || now.Unix()-at < int64(accountAnonymizeSettle/time.Second) {
 			continue
 		}
 		_, err := db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
