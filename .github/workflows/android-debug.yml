@@ -38,6 +38,13 @@ jobs:
       # 沒有這一項的話從 App 分享出去的連結全部打不開（frontend/utils/shareUrl.ts）。
       # ⚠️ 這是 debug／stg 的值。正式版要換成正式網域 —— 它烘進 binary 之後改不了。
       VITE_PUBLIC_WEB_ORIGIN: https://ryojaku-stg.boyplaymj.com
+      # 法務頁（隱私權／刪除帳號）的聯絡信箱與刪除頁網址還是佔位，`npm run build` 的 prebuild 會因此擋下
+      # （gen-legal.mjs --gate）。這支建的是 **debug／stg** 的 APK，本來就不是拿去送審的那一包，
+      # 所以放行 —— 與 `LEGAL_GATE_OFF=1 ./deploy-stg.sh stg` 同一個取捨。
+      # 🔴 正式版的建置流程**不可以**帶這一行：那道閘存在的理由就是不讓帶著佔位的法務頁出貨。
+      # （2026-10-13：這道閘自 09-13 接上之後，這個 workflow 第一次被觸發就死在這裡 ——
+      #   中間一個月沒有人推過，所以沒有人看到。）
+      LEGAL_GATE_OFF: "1"
 
     steps:
       - uses: actions/checkout@v4
