@@ -44,7 +44,7 @@ import type { Heard } from './voiceTaiAsr.ts';
  *    缺的是「有東西會去觸發它」：`sync_to_app.sh` 複製完不會跑 npm test，
  *    而複製這個動作本身不會提醒任何人回來 bump 這一行。
  */
-export const ENGINE_VERSION = 'sync:41c70631684d';
+export const ENGINE_VERSION = 'sync:4576be69259e';
 
 export interface CorrectionInput {
   /** 語音辨識與判台的結果（系統原判）。 */

@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.3.4",
+    "version": "0.3.5",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -183,7 +183,7 @@
       "id": "quanfeng_ke",
       "name": "圈風刻",
       "tai": 1,
-      "aliases": ["圈風", "場風刻"],
+      "aliases": ["圈風", "場風", "場風刻"],
       "asr_confusions": ["全風刻"],
       "category": "字牌",
       "note": "當前圈風(東/南/西/北)的刻子。"
@@ -192,7 +192,7 @@
       "id": "menfeng_ke",
       "name": "門風刻",
       "tai": 1,
-      "aliases": ["門風", "自風刻"],
+      "aliases": ["門風", "本風", "自風刻"],
       "asr_confusions": ["門封刻"],
       "category": "字牌",
       "note": "自己座位風的刻子。"
@@ -201,7 +201,7 @@
       "id": "sanyuan_ke",
       "name": "三元牌刻",
       "tai": 1,
-      "aliases": ["中發白刻", "箭刻", "元牌", "紅中", "發財", "青發", "白板", "白皮"],
+      "aliases": ["役牌", "中發白刻", "箭刻", "元牌", "紅中", "發財", "青發", "白板", "白皮"],
       "asr_confusions": ["三元克"],
       "category": "字牌",
       "per_unit": true,
@@ -286,22 +286,12 @@
       "excludes": ["zhenghua", "huagang"],
       "note": "集滿全部八張花;已含所有花,不再逐張/成組另計。"
     },
-    {
-      "id": "wuhua",
-      "name": "無花",
-      "tai": 1,
-      "aliases": ["沒有花", "免花"],
-      "asr_confusions": ["五花"],
-      "category": "花牌",
-      "excludes": ["zhenghua", "huagang", "baxian"],
-      "note": "胡牌時手上無任何花牌(部分家規才計);與任何花牌台種邏輯互斥,並存代表誤聽。"
-    },
 
     {
       "id": "gangshang_kaihua",
       "name": "槓上開花",
       "tai": 1,
-      "aliases": ["槓上自摸", "槓花"],
+      "aliases": ["槓上自摸", "嶺上開花", "嶺上自摸", "槓上", "槓花"],
       "asr_confusions": ["缸上開花", "槓上開華"],
       "category": "時機",
       "requires_self_draw": true,
@@ -326,16 +316,6 @@
       "category": "時機",
       "requires_self_draw": true,
       "note": "摸到牌牆最後一張並自摸胡。"
-    },
-    {
-      "id": "hedi_laoyu",
-      "name": "河底撈魚",
-      "tai": 1,
-      "aliases": ["河底", "河底撈", "最後一張胡"],
-      "asr_confusions": ["河底撈月", "和底撈魚"],
-      "category": "時機",
-      "requires_discard": true,
-      "note": "胡最後一張打出的牌(非自摸)。"
     },
 
     {
