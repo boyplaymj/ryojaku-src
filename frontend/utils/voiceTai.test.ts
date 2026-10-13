@@ -153,9 +153,10 @@ test('🔴 加入時移除互斥項（表裡沒寫的反方向也要擋）', () 
 });
 
 test('互斥不會誤傷無關的台種', () => {
-  let sel: Selection = { menqing_zimo: 1, wumenqi: 1 };
+  // 2026-10-13：原本拿 wumenqi（五門齊）當「無關的台種」，gameboy 定案把它從家規表拿掉 ⇒ 換成 pinghu。
+  let sel: Selection = { menqing_zimo: 1, pinghu: 1 };
   sel = toggle(TABLE, sel, 'dandiao');
-  assert.deepEqual(selectedIds(sel), ['dandiao', 'menqing_zimo', 'wumenqi']);
+  assert.deepEqual(selectedIds(sel), ['dandiao', 'menqing_zimo', 'pinghu']);
 });
 
 test('per_unit 步進：＋ 加份數、台數跟著走', () => {

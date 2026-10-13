@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -114,15 +114,6 @@
       "asr_confusions": ["讀聽", "獨廳", "單掉"],
       "category": "基本",
       "note": "只聽一張牌(邊張/坎張/單釣將)。"
-    },
-    {
-      "id": "wumenqi",
-      "name": "五門齊",
-      "tai": 1,
-      "aliases": ["五門", "麻將五門齊"],
-      "asr_confusions": ["五們齊"],
-      "category": "基本",
-      "note": "手牌含萬筒條+風牌+三元牌五種門類。"
     },
 
     {
@@ -260,24 +251,14 @@
     },
 
     {
-      "id": "hua",
+      "id": "zhenghua",
       "name": "花牌",
       "tai": 1,
-      "aliases": ["花", "一朵花"],
-      "asr_confusions": ["華"],
+      "aliases": ["正花", "對花", "本花", "花", "一朵花"],
+      "asr_confusions": ["爭花", "正華", "整花", "華"],
       "category": "花牌",
       "per_unit": true,
-      "note": "每張花1台(一般花);與正花區分。"
-    },
-    {
-      "id": "zhenghua",
-      "name": "正花",
-      "tai": 1,
-      "aliases": ["對花", "本花"],
-      "asr_confusions": ["爭花", "正華", "整花"],
-      "category": "花牌",
-      "per_unit": true,
-      "note": "花號對應自己座位風(如東家拿到春/梅…依規則)。"
+      "note": "每張花 1 台。2026-10-13 gameboy 定案：「花牌」與「正花」是同一件事，併成一項（id 沿用 zhenghua，兩種講法都認）。"
     },
     {
       "id": "huagang",
@@ -295,7 +276,7 @@
       "aliases": ["八仙", "集滿八花"],
       "asr_confusions": ["八仙過河"],
       "category": "花牌",
-      "excludes": ["hua", "zhenghua", "huagang"],
+      "excludes": ["zhenghua", "huagang"],
       "note": "集滿全部八張花;已含所有花,不再逐張/成組另計。"
     },
     {
@@ -305,7 +286,7 @@
       "aliases": ["沒有花", "免花"],
       "asr_confusions": ["五花"],
       "category": "花牌",
-      "excludes": ["hua", "zhenghua", "huagang", "baxian"],
+      "excludes": ["zhenghua", "huagang", "baxian"],
       "note": "胡牌時手上無任何花牌(部分家規才計);與任何花牌台種邏輯互斥,並存代表誤聽。"
     },
 
