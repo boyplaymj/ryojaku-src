@@ -470,19 +470,10 @@ func getRatingCommentsForUser(ctx context.Context, toUserID string) ([]*RatingCo
 	return comments, nil
 }
 
+// saveUser 把統計寫回 Users。不可以用 PutItem —— 那會把 shared.User 不認得的屬性
+// （pwChangedAt、deleteRequestedAt…）整個洗掉，理由見 shared.BuildUserFieldsUpdate。
 func saveUser(ctx context.Context, user *shared.User) error {
-	tableName := tablePrefix + "Users"
-	item, err := attributevalue.MarshalMap(user)
-	if err != nil {
-		return err
-	}
-
-	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(tableName),
-		Item:      item,
-	})
-
-	return err
+	return shared.UpdateUserFields(ctx, dynamoClient, tablePrefix, user)
 }
 
 // checkAndCloseGameIfAllRated checks if all players have completed rating and closes the game if so

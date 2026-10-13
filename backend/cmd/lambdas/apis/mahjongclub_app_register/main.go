@@ -187,24 +187,6 @@ func (d *Database) CheckEmailExists(ctx context.Context, email string) (bool, er
 	return result.Count > 0, nil
 }
 
-// SaveUser saves a user to DynamoDB
-func (d *Database) SaveUser(ctx context.Context, user *User) error {
-	tableName := d.cfg.TablePrefix + "Users"
-
-	av, err := attributevalue.MarshalMap(user)
-	if err != nil {
-		return fmt.Errorf("failed to marshal user: %w", err)
-	}
-
-	input := &dynamodb.PutItemInput{
-		TableName: &tableName,
-		Item:      av,
-	}
-
-	_, err = d.client.PutItem(ctx, input)
-	return err
-}
-
 // SaveUserWithIdentity 原子建立 user + 綁 email 登入身分 + 設 identityCount=1（單一 TransactWriteItems）。
 // AuthIdentities 的 attribute_not_exists(identity) 是 email 唯一性的權威閘：
 // 大小寫變體或併發同 email → 交易取消(idx1) → 呼叫端回 409。取代先前非致命 Bind 會留重複帳號的問題(Codex P2 High)。

@@ -185,19 +185,10 @@ func (d *Database) SaveGame(ctx context.Context, game *Game) error {
 	return err
 }
 
-// SaveUser saves a user to DynamoDB
+// SaveUser 把點數與統計寫回 Users。不可以用 PutItem —— 那會把 shared.User 不認得的屬性
+// （pwChangedAt、deleteRequestedAt…）整個洗掉，理由見 shared.BuildUserFieldsUpdate。
 func (d *Database) SaveUser(ctx context.Context, user *User) error {
-	item, err := attributevalue.MarshalMap(user)
-	if err != nil {
-		return fmt.Errorf("failed to marshal user: %w", err)
-	}
-
-	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: &[]string{d.cfg.GetTableName("Users")}[0],
-		Item:      item,
-	})
-
-	return err
+	return shared.UpdateUserFields(ctx, d.client, d.cfg.TablePrefix, user)
 }
 
 // Handler is the main Lambda handler
