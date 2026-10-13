@@ -1,0 +1,11 @@
+{
+  "packageName": "com.boyplaymj.ryojaku",
+  "environments": {
+    "stg": {
+      "host": "ryojaku-stg.boyplaymj.com",
+      "sha256CertFingerprints": [
+        "82:7F:81:8C:7C:10:DF:53:14:02:F6:00:B0:E2:A4:8D:3F:A8:62:DB:0E:0C:6E:3F:95:F4:4A:3E:D6:94:AF:3D"
+      ]
+    }
+  }
+}

@@ -242,6 +242,16 @@ else
   [ -s dist/.well-known/ryojaku-origin.json ] || { echo "❌ 產生器回 0 但錨點檔不在，中止" >&2; exit 1; }
 fi
 
+# ── Android App Links：/.well-known/assetlinks.json ─────────────────────────
+# Android 版的 Manifest 宣告要接 https://<公開網域>/ 的連結；系統會來這個網域抓這個檔核對套件名與簽章指紋。
+# 內容按環境不同（stg 認的是 repo 裡那把公開的測試簽章，絕不可出現在別的網域），所以在這裡產、不放進 public/。
+# preview 刻意沒有：Android 版的 Manifest 不接 preview 的網域，放了也沒有東西會來抓。
+rm -f dist/.well-known/assetlinks.json   # 不讓任何殘留的舊檔混進這次的產物
+if [ "$ENV" = stg ]; then
+  node scripts/gen-assetlinks.mjs --env "$ENV" --out dist/.well-known/assetlinks.json \
+    || { echo "❌ assetlinks.json 產不出來（見上方），中止部署 —— 少了它，Android 上的分享連結全部只會開瀏覽器" >&2; exit 1; }
+fi
+
 # 快取分三層。這裡跟 Console 版不同 —— 玩家端是 PWA，多了 sw.js / manifest 兩個「不可長快取」的檔：
 #   assets/**            檔名帶 hash → 可永久快取
 #   其餘圖檔（public/）  檔名不帶 hash → 只給 1 小時，改圖才不會卡住
