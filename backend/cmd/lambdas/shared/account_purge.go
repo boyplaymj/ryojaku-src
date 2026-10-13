@@ -8,7 +8,16 @@ package shared
 //    Registrations.displayName、Ratings.fromUserName、ChatMessages.SenderName、Community 的作者欄位。
 //    那幾張表沒有依使用者查詢的索引，要整表掃。在那一半做完之前，刪除頁第五條的
 //    「顯示名稱一律改為已刪除的使用者」只對**讀取時才去查 Users** 的畫面成立。
-// 🔴 也沒清的：AuthTokens（鍵是 tokenHash、沒有使用者索引，靠它自己的 TTL 過期）、S3 上的大頭貼檔案。
+// 🔴 也沒清的：S3 上的大頭貼檔案。
+// ⓘ 刻意保留的：RedeemCodes.usedBy。那是「這張兌換碼被用掉了」的庫存紀錄，不是這個人的資料；
+//    它留下的 userId 之後只對得到墓碑，與別人牌局裡留下的 userId 同一種處理。
+//
+// 2026-10-13 Codex 覆驗後補的三件事（原本各自會造成清不乾淨或清錯）：
+//   1. 用 GSI 找列的表（AuthIdentities／Notifications／ChatConnections）是最終一致的，
+//      而且別人的動作隨時可能再替這個人寫進新的通知 ⇒ 墓碑寫上之後的七天內每次都回頭再掃一遍
+//      （ResweepAccount）。原本墓碑一寫上就再也不會回來。
+//   2. AuthTokens、EventRedemptions 也存了 userId，原本不在清單裡。
+//   3. 逐列刪除時帶條件「這一列現在還是這個人的」。原本只帶主鍵，查完之後那一列若換了主人照刪。
 
 import (
 	"context"
@@ -34,23 +43,30 @@ const AccountPurgeMargin = time.Hour
 type accountPurgeTable struct {
 	name  string   // 不含前綴
 	index string   // 空字串＝直接查主鍵
-	pk    string   // 查詢用的分割鍵屬性名（各表大小寫不同）
+	pk    string   // 存使用者 id 的屬性名（各表大小寫不同）
 	keys  []string // 這張表自己的主鍵屬性，刪除時要用
+	scan  bool     // true＝這張表沒有依使用者查詢的鍵或索引，只能整表掃再過濾
 }
 
 // 🔴 鍵名是 2026-10-13 從 stg 的 describe-table 抄來的，不是從 Go struct（兩邊大小寫不一致）。
 //
 //	抄錯的後果是查不到或刪不掉而且不報錯，所以 verify_account_deletion_live.py 要有線上那一格。
 var accountPurgeTables = []accountPurgeTable{
-	{"AuthIdentities", "userId-index", "userId", []string{"identity"}},
-	{"PushSubscriptions_MultiDevice", "", "userId", []string{"userId", "deviceId"}},
-	{"Notifications", "userId-createdAt-index", "userId", []string{"notificationId"}},
-	{"Ledger", "", "userId", []string{"userId", "sortKey"}},
-	{"PointTransactions", "", "userId", []string{"userId", "sortKey"}},
-	{"DailyClaims", "", "userID", []string{"userID", "claimDate"}},
-	{"ChatUserMemberships", "", "UserID", []string{"UserID", "LastMessageTime#RoomID"}},
-	{"ChatConnections", "UserID-index", "UserID", []string{"ConnectionID"}},
+	{name: "AuthIdentities", index: "userId-index", pk: "userId", keys: []string{"identity"}},
+	{name: "PushSubscriptions_MultiDevice", pk: "userId", keys: []string{"userId", "deviceId"}},
+	{name: "Notifications", index: "userId-createdAt-index", pk: "userId", keys: []string{"notificationId"}},
+	{name: "Ledger", pk: "userId", keys: []string{"userId", "sortKey"}},
+	{name: "PointTransactions", pk: "userId", keys: []string{"userId", "sortKey"}},
+	{name: "DailyClaims", pk: "userID", keys: []string{"userID", "claimDate"}},
+	{name: "ChatUserMemberships", pk: "UserID", keys: []string{"UserID", "LastMessageTime#RoomID"}},
+	{name: "ChatConnections", index: "UserID-index", pk: "UserID", keys: []string{"ConnectionID"}},
+	// 下面兩張只能整表掃。量級：AuthTokens 有 TTL、列數很少；EventRedemptions 一人一活動一列。
+	{name: "AuthTokens", pk: "userId", keys: []string{"tokenHash"}, scan: true},
+	{name: "EventRedemptions", pk: "userId", keys: []string{"redemptionId"}, scan: true},
 }
+
+// AccountResweepWindow：墓碑寫上之後，這段時間內每次執行都回頭再清一遍各表。
+const AccountResweepWindow = 7 * 24 * time.Hour
 
 type accountPurgeDB interface {
 	Scan(ctx context.Context, in *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
@@ -178,23 +194,36 @@ func PurgeAccount(ctx context.Context, db accountPurgeDB, prefix, userID string,
 
 func purgeRowsOf(ctx context.Context, db accountPurgeDB, table string, t accountPurgeTable, userID string, dryRun bool) (int, error) {
 	n := 0
+	names := map[string]string{"#pk": t.pk}
+	values := map[string]types.AttributeValue{":u": &types.AttributeValueMemberS{Value: userID}}
 	var startKey map[string]types.AttributeValue
 	for {
-		in := &dynamodb.QueryInput{
-			TableName:                 aws.String(table),
-			KeyConditionExpression:    aws.String("#pk = :u"),
-			ExpressionAttributeNames:  map[string]string{"#pk": t.pk},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":u": &types.AttributeValueMemberS{Value: userID}},
-			ExclusiveStartKey:         startKey,
+		var items []map[string]types.AttributeValue
+		var lastKey map[string]types.AttributeValue
+		if t.scan {
+			out, err := db.Scan(ctx, &dynamodb.ScanInput{
+				TableName: aws.String(table), FilterExpression: aws.String("#pk = :u"),
+				ExpressionAttributeNames: names, ExpressionAttributeValues: values, ExclusiveStartKey: startKey,
+			})
+			if err != nil {
+				return n, err
+			}
+			items, lastKey = out.Items, out.LastEvaluatedKey
+		} else {
+			in := &dynamodb.QueryInput{
+				TableName: aws.String(table), KeyConditionExpression: aws.String("#pk = :u"),
+				ExpressionAttributeNames: names, ExpressionAttributeValues: values, ExclusiveStartKey: startKey,
+			}
+			if t.index != "" {
+				in.IndexName = aws.String(t.index)
+			}
+			out, err := db.Query(ctx, in)
+			if err != nil {
+				return n, err
+			}
+			items, lastKey = out.Items, out.LastEvaluatedKey
 		}
-		if t.index != "" {
-			in.IndexName = aws.String(t.index)
-		}
-		out, err := db.Query(ctx, in)
-		if err != nil {
-			return n, err
-		}
-		for _, item := range out.Items {
+		for _, item := range items {
 			key := map[string]types.AttributeValue{}
 			for _, k := range t.keys {
 				v, ok := item[k]
@@ -204,15 +233,82 @@ func purgeRowsOf(ctx context.Context, db accountPurgeDB, table string, t account
 				key[k] = v
 			}
 			if !dryRun {
-				if _, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(table), Key: key}); err != nil {
+				// 條件：刪的那一刻這一列還是這個人的。查到與刪掉之間它可能已經換了主人
+				// （例如同一條連線、同一張 token 的鍵被別人重用），那種就不刪、也不算數。
+				_, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+					TableName: aws.String(table), Key: key, ConditionExpression: aws.String("#pk = :u"),
+					ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+				})
+				if err != nil {
+					var ccf *types.ConditionalCheckFailedException
+					if errors.As(err, &ccf) {
+						continue
+					}
 					return n, err
 				}
 			}
 			n++
 		}
-		if len(out.LastEvaluatedKey) == 0 {
+		if len(lastKey) == 0 {
 			return n, nil
+		}
+		startKey = lastKey
+	}
+}
+
+// FindAccountsForResweep 回最近 AccountResweepWindow 內寫上墓碑的 userId（最多 limit 個）。
+func FindAccountsForResweep(ctx context.Context, db accountPurgeDB, prefix string, now time.Time, limit int) ([]string, error) {
+	var ids []string
+	var startKey map[string]types.AttributeValue
+	for len(ids) < limit {
+		out, err := db.Scan(ctx, &dynamodb.ScanInput{
+			TableName:            aws.String(prefix + "Users"),
+			FilterExpression:     aws.String("purgedAt >= :since"),
+			ProjectionExpression: aws.String("userId"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":since": &types.AttributeValueMemberN{Value: strconv.FormatInt(now.Add(-AccountResweepWindow).Unix(), 10)},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return ids, err
+		}
+		for _, item := range out.Items {
+			if id, ok := item["userId"].(*types.AttributeValueMemberS); ok && len(ids) < limit {
+				ids = append(ids, id.Value)
+			}
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
 		}
 		startKey = out.LastEvaluatedKey
 	}
+	return ids, nil
+}
+
+// ResweepAccount：對一個**已經寫上墓碑**的人再清一遍各表。不碰 Users。
+// 自己重讀一次確認真的是墓碑；不是的話一列都不動。
+func ResweepAccount(ctx context.Context, db accountPurgeDB, prefix, userID string, dryRun bool) (AccountPurgeReport, error) {
+	rep := AccountPurgeReport{UserID: userID, DryRun: dryRun, Rows: map[string]int{}}
+	got, err := db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(prefix + "Users"), ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+	})
+	if err != nil {
+		return rep, err
+	}
+	if _, purged := got.Item["purgedAt"].(*types.AttributeValueMemberN); !purged {
+		rep.Skipped = "not a tombstone"
+		return rep, nil
+	}
+	for _, t := range accountPurgeTables {
+		n, err := purgeRowsOf(ctx, db, prefix+t.name, t, userID, dryRun)
+		if n > 0 {
+			rep.Rows[t.name] = n
+		}
+		if err != nil {
+			return rep, fmt.Errorf("%s: %w", t.name, err)
+		}
+	}
+	return rep, nil
 }

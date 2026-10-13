@@ -61,6 +61,8 @@ func TestPurgeAccountLive(t *testing.T) {
 		"DailyClaims":                   {"userID", []string{"userID", "claimDate"}},
 		"ChatUserMemberships":           {"UserID", []string{"UserID", "LastMessageTime#RoomID"}},
 		"ChatConnections":               {"UserID", []string{"ConnectionID"}},
+		"AuthTokens":                    {"userId", []string{"tokenHash"}},
+		"EventRedemptions":              {"userId", []string{"redemptionId"}},
 	}
 	if len(liveSchema) != len(accountPurgeTables) {
 		t.Fatalf("liveSchema 有 %d 張表、accountPurgeTables 有 %d 張 ⇒ 有表沒被這條量到", len(liveSchema), len(accountPurgeTables))
@@ -92,20 +94,27 @@ func TestPurgeAccountLive(t *testing.T) {
 	userKey := func(u string) map[string]types.AttributeValue {
 		return map[string]types.AttributeValue{"userId": sAttr(u)}
 	}
-	cleanup := func() {
+	// 收尾：每一列都刪、刪除的錯誤要看、刪完每一列都讀回。
+	// 第一版只讀回 Users、而且把八張表的刪除錯誤吞掉（2026-10-13 Codex 覆驗指出）——
+	// 那樣寫的話「清乾淨了」這句話只對 Users 成立。
+	defer func() {
 		for _, u := range []string{del, keep} {
 			for _, tb := range accountPurgeTables {
-				_, _ = db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(prefix + tb.name), Key: keyOf(tb, rowFor(tb, u))})
+				key := keyOf(tb, rowFor(tb, u))
+				if _, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(prefix + tb.name), Key: key}); err != nil {
+					t.Errorf("🔴 清理：%s／%s 刪除失敗：%v", tb.name, u, err)
+				}
+				out, err := db.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(prefix + tb.name), Key: key, ConsistentRead: aws.Bool(true)})
+				if err != nil || len(out.Item) != 0 {
+					t.Errorf("🔴 清理：%s／%s 仍有殘留（err=%v）", tb.name, u, err)
+				}
 			}
-			_, _ = db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(prefix + "Users"), Key: userKey(u)})
-		}
-	}
-	defer func() {
-		cleanup()
-		for _, u := range []string{del, keep} {
+			if _, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(prefix + "Users"), Key: userKey(u)}); err != nil {
+				t.Errorf("🔴 清理：Users／%s 刪除失敗：%v", u, err)
+			}
 			out, err := db.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(prefix + "Users"), Key: userKey(u), ConsistentRead: aws.Bool(true)})
 			if err != nil || len(out.Item) != 0 {
-				t.Errorf("🔴 清理失敗，Users 殘留 %s（err=%v）", u, err)
+				t.Errorf("🔴 清理：Users 殘留 %s（err=%v）", u, err)
 			}
 		}
 	}()

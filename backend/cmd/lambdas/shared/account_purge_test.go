@@ -16,7 +16,8 @@ import (
 // memDB：記憶體裡的假 DynamoDB，只懂 account_purge.go 用到的那幾種請求形狀。
 type memDB struct {
 	tables     map[string][]map[string]types.AttributeValue
-	failDelete string // 刪到這張表時回錯誤
+	failDelete string                                                  // 刪到這張表時回錯誤
+	beforeDel  func(table string, key map[string]types.AttributeValue) // 每次 DeleteItem 套用條件之前呼叫
 	deletes    int
 	puts       int
 	scanCutoff int64
@@ -36,8 +37,30 @@ func attrEq(a, b types.AttributeValue) bool {
 }
 
 func (m *memDB) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
-	// 只支援 account_purge.go 那一條 FilterExpression；換了寫法就要回來改這裡。
-	if *in.FilterExpression != "deleteRequestedAt <= :cutoff AND attribute_not_exists(purgedAt)" {
+	// 只支援 account_purge.go 用到的三條 FilterExpression；換了寫法就要回來改這裡。
+	switch *in.FilterExpression {
+	case "#pk = :u":
+		pk := in.ExpressionAttributeNames["#pk"]
+		out := &dynamodb.ScanOutput{}
+		for _, item := range m.tables[*in.TableName] {
+			if v, ok := item[pk]; ok && attrEq(v, in.ExpressionAttributeValues[":u"]) {
+				out.Items = append(out.Items, item)
+			}
+		}
+		return out, nil
+	case "purgedAt >= :since":
+		since, _ := strconv.ParseInt(in.ExpressionAttributeValues[":since"].(*types.AttributeValueMemberN).Value, 10, 64)
+		out := &dynamodb.ScanOutput{}
+		for _, item := range m.tables[*in.TableName] {
+			if n, ok := item["purgedAt"].(*types.AttributeValueMemberN); ok {
+				if v, _ := strconv.ParseInt(n.Value, 10, 64); v >= since {
+					out.Items = append(out.Items, item)
+				}
+			}
+		}
+		return out, nil
+	case "deleteRequestedAt <= :cutoff AND attribute_not_exists(purgedAt)":
+	default:
 		return nil, errors.New("memDB 不認得這條 FilterExpression：" + *in.FilterExpression)
 	}
 	cutoff, _ := strconv.ParseInt(in.ExpressionAttributeValues[":cutoff"].(*types.AttributeValueMemberN).Value, 10, 64)
@@ -56,7 +79,14 @@ func (m *memDB) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynam
 	return out, nil
 }
 
+// 真的 DynamoDB 只能用鍵或索引 Query。這兩張表的 userId 不是鍵也沒有索引 ⇒ 對它們 Query 會被拒絕。
+// 假件不學這一點的話，「該整表掃的表改成用 Query」在這裡照樣通過（實測過，只有線上那條會紅）。
+var memDBNotQueryable = map[string]bool{"P_AuthTokens": true, "P_EventRedemptions": true}
+
 func (m *memDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	if memDBNotQueryable[*in.TableName] {
+		return nil, errors.New("ValidationException: Query condition missed key schema element（memDB）")
+	}
 	pk := in.ExpressionAttributeNames["#pk"]
 	out := &dynamodb.QueryOutput{}
 	for _, item := range m.tables[*in.TableName] {
@@ -93,8 +123,19 @@ func (m *memDB) DeleteItem(_ context.Context, in *dynamodb.DeleteItemInput, _ ..
 	if m.failDelete != "" && strings.HasSuffix(*in.TableName, m.failDelete) {
 		return nil, errors.New("boom")
 	}
+	if m.beforeDel != nil {
+		m.beforeDel(*in.TableName, in.Key)
+	}
 	if i := m.find(*in.TableName, in.Key); i >= 0 {
 		t := m.tables[*in.TableName]
+		if in.ConditionExpression != nil {
+			if *in.ConditionExpression != "#pk = :u" {
+				return nil, errors.New("memDB 不認得這條 ConditionExpression：" + *in.ConditionExpression)
+			}
+			if v, ok := t[i][in.ExpressionAttributeNames["#pk"]]; !ok || !attrEq(v, in.ExpressionAttributeValues[":u"]) {
+				return nil, &types.ConditionalCheckFailedException{}
+			}
+		}
 		m.tables[*in.TableName] = append(t[:i:i], t[i+1:]...)
 		m.deletes++
 	}
@@ -315,5 +356,74 @@ func TestFindAccountsDueForPurge_CutoffAndLimit(t *testing.T) {
 	// 送出去的 cutoff 必須是「現在 − 30 天 − 緩衝」。
 	if want := dueAt(); m.scanCutoff != want {
 		t.Errorf("cutoff = %d，應為 %d", m.scanCutoff, want)
+	}
+}
+
+// 查到之後、刪掉之前，那一列換了主人 ⇒ 不可以刪。
+// 用 ChatConnections 與 AuthTokens 各做一次：一張走索引、一張走整表掃，兩條路都要帶條件。
+func TestPurgeAccount_DoesNotDeleteRowThatChangedOwner(t *testing.T) {
+	for _, table := range []string{"ChatConnections", "AuthTokens"} {
+		m := seedPurgeDB(dueAt())
+		var pk string
+		for _, tb := range accountPurgeTables {
+			if tb.name == table {
+				pk = tb.pk
+			}
+		}
+		stolen := false
+		m.beforeDel = func(tbl string, key map[string]types.AttributeValue) {
+			if tbl == "P_"+table && !stolen {
+				m.tables[tbl][m.find(tbl, key)][pk] = sAttr("u-keep")
+				stolen = true
+			}
+		}
+		rep, err := PurgeAccount(context.Background(), m, "P_", "u-del", time.Unix(purgeNow, 0), false)
+		if err != nil {
+			t.Fatalf("%s：%v", table, err)
+		}
+		if !stolen {
+			t.Fatalf("%s：測試沒有真的換到主人 ⇒ 下面的讀數不算數", table)
+		}
+		// 旁邊那個人原本 2 列，加上換過來的 1 列。
+		if got := rowsOf(m, "P_"+table, pk, "u-keep"); got != 3 {
+			t.Errorf("%s：旁邊那個人剩 %d 列，應為 3（換了主人的那一列被刪掉了）", table, got)
+		}
+		if rep.Rows[table] != 1 {
+			t.Errorf("%s：回報刪了 %d 列，應為 1（沒刪成的不算）", table, rep.Rows[table])
+		}
+	}
+}
+
+// 墓碑寫上之後才出現的列（GSI 當時還沒同步、或別人後來才寫進來的通知）要被回掃清掉。
+func TestResweepAccount(t *testing.T) {
+	m := seedPurgeDB(dueAt())
+	now := time.Unix(purgeNow, 0)
+	if _, err := PurgeAccount(context.Background(), m, "P_", "u-del", now, false); err != nil {
+		t.Fatal(err)
+	}
+	late := map[string]types.AttributeValue{"userId": sAttr("u-del"), "notificationId": sAttr("late-1")}
+	m.tables["P_Notifications"] = append(m.tables["P_Notifications"], late)
+
+	ids, err := FindAccountsForResweep(context.Background(), m, "P_", now.Add(24*time.Hour), 10)
+	if err != nil || len(ids) != 1 || ids[0] != "u-del" {
+		t.Fatalf("一天後應該還在回掃名單裡：%v err=%v", ids, err)
+	}
+	rep, err := ResweepAccount(context.Background(), m, "P_", "u-del", false)
+	if err != nil || rep.Rows["Notifications"] != 1 || rowsOf(m, "P_Notifications", "userId", "u-del") != 0 {
+		t.Errorf("回掃沒有清掉後來才出現的那一列：rep=%+v err=%v", rep, err)
+	}
+	if got := attrNames(userRow(m, "u-del")); got != "deleteRequestedAt,displayName,purgedAt,userId" {
+		t.Errorf("回掃動到了墓碑：%s", got)
+	}
+	// 超過回掃期就不再列入。
+	ids, _ = FindAccountsForResweep(context.Background(), m, "P_", now.Add(AccountResweepWindow+time.Hour), 10)
+	if len(ids) != 0 {
+		t.Errorf("超過回掃期還在名單裡：%v", ids)
+	}
+	// 不是墓碑的人，回掃一列都不可以動 —— 這支沒有「到期」那道檢查，靠的就是這一條。
+	d := m.deletes
+	rep, err = ResweepAccount(context.Background(), m, "P_", "u-keep", false)
+	if err != nil || rep.Skipped != "not a tombstone" || m.deletes != d {
+		t.Errorf("對正常人回掃卻動了資料：rep=%+v err=%v", rep, err)
 	}
 }
