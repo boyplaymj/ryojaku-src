@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -200,7 +200,8 @@
       "aliases": ["中發白刻", "箭刻", "元牌"],
       "asr_confusions": ["三元克"],
       "category": "字牌",
-      "note": "中/發/白任一組刻子,每組1台。"
+      "per_unit": true,
+      "note": "中/發/白任一組刻子,每組1台。2026-10-13 gameboy 定案：可以算多組（例：紅中＋白板＝2），做法同花牌。⚠️ 沒有上限欄位，點到 3 組以上不會被擋（那其實是大三元）。"
     },
     {
       "id": "xiaosanyuan",
