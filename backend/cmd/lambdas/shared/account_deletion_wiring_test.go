@@ -182,3 +182,57 @@ func TestUserIDParamReadersHideDeletedAccounts(t *testing.T) {
 		}
 	}
 }
+
+// 碰了 Notifications 表、也會 PutItem，卻不需要先問「收件人是不是已刪除」的端點。每一筆都要寫理由。
+var notificationWritersExemptFromDeletedCheck = map[string]string{}
+
+// TestNotificationWritersSkipDeletedRecipients：每一支會替別人寫通知的端點，寫之前都要先問
+// shared.RecipientIsDeleted。通知的寫入沒有集中在一處（九支各有自己的函式），
+// 漏掉一支的後果是墓碑名下繼續長出新的列，而且沒有任何錯誤。
+//
+// 掃的是「同一個檔裡提到 Notifications 表、又有 PutItem」。
+// 🔴 照不到的：透過 shared.CreateNotification 寫的（那支自己在函式裡問）；
+//
+//	表名不是寫成 `Notifications"` 字面的；以及「有呼叫但問的不是收件人」。
+func TestNotificationWritersSkipDeletedRecipients(t *testing.T) {
+	root := ".."
+	files, err := filepath.Glob(filepath.Join(root, "apis", "*", "main.go"))
+	if err != nil || len(files) < 50 {
+		t.Fatalf("只掃到 %d 個檔（err=%v）⇒ 掃描範圍不對，下面的結論不算數", len(files), err)
+	}
+	guarded := 0
+	seen := map[string]bool{}
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		if !strings.Contains(src, `Notifications"`) || !strings.Contains(src, "PutItem") {
+			continue
+		}
+		rel := filepath.ToSlash(path[len(root)+1:])
+		seen[rel] = true
+		if _, ok := notificationWritersExemptFromDeletedCheck[rel]; ok {
+			continue
+		}
+		if !strings.Contains(src, "shared.RecipientIsDeleted(") {
+			t.Errorf("%s 會寫 Notifications，卻沒有呼叫 shared.RecipientIsDeleted，也不在例外清單裡", rel)
+			continue
+		}
+		guarded++
+	}
+	if guarded < 9 {
+		t.Fatalf("只找到 %d 支受守的通知寫入端（2026-10-13 是 9 支）⇒ 這條的掃法可能已經照不到東西", guarded)
+	}
+	for rel := range notificationWritersExemptFromDeletedCheck {
+		if !seen[rel] {
+			t.Errorf("例外 %s 已經不寫 Notifications，請從例外清單移除", rel)
+		}
+	}
+	// 共用的那一支自己問。
+	b, err := os.ReadFile("notification_utils.go")
+	if err != nil || !strings.Contains(string(b), "RecipientIsDeleted(ctx, p.UserID)") {
+		t.Errorf("shared.CreateNotification 沒有先問 RecipientIsDeleted（err=%v）", err)
+	}
+}

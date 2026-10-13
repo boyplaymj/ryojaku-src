@@ -243,6 +243,26 @@ func accountHiddenFromOthers(ctx context.Context, db accountDeletionDB, prefix, 
 	return true, nil
 }
 
+// RecipientIsDeleted：要替這個人寫通知之前問一次。true ⇒ 不要寫。
+//
+// 為什麼需要：通知是「別人的動作」寫給這個人的（有人按他貼文的讚、有人報名他的團）。
+// 帳號清除之後這些動作照樣發生，於是墓碑名下會一直長出新的列 —— 清除那一端只能事後回頭撿。
+//
+// 🔴 判不出來時回 false（照常寫）。這裡猜錯的代價是多一則之後會被回掃清掉的通知；
+//
+//	反過來猜錯的代價是活著的使用者在資料庫打嗝時收不到通知。
+//	所以它是減量，不是保證 —— 清除端的回掃（account_purge.go）仍然要留著。
+func RecipientIsDeleted(ctx context.Context, userID string) bool {
+	if userID == "" {
+		return false
+	}
+	hidden, err := AccountHiddenFromOthers(ctx, userID)
+	if err != nil {
+		return false
+	}
+	return hidden
+}
+
 // ── 停掉推播 ────────────────────────────────────────────────
 
 type pushSubscriptionDB interface {

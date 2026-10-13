@@ -25,6 +25,10 @@ type CreateNotificationParams struct {
 
 // CreateNotification creates a web notification and sends a push notification
 func CreateNotification(ctx context.Context, apiDB *dynamodb.Client, tablePrefix string, p CreateNotificationParams) error {
+	// 已提出刪除的人（停用中或已清除）不再替他寫通知、也不推播。
+	if RecipientIsDeleted(ctx, p.UserID) {
+		return nil
+	}
 	now := time.Now()
 	expiresAt := now.AddDate(0, 0, 30) // Default 30 days
 

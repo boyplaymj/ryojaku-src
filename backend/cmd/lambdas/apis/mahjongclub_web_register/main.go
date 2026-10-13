@@ -611,6 +611,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 // createWebNotification creates a web notification record in DynamoDB
 func createWebNotification(ctx context.Context, userID, notifType, title, message, gameID, gameName, fromUserID, fromUserName string) error {
+	// 已提出刪除的人（停用中或已清除）不再替他寫通知、也不推播（shared.RecipientIsDeleted）。
+	if shared.RecipientIsDeleted(ctx, userID) {
+		return nil
+	}
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Printf("Failed to load AWS config: %v", err)

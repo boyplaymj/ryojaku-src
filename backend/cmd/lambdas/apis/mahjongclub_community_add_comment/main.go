@@ -118,6 +118,10 @@ func (d *Database) GetUser(ctx context.Context, userID string) (*shared.User, er
 
 // CreateNotification creates an in-app notification
 func (d *Database) CreateNotification(ctx context.Context, notif *shared.Notification) error {
+	// 已提出刪除的人（停用中或已清除）不再替他寫通知、也不推播（shared.RecipientIsDeleted）。
+	if shared.RecipientIsDeleted(ctx, notif.UserID) {
+		return nil
+	}
 	tableName := d.cfg.GetTableName("Notifications")
 	item, err := attributevalue.MarshalMap(notif)
 	if err != nil {

@@ -283,6 +283,10 @@ func getGame(ctx context.Context, gameID string) (*shared.Game, error) {
 }
 
 func createWebNotification(ctx context.Context, userID, notifType, title, message, gameID, gameName, fromUserID, fromUserName string) error {
+	// 已提出刪除的人（停用中或已清除）不再替他寫通知、也不推播（shared.RecipientIsDeleted）。
+	if shared.RecipientIsDeleted(ctx, userID) {
+		return nil
+	}
 	now := time.Now()
 	expiresAt := now.AddDate(0, 0, 30) // Expire after 30 days
 
