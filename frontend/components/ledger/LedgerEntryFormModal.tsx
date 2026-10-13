@@ -127,7 +127,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
 
                                     <div className="grid grid-cols-2 gap-2">
                                         <AppInput
-                                            label="底台底注"
+                                            label="底台"
                                             placeholder="例如: 30/10"
                                             icon={Target}
                                             value={formData.stakes}
@@ -162,7 +162,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                         </div>
                                         <div>
                                             <span className="text-[0.6875rem] font-black uppercase tracking-[0.25em] text-neutral-400 block mb-1">結算狀態</span>
-                                            <h3 className="text-base font-black text-neutral-900 uppercase tracking-widest">損益統計</h3>
+                                            <h3 className="text-base font-black text-neutral-900 uppercase tracking-widest">分數統計</h3>
                                         </div>
                                     </div>
 
@@ -174,7 +174,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                                 ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20'
                                                 : 'bg-white/60 text-emerald-600 border border-emerald-200 hover:bg-emerald-50'}`}
                                         >
-                                            獲利
+                                            正分
                                         </button>
                                         <button
                                             onClick={() => setResultType('loss')}
@@ -182,7 +182,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                                 ? 'bg-red-500 text-white shadow-lg shadow-red-500/20'
                                                 : 'bg-white/60 text-red-500 border border-red-200 hover:bg-red-50'}`}
                                         >
-                                            虧損
+                                            負分
                                         </button>
                                     </div>
                                 </div>
@@ -202,7 +202,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="text-[0.625rem] font-black text-neutral-400 uppercase tracking-widest ml-1">實際金額</label>
+                                        <label className="text-[0.625rem] font-black text-neutral-400 uppercase tracking-widest ml-1">本場分數</label>
                                         <div className="relative">
                                             <input
                                                 type="number"
@@ -211,7 +211,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                                 className={`w-full bg-white border border-black/[0.04] py-4 px-5 text-xl font-black outline-none transition-all focus:border-neutral-900/10 ${resultType === 'win' ? 'text-emerald-500' : 'text-orange-500'}`}
                                                 placeholder="0"
                                             />
-                                            <div className="absolute right-5 top-1/2 -translate-y-1/2 text-[0.5625rem] font-black text-neutral-200 tracking-widest uppercase">元</div>
+                                            <div className="absolute right-5 top-1/2 -translate-y-1/2 text-[0.5625rem] font-black text-neutral-200 tracking-widest uppercase">分</div>
                                         </div>
                                     </div>
                                 </div>
@@ -228,7 +228,7 @@ const LedgerEntryFormModal: React.FC<LedgerEntryFormModalProps> = ({
                                         </div>
                                         <div className="w-[0.0938rem] h-8 bg-black/[0.03]"></div>
                                         <div className="text-right">
-                                            <p className="text-[0.5625rem] font-black text-neutral-300 uppercase tracking-widest mb-1">實際盈虧</p>
+                                            <p className="text-[0.5625rem] font-black text-neutral-300 uppercase tracking-widest mb-1">本場結果</p>
                                             <p className={`text-base font-black tracking-tight ${resultType === 'win' ? 'text-emerald-500' : 'text-orange-500'}`}>
                                                 {resultType === 'win' ? '+' : '-'}{Math.abs(formData.actualAmount || 0)}
                                             </p>

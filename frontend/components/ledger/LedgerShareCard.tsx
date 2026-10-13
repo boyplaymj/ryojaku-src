@@ -84,7 +84,7 @@ const LedgerShareCard = React.forwardRef<HTMLDivElement, LedgerShareCardProps>(
 
                             <div className="grid grid-cols-2 gap-3 mb-4">
                                 <div className="bg-neutral-50 p-3.5 rounded-lg border border-black/[0.01] text-left">
-                                    <p className="text-[0.5625rem] text-neutral-400 font-black uppercase tracking-widest mb-1">累計損益</p>
+                                    <p className="text-[0.5625rem] text-neutral-400 font-black uppercase tracking-widest mb-1">累計分數</p>
                                     <p className={`text-xl font-black tracking-tighter ${(computedSummary?.totalWinLoss || 0) >= 0 ? 'text-neutral-900' : 'text-orange-600'}`}>
                                         {(computedSummary?.totalWinLoss || 0) > 0 ? '+' : ''}{computedSummary?.totalWinLoss || 0}
                                         <span className="text-[0.625rem] font-black text-neutral-300 ml-1.5 tracking-widest uppercase">底台</span>

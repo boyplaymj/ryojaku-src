@@ -115,7 +115,7 @@ const ChatList: React.FC = () => {
         {
             roomId: 'mock-6',
             title: '測試房間 6 - 新莊休閒場',
-            lastMessage: '輕鬆小賭怡情',
+            lastMessage: '輕鬆打幾圈',
             address: '新北市新莊區中正路',
             rawStartTime: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
             lastMessageTime: '昨天',
