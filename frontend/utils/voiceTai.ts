@@ -117,11 +117,20 @@ function conflictsWith(table: FanTable, sel: Selection, id: string): string[] {
   });
 }
 
-/** 點一下格子：沒選就加入（份數 1，並移除互斥項）；已選就移除。 */
+/** 點一下格子：沒選就加入（份數 1，並移除互斥項）；已選就移除 —— 有份數上限的台種則是循環（見函式內）。 */
 export function toggle(table: FanTable, sel: Selection, id: string): Selection {
-  if (!fanById(table, id)) return sel;
+  const fan = fanById(table, id);
+  if (!fan) return sel;
   const next: Selection = { ...sel };
   if (next[id]) {
+    // 有份數上限的台種（花牌、三元牌刻）：再點一下是 +1，到上限再點才移除 ——
+    // 1 → 2 → 沒選 → 1 …（2026-10-13 gameboy 定案：「按一下一張花、按兩下兩張花、第三下變沒選」）。
+    // 沒有上限的（連莊）維持原本的行為：再點一下就移除，份數用 ＋／− 調。
+    const max = fan.per_unit ? fan.max_units : undefined;
+    if (typeof max === 'number' && next[id] < max) {
+      next[id] = next[id] + 1;
+      return next;
+    }
     delete next[id];
     return next;
   }

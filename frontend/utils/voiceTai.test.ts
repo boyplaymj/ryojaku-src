@@ -233,3 +233,23 @@ test('U2 反控：沒有上限的台種（連莊）照樣可以一直加', () =>
 test('U3 台數也封頂：就算份數被塞成 5，算出來仍是 2 份的台數', () => {
   assert.equal(taiOf(TABLE, 'sanyuan_ke', 5), taiOf(TABLE, 'sanyuan_ke', 2));
 });
+
+// ── 點格子循環（2026-10-13 gameboy：一下一張、兩下兩張、第三下沒選、第四下又一張）──
+test('U4 有上限的台種：點格子是 1 → 2 → 沒選 → 1', () => {
+  let sel: Selection = {};
+  sel = toggle(TABLE, sel, 'zhenghua');
+  assert.equal(sel.zhenghua, 1);
+  sel = toggle(TABLE, sel, 'zhenghua');
+  assert.equal(sel.zhenghua, 2);
+  sel = toggle(TABLE, sel, 'zhenghua');
+  assert.equal('zhenghua' in sel, false, '第三下要變成沒選');
+  sel = toggle(TABLE, sel, 'zhenghua');
+  assert.equal(sel.zhenghua, 1);
+  let k: Selection = toggle(TABLE, toggle(TABLE, {}, 'sanyuan_ke'), 'sanyuan_ke');
+  assert.equal(k.sanyuan_ke, 2, '三元牌刻同一套');
+});
+
+test('U5 反控：沒有上限的（連莊）與一般台種，再點一下就是移除', () => {
+  assert.deepEqual(toggle(TABLE, { lianzhuang: 1 }, 'lianzhuang'), {});
+  assert.deepEqual(toggle(TABLE, { menqing: 1 }, 'menqing'), {});
+});

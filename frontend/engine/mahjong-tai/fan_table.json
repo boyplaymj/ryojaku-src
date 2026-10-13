@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -30,6 +30,7 @@
     { "surfaces": ["連五拉五", "莊連五拉五", "連五", "拉五", "五連莊", "連莊五次", "連莊五"], "expand": [{ "id": "lianzhuang", "count": 5 }] },
     { "surfaces": ["一花莊", "二花莊", "三花莊", "四花莊", "花莊"], "expand": [{ "id": "zhenghua", "count": 1 }, { "id": "zhuang", "count": 1 }] },
     { "surfaces": ["一花", "二花", "三花", "四花"], "expand": [{ "id": "zhenghua", "count": 1 }] },
+    { "surfaces": ["雙一花", "雙二花", "雙三花", "雙四花", "雙花", "兩張花", "兩朵花"], "expand": [{ "id": "zhenghua", "count": 2 }] },
     { "surfaces": ["東風東", "南風南", "西風西", "北風北"], "expand": [{ "id": "quanfeng_ke", "count": 1 }, { "id": "menfeng_ke", "count": 1 }] }
   ],
 
@@ -200,7 +201,7 @@
       "id": "sanyuan_ke",
       "name": "三元牌刻",
       "tai": 1,
-      "aliases": ["中發白刻", "箭刻", "元牌"],
+      "aliases": ["中發白刻", "箭刻", "元牌", "紅中", "發財", "青發", "白板", "白皮"],
       "asr_confusions": ["三元克"],
       "category": "字牌",
       "per_unit": true,
