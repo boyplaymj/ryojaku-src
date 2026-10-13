@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -27,7 +27,10 @@
     { "surfaces": ["連二拉二", "莊連二拉二", "連二", "拉二", "二連莊", "連莊二次", "連莊二"], "expand": [{ "id": "lianzhuang", "count": 2 }] },
     { "surfaces": ["連三拉三", "莊連三拉三", "連三", "拉三", "三連莊", "連莊三次", "連莊三"], "expand": [{ "id": "lianzhuang", "count": 3 }] },
     { "surfaces": ["連四拉四", "莊連四拉四", "連四", "拉四", "四連莊", "連莊四次", "連莊四"], "expand": [{ "id": "lianzhuang", "count": 4 }] },
-    { "surfaces": ["連五拉五", "莊連五拉五", "連五", "拉五", "五連莊", "連莊五次", "連莊五"], "expand": [{ "id": "lianzhuang", "count": 5 }] }
+    { "surfaces": ["連五拉五", "莊連五拉五", "連五", "拉五", "五連莊", "連莊五次", "連莊五"], "expand": [{ "id": "lianzhuang", "count": 5 }] },
+    { "surfaces": ["一花莊", "二花莊", "三花莊", "四花莊", "花莊"], "expand": [{ "id": "zhenghua", "count": 1 }, { "id": "zhuang", "count": 1 }] },
+    { "surfaces": ["一花", "二花", "三花", "四花"], "expand": [{ "id": "zhenghua", "count": 1 }] },
+    { "surfaces": ["東風東", "南風南", "西風西", "北風北"], "expand": [{ "id": "quanfeng_ke", "count": 1 }, { "id": "menfeng_ke", "count": 1 }] }
   ],
 
   "ignores": [],
@@ -81,7 +84,7 @@
       "name": "門清自摸",
       "tai": 3,
       "aliases": ["門清一摸三", "不求人", "門前清自摸"],
-      "asr_confusions": ["門青自摸"],
+      "asr_confusions": ["門青自摸", "螢幕上"],
       "category": "基本",
       "excludes": ["menqing", "zimo"],
       "requires_self_draw": true,
@@ -150,7 +153,7 @@
       "name": "三暗刻",
       "tai": 2,
       "aliases": ["三暗"],
-      "asr_confusions": ["三案刻", "三暗克"],
+      "asr_confusions": ["三案刻", "三暗克", "專案科"],
       "category": "牌型",
       "note": "三組暗刻(未碰、藏在手內)。"
     },
@@ -265,7 +268,7 @@
       "id": "huagang",
       "name": "花槓",
       "tai": 2,
-      "aliases": ["湊一組花", "四花"],
+      "aliases": ["湊一組花"],
       "asr_confusions": ["花缸"],
       "category": "花牌",
       "note": "集滿春夏秋冬 或 梅蘭竹菊一組。"
