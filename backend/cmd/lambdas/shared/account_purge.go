@@ -15,11 +15,10 @@ package shared
 // 2026-10-13 Codex 覆驗後補的三件事（原本各自會造成清不乾淨或清錯）：
 //   1. 用 GSI 找列的表（AuthIdentities／Notifications／ChatConnections）是最終一致的，
 //      而且別人的動作隨時可能再替這個人寫進新的列（有人按他貼文的讚 ⇒ 一則新通知）
-//      ⇒ **每一次**執行都把所有墓碑回頭再清一遍（ResweepAccount）。原本墓碑一寫上就再也不會回來。
-//      第二輪覆驗（同日）把第一版的兩個洞補掉：只回掃七天（七天後的新通知沒人撿）、
-//      一次只取前 50 個而沒有游標（第 51 個以後可能永遠輪不到）。現在沒有期限、也沒有上限。
-//      ⚠️ 代價隨墓碑數線性成長（每個墓碑每次幾個查詢）。真正的解法是寫入端不要再替墓碑寫列，
-//         而通知的寫入散在九支 Lambda 裡，那是另一件事。
+//      ⇒ 墓碑要一直被回頭清（ResweepAccount），沒有期限。原本墓碑一寫上就再也不會回來。
+//      怎麼輪：每次挑最久沒掃的 accountResweepBatch 個（見那個變數的說明）。
+//      ⚠️ 真正的解法是寫入端不要再替墓碑寫列，而通知的寫入散在九支 Lambda 裡，那是另一件事。
+//         在那之前，墓碑越多、每個墓碑兩次回掃之間隔得越久。
 //   4. 整表掃的兩張表原本「每個人各掃一次」。改成每次執行各掃一次、一次處理所有人（RunAccountPurge）。
 //   2. AuthTokens、EventRedemptions 也存了 userId，原本不在清單裡。
 //   3. 逐列刪除時帶條件「這一列現在還是這個人的」。原本只帶主鍵，查完之後那一列若換了主人照刪。
@@ -28,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -76,6 +76,27 @@ type accountPurgeDB interface {
 	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 	PutItem(ctx context.Context, in *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
+// accountResweepBatch：一次執行最多回掃幾個墓碑。
+//
+// 第三輪覆驗（2026-10-13）指出「每次把所有墓碑從頭掃到尾」在墓碑夠多時會超過 Lambda 的時間上限，
+// 而下一次又從頭開始 ⇒ 排在後面的永遠輪不到（與第二輪「只取前 50 個」是同一個形狀，只是把 50 換成了時間）。
+// 改成：每個墓碑記著自己上次被回掃的時間（sweptAt），每次挑**最久沒掃的**這麼多個。
+// 不需要另外存游標，也沒有人會被餓死 —— N 個墓碑每 ceil(N/batch) 次執行輪到一次。
+// 是 var 不是 const：測試要把它調小。
+var accountResweepBatch = 200
+
+// accountPurgeDeadlineMargin：離 ctx 的期限剩不到這麼久就不再開始處理下一個人。
+const accountPurgeDeadlineMargin = 30 * time.Second
+
+// accountPurgeOutOfTime：是 var，測試才換得掉（真的去等期限的測試在忙碌的機器上會抖）。
+var accountPurgeOutOfTime = func(ctx context.Context) bool {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline) < accountPurgeDeadlineMargin
+	}
+	return false
 }
 
 // accountPurgeCutoff：deleteRequestedAt 不晚於這個值的才清。
@@ -267,8 +288,13 @@ func purgeRowsOf(ctx context.Context, db accountPurgeDB, table string, t account
 }
 
 // isTombstone：這一列是不是清除寫下的墓碑。
-// 不只看 purgedAt：有人手動把同一個 userId 救回成活帳號、卻沒把 purgedAt 拿掉時，
-// 只看那一欄會把活人的資料當成墓碑的殘留清掉。墓碑上不會有任何登入用的欄位。
+//
+// 🔴 承重的不變式只有一條：**purgedAt 只由清除寫上，寫上之後這個 userId 永遠不再是活帳號。**
+//
+//	清除不可逆；要「救回」已清除的人，做法是請他重新註冊，不是手動改這一列。
+//	下面那四個欄位的檢查只是順手多擋一種手動改壞的形狀（把 email 填回去卻沒拿掉 purgedAt），
+//	**它不是保護**：純 LINE 帳號本來就四個欄位都沒有（第三輪覆驗指出），那種形狀它分不出來。
+//	沒有任何檢查分得出「墓碑」與「被手動改回活帳號、卻留著 purgedAt 的列」—— 兩者的差別不在資料裡。
 func isTombstone(item map[string]types.AttributeValue) bool {
 	if _, ok := item["purgedAt"].(*types.AttributeValueMemberN); !ok {
 		return false
@@ -281,30 +307,66 @@ func isTombstone(item map[string]types.AttributeValue) bool {
 	return true
 }
 
-// FindTombstones 回所有墓碑的 userId。沒有期限、沒有上限，會把 Users 掃到底。
-func FindTombstones(ctx context.Context, db accountPurgeDB, prefix string) ([]string, error) {
-	var ids []string
+// findTombstonesOldestSweptFirst 回所有墓碑的 userId，最久沒被回掃的排前面（沒掃過的最前）。
+// 會把 Users 掃到底 —— 那是一次讀取，量級與 FindAccountsDueForPurge 相同。
+func findTombstonesOldestSweptFirst(ctx context.Context, db accountPurgeDB, prefix string) ([]string, error) {
+	type ref struct {
+		id      string
+		sweptAt int64
+	}
+	var refs []ref
 	var startKey map[string]types.AttributeValue
 	for {
 		out, err := db.Scan(ctx, &dynamodb.ScanInput{
 			TableName:            aws.String(prefix + "Users"),
 			FilterExpression:     aws.String("attribute_exists(purgedAt)"),
-			ProjectionExpression: aws.String("userId"),
+			ProjectionExpression: aws.String("userId, sweptAt"),
 			ExclusiveStartKey:    startKey,
 		})
 		if err != nil {
-			return ids, err
+			return nil, err
 		}
 		for _, item := range out.Items {
-			if id, ok := item["userId"].(*types.AttributeValueMemberS); ok {
-				ids = append(ids, id.Value)
+			id, ok := item["userId"].(*types.AttributeValueMemberS)
+			if !ok {
+				continue
 			}
+			r := ref{id: id.Value}
+			if n, ok := item["sweptAt"].(*types.AttributeValueMemberN); ok {
+				r.sweptAt, _ = strconv.ParseInt(n.Value, 10, 64)
+			}
+			refs = append(refs, r)
 		}
 		if len(out.LastEvaluatedKey) == 0 {
-			return ids, nil
+			break
 		}
 		startKey = out.LastEvaluatedKey
 	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].sweptAt != refs[j].sweptAt {
+			return refs[i].sweptAt < refs[j].sweptAt
+		}
+		return refs[i].id < refs[j].id
+	})
+	ids := make([]string, len(refs))
+	for i, r := range refs {
+		ids[i] = r.id
+	}
+	return ids, nil
+}
+
+// markSwept 在墓碑上記下這次回掃的時間。條件：它還是墓碑。
+func markSwept(ctx context.Context, db accountPurgeDB, prefix, userID string, now time.Time) error {
+	_, err := db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(prefix + "Users"),
+		Key:                 map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}},
+		UpdateExpression:    aws.String("SET sweptAt = :now"),
+		ConditionExpression: aws.String("attribute_exists(purgedAt)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(now.Unix(), 10)},
+		},
+	})
+	return err
 }
 
 // ResweepAccount：對一個**已經寫上墓碑**的人再清一遍各表。不碰 Users。
@@ -402,23 +464,31 @@ func purgeScanTablesFor(ctx context.Context, db accountPurgeDB, prefix string, u
 
 // AccountPurgeRun：一次排程執行的總結。
 type AccountPurgeRun struct {
-	DryRun  bool                 `json:"dryRun"`
-	Due     int                  `json:"due"`
-	Purged  int                  `json:"purged"`
-	Skipped int                  `json:"skipped"`
-	Failed  int                  `json:"failed"`
-	Reswept int                  `json:"reswept"` // 已是墓碑、這次回頭又清到東西的人數
-	Reports []AccountPurgeReport `json:"reports"`
+	DryRun     bool                 `json:"dryRun"`
+	Due        int                  `json:"due"`
+	Purged     int                  `json:"purged"`
+	Skipped    int                  `json:"skipped"`
+	Failed     int                  `json:"failed"`
+	Reswept    int                  `json:"reswept"`    // 已是墓碑、這次回頭又清到東西的人數
+	Swept      int                  `json:"swept"`      // 這次回掃了幾個墓碑（不論有沒有清到東西）
+	Tombstones int                  `json:"tombstones"` // 墓碑總數；遠大於 swept 代表一輪要好幾天
+	OutOfTime  bool                 `json:"outOfTime"`  // 時間不夠、沒做完就停了
+	Reports    []AccountPurgeReport `json:"reports"`
 }
 
 // RunAccountPurge：一次排程執行。排程只該呼叫這一支。
 //
-//  1. 找出到期的人（最多 maxUsers 個）與所有墓碑。
+//  1. 找出到期的人（最多 maxUsers 個），與最久沒回掃的墓碑（最多 accountResweepBatch 個）。
 //  2. 整表掃的那幾張各掃一次，把這些人的列清掉。這一步失敗就整次中止 —— 還沒有任何人被寫上墓碑。
 //  3. 到期的人：清其餘各表，最後寫墓碑（PurgeAccount 自己會再讀一次、再判一次到期）。
-//  4. 墓碑：其餘各表回頭再清一遍。
+//  4. 墓碑：其餘各表回頭再清一遍，清完記下 sweptAt。
 //
-// maxUsers 只限制第 3 步「新清幾個人」。回掃沒有上限：它只碰已經確認是墓碑的人。
+// 新到期的人排在回掃前面：時間不夠時被犧牲的是回掃（下次從最久沒掃的接著來），不是新的清除。
+//
+// ⚠️ 第 1 步的重讀到第 2 步的刪除之間有窗。這個窗裡唯一會出事的情形是有人**手動**把一個
+//
+//	已過期的帳號改回活的 —— 一般的撤回只在 30 天內可用，清除從 30 天又一小時後才開始，兩者不重疊。
+//	手動救回已到期的帳號不是支援的操作（見 isTombstone 的說明）；這個窗關不掉，只寫清楚。
 func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now time.Time, maxUsers int, dryRun bool) (AccountPurgeRun, error) {
 	run := AccountPurgeRun{DryRun: dryRun}
 	due, err := FindAccountsDueForPurge(ctx, db, prefix, now, maxUsers)
@@ -426,9 +496,13 @@ func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now 
 		return run, err
 	}
 	run.Due = len(due)
-	tombs, err := FindTombstones(ctx, db, prefix)
+	tombs, err := findTombstonesOldestSweptFirst(ctx, db, prefix)
 	if err != nil {
 		return run, err
+	}
+	run.Tombstones = len(tombs)
+	if len(tombs) > accountResweepBatch {
+		tombs = tombs[:accountResweepBatch]
 	}
 
 	// 整表掃那一步是照名單刪的，所以名單上的每個人都要先各自重讀確認過。
@@ -451,17 +525,22 @@ func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now 
 	if err != nil {
 		return run, err
 	}
+	// 整表掃刪掉的列數一律掛回那個人的報告上 —— 包括他後來被跳過的情形。
+	// 「被跳過」而整表掃已經刪了他的列，正是最需要被看見的那一種。
 	withScan := func(rep *AccountPurgeReport) {
 		for table, n := range scanCounts[rep.UserID] {
 			rep.Rows[table] = n
 		}
 	}
+	outOfTime := func() bool { return accountPurgeOutOfTime(ctx) }
 
 	for _, id := range due {
-		rep, perr := purgeAccount(ctx, db, prefix, id, now, dryRun, true)
-		if rep.Skipped == "" {
-			withScan(&rep)
+		if outOfTime() {
+			run.OutOfTime = true
+			break
 		}
+		rep, perr := purgeAccount(ctx, db, prefix, id, now, dryRun, true)
+		withScan(&rep)
 		run.Reports = append(run.Reports, rep)
 		switch {
 		case perr != nil:
@@ -473,14 +552,22 @@ func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now 
 		}
 	}
 	for _, id := range tombs {
+		if outOfTime() {
+			run.OutOfTime = true
+			break
+		}
 		rep, rerr := resweepAccount(ctx, db, prefix, id, dryRun, true)
-		if rep.Skipped == "" {
-			withScan(&rep)
+		withScan(&rep)
+		if rerr == nil && rep.Skipped == "" && !dryRun {
+			rerr = markSwept(ctx, db, prefix, id, now)
 		}
 		if rerr != nil {
 			run.Failed++
 			run.Reports = append(run.Reports, rep)
-		} else if len(rep.Rows) > 0 {
+			continue
+		}
+		run.Swept++
+		if len(rep.Rows) > 0 {
 			run.Reswept++
 			run.Reports = append(run.Reports, rep)
 		}

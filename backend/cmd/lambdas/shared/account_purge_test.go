@@ -23,6 +23,7 @@ type memDB struct {
 	scanCutoff int64
 	scans      map[string]int // 每張表被 Scan 幾次（不含翻頁；memDB 一次回完）
 	beforeGet  func(table string, key map[string]types.AttributeValue)
+	afterPut   func()
 }
 
 func sAttr(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
@@ -151,6 +152,22 @@ func (m *memDB) DeleteItem(_ context.Context, in *dynamodb.DeleteItemInput, _ ..
 	return &dynamodb.DeleteItemOutput{}, nil
 }
 
+func (m *memDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	// 只懂 markSwept 那一筆。
+	if *in.UpdateExpression != "SET sweptAt = :now" || *in.ConditionExpression != "attribute_exists(purgedAt)" {
+		return nil, errors.New("memDB 不認得這筆 UpdateItem：" + *in.UpdateExpression)
+	}
+	i := m.find(*in.TableName, in.Key)
+	if i < 0 {
+		return nil, &types.ConditionalCheckFailedException{}
+	}
+	if _, ok := m.tables[*in.TableName][i]["purgedAt"]; !ok {
+		return nil, &types.ConditionalCheckFailedException{}
+	}
+	m.tables[*in.TableName][i]["sweptAt"] = in.ExpressionAttributeValues[":now"]
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
 func (m *memDB) PutItem(_ context.Context, in *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
 	key := map[string]types.AttributeValue{"userId": in.Item["userId"]}
 	i := m.find(*in.TableName, key)
@@ -163,6 +180,9 @@ func (m *memDB) PutItem(_ context.Context, in *dynamodb.PutItemInput, _ ...func(
 	}
 	m.tables[*in.TableName][i] = in.Item
 	m.puts++
+	if m.afterPut != nil {
+		m.afterPut()
+	}
 	return &dynamodb.PutItemOutput{}, nil
 }
 
@@ -255,17 +275,10 @@ func TestPurgeAccount_DueUser(t *testing.T) {
 	if len(due) != 0 {
 		t.Errorf("清完之後還被列為待清：%v", due)
 	}
-	hidden, _ := accountHiddenFromOthers(context.Background(), purgeHiddenAdapter{m}, "P_", "u-del")
+	hidden, _ := accountHiddenFromOthers(context.Background(), m, "P_", "u-del")
 	if !hidden {
 		t.Errorf("墓碑應該繼續對別人隱藏")
 	}
-}
-
-// accountHiddenFromOthers 要的介面多一個 UpdateItem，這裡用不到。
-type purgeHiddenAdapter struct{ *memDB }
-
-func (purgeHiddenAdapter) UpdateItem(context.Context, *dynamodb.UpdateItemInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
-	return nil, errors.New("not used")
 }
 
 func TestPurgeAccount_NotDueIsUntouched(t *testing.T) {
@@ -483,11 +496,14 @@ func TestRunAccountPurge(t *testing.T) {
 	if got := attrNames(userRow(m, "u-del")); got != "deleteRequestedAt,displayName,purgedAt,userId" {
 		t.Errorf("到期的人沒有變成墓碑：%s", got)
 	}
+	if run.Tombstones != 60 || run.Swept != 60 {
+		t.Errorf("tombstones=%d swept=%d，應為 60／60", run.Tombstones, run.Swept)
+	}
 
-	// 第二次執行：沒有新到期的人、沒有新殘留 ⇒ 什麼都不刪。
+	// 第二次執行：沒有新到期的人、沒有新殘留 ⇒ 什麼都不刪；剛寫上的那個墓碑也進了回掃。
 	d := m.deletes
 	run, err = RunAccountPurge(context.Background(), m, "P_", now, 20, false)
-	if err != nil || run.Due != 0 || run.Reswept != 0 || m.deletes != d {
+	if err != nil || run.Due != 0 || run.Reswept != 0 || m.deletes != d || run.Swept != 61 {
 		t.Errorf("第二次不該再刪任何東西：run=%+v err=%v", run, err)
 	}
 }
@@ -537,5 +553,78 @@ func TestRunAccountPurge_RechecksEachUserBeforeScanTables(t *testing.T) {
 	}
 	if run.Purged != 0 || run.Skipped != 1 {
 		t.Errorf("run=%+v（應為 purged=0 skipped=1）", run)
+	}
+}
+
+// 墓碑比一次能回掃的多時：每次挑最久沒掃的那一批，幾次之後每個人都輪到過，沒有人被餓死。
+// 這是第二、三輪覆驗指出的同一個形狀（「只取前 50 個」「從頭掃到超時」）的尺。
+func TestRunAccountPurge_ResweepRotatesThroughAllTombstones(t *testing.T) {
+	old := accountResweepBatch
+	accountResweepBatch = 20
+	defer func() { accountResweepBatch = old }()
+
+	m := &memDB{tables: map[string][]map[string]types.AttributeValue{}}
+	for i := 0; i < 60; i++ {
+		id := "tomb-" + strconv.Itoa(100+i)
+		m.tables["P_Users"] = append(m.tables["P_Users"], map[string]types.AttributeValue{
+			"userId": sAttr(id), "displayName": sAttr(DeletedUserDisplayName),
+			"deleteRequestedAt": nAttr(1), "purgedAt": nAttr(2)})
+		m.tables["P_Notifications"] = append(m.tables["P_Notifications"],
+			map[string]types.AttributeValue{"userId": sAttr(id), "notificationId": sAttr("n-" + id)})
+	}
+	left := func() int { return len(m.tables["P_Notifications"]) }
+	for round, want := range []int{40, 20, 0} {
+		run, err := RunAccountPurge(context.Background(), m, "P_", time.Unix(purgeNow+int64(round)*86400, 0), 20, false)
+		if err != nil || run.Swept != 20 || run.Tombstones != 60 {
+			t.Fatalf("第 %d 次：run=%+v err=%v（每次應回掃 20 個）", round+1, run, err)
+		}
+		if left() != want {
+			t.Fatalf("第 %d 次之後還剩 %d 則通知，應為 %d ⇒ 回掃到的不是「最久沒掃的那一批」", round+1, left(), want)
+		}
+	}
+	// 試跑不可以記 sweptAt：記了的話，試跑會把真的回掃往後推。
+	m2 := &memDB{tables: map[string][]map[string]types.AttributeValue{"P_Users": {
+		{"userId": sAttr("t"), "displayName": sAttr(DeletedUserDisplayName), "deleteRequestedAt": nAttr(1), "purgedAt": nAttr(2)}}}}
+	if _, err := RunAccountPurge(context.Background(), m2, "P_", time.Unix(purgeNow, 0), 20, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := m2.tables["P_Users"][0]["sweptAt"]; has {
+		t.Errorf("試跑寫了 sweptAt")
+	}
+}
+
+// 時間快到了：新到期的人先做，被犧牲的是回掃；而且要講得出「沒做完」。
+func TestRunAccountPurge_NewPurgesComeBeforeResweepWhenOutOfTime(t *testing.T) {
+	m := seedPurgeDB(dueAt())
+	m.tables["P_Users"] = append(m.tables["P_Users"], map[string]types.AttributeValue{
+		"userId": sAttr("tomb-x"), "displayName": sAttr(DeletedUserDisplayName), "deleteRequestedAt": nAttr(1), "purgedAt": nAttr(2)})
+	m.tables["P_Notifications"] = append(m.tables["P_Notifications"],
+		map[string]types.AttributeValue{"userId": sAttr("tomb-x"), "notificationId": sAttr("late")})
+	// 「夠清一個人、不夠再回掃」：寫完墓碑之後時間就不夠了。不真的去等期限，換掉判定函式。
+	spent := false
+	m.afterPut = func() { spent = true }
+	old := accountPurgeOutOfTime
+	accountPurgeOutOfTime = func(context.Context) bool { return spent }
+	defer func() { accountPurgeOutOfTime = old }()
+	run, err := RunAccountPurge(context.Background(), m, "P_", time.Unix(purgeNow, 0), 20, false)
+	if err != nil || run.Purged != 1 || !run.OutOfTime || run.Swept != 0 {
+		t.Errorf("run=%+v err=%v（應為 purged=1、outOfTime、swept=0）", run, err)
+	}
+	if rowsOf(m, "P_Notifications", "userId", "tomb-x") != 1 {
+		t.Errorf("時間不夠時回掃應該被跳過，留到下一次")
+	}
+}
+
+// 真的那支判定：沒有期限 ⇒ 不算超時；離期限不到 margin ⇒ 算。
+func TestAccountPurgeOutOfTime(t *testing.T) {
+	if accountPurgeOutOfTime(context.Background()) {
+		t.Errorf("沒有期限卻判成超時")
+	}
+	far, c1 := context.WithTimeout(context.Background(), accountPurgeDeadlineMargin+time.Hour)
+	defer c1()
+	near, c2 := context.WithTimeout(context.Background(), accountPurgeDeadlineMargin/2)
+	defer c2()
+	if accountPurgeOutOfTime(far) || !accountPurgeOutOfTime(near) {
+		t.Errorf("far=%v near=%v，應為 false／true", accountPurgeOutOfTime(far), accountPurgeOutOfTime(near))
 	}
 }

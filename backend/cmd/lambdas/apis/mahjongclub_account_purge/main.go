@@ -64,8 +64,8 @@ func Handler(ctx context.Context) (shared.AccountPurgeRun, error) {
 	for _, rep := range run.Reports {
 		log.Printf("[account-purge] dryRun=%v user=%s skipped=%q rows=%v", dryRun, rep.UserID, rep.Skipped, rep.Rows)
 	}
-	log.Printf("[account-purge] dryRun=%v due=%d purged=%d skipped=%d reswept=%d failed=%d err=%v",
-		dryRun, run.Due, run.Purged, run.Skipped, run.Reswept, run.Failed, err)
+	log.Printf("[account-purge] dryRun=%v due=%d purged=%d skipped=%d tombstones=%d swept=%d reswept=%d failed=%d outOfTime=%v err=%v",
+		dryRun, run.Due, run.Purged, run.Skipped, run.Tombstones, run.Swept, run.Reswept, run.Failed, run.OutOfTime, err)
 	// 有人失敗就讓這次執行算失敗：沒清完的人下次還會被找到，但不可以安靜地過去。
 	return run, err
 }
