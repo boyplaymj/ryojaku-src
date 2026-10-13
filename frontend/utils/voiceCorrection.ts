@@ -76,9 +76,35 @@ export interface CorrectionPayload {
   removed: string[];
   unmatched: string;
   hadDiff: boolean;
+  /**
+   * 份數（2026-10-13）。花牌、連莊、三元牌刻這類「可以算好幾份」的台種，
+   * `parsed`／`corrected` 只存得下「有沒有」，存不下「幾份」——
+   * 系統判 3 連莊、使用者改成 2 連莊，在舊欄位上是一筆 `hadDiff=false`，完全看不到。
+   *
+   * 兩張表都是 id → 份數，**每一個** parsed／corrected 的 id 都列（一般台種就是 1），
+   * 不做「只列不是 1 的」那種省略：省略的話「這個台種是 1 份」與「舊版前端根本沒送」同形。
+   */
+  parsedUnits: Record<string, number>;
+  correctedUnits: Record<string, number>;
+  /**
+   * 兩邊都有的台種裡，有沒有份數不同的。
+   * 🔴 刻意**不併進 `hadDiff`**：`hadDiff` 是既有資料的分母定義（台種集合有沒有變），
+   *    改它的語意會讓新舊資料不可比。份數的差另外記一欄。
+   */
+  unitsChanged: boolean;
   rulesetVersion: string;
   engineVersion: string;
   ts: number;
+}
+
+/** id 清單 → 份數表。表裡沒有或不是正整數的一律當 1（一般台種本來就沒有份數）。 */
+function unitsOf(ids: string[], sel: Selection | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const id of ids) {
+    const n = sel ? sel[id] : undefined;
+    out[id] = Number.isInteger(n) && (n as number) >= 1 ? (n as number) : 1;
+  }
+  return out;
 }
 
 /**
@@ -112,6 +138,9 @@ export function buildCorrection(input: CorrectionInput): CorrectionPayload {
     ts: input.ts,
   });
 
+  const parsedUnits = unitsOf(rec.parsed, input.heard.sel);
+  const correctedUnits = unitsOf(rec.corrected, input.sel);
+
   return {
     kind: 'correction',
     text: rec.text,
@@ -122,6 +151,9 @@ export function buildCorrection(input: CorrectionInput): CorrectionPayload {
     removed: rec.removed,
     unmatched: rec.unmatched,
     hadDiff: rec.added.length > 0 || rec.removed.length > 0,
+    parsedUnits,
+    correctedUnits,
+    unitsChanged: rec.parsed.some((id: string) => id in correctedUnits && correctedUnits[id] !== parsedUnits[id]),
     rulesetVersion: input.rulesetVersion,
     engineVersion: ENGINE_VERSION,
     ts: input.ts,

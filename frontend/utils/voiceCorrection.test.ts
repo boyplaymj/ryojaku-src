@@ -96,8 +96,8 @@ test('D4c-5 payload 逐欄對齊後端 CorrectionRequest', () => {
   // ⚠️ `kind` 是 D4-g 加的。**多送**一欄後端也不會報錯（Go 忽略不認得的欄位）——
   //    所以前端先上、後端後上的中間態是安全的，但那段期間 kind 會被丟掉。
   assert.deepEqual(Object.keys(p).sort(), [
-    'added', 'corrected', 'engineVersion', 'hadDiff', 'kind', 'normalizedText',
-    'parsed', 'removed', 'rulesetVersion', 'text', 'ts', 'unmatched',
+    'added', 'corrected', 'correctedUnits', 'engineVersion', 'hadDiff', 'kind', 'normalizedText',
+    'parsed', 'parsedUnits', 'removed', 'rulesetVersion', 'text', 'ts', 'unitsChanged', 'unmatched',
   ]);
   assert.equal(p.text, '拉三元', 'text 是 ASR 原文，不是校正後的');
   assert.equal(p.normalizedText, '大三元', 'normalizedText 才是校正後的');
@@ -141,4 +141,45 @@ test('D4c-8 差異一律走引擎的 recordCorrection，順序穩定', () => {
   assert.deepEqual(p.corrected, ['dasanyuan', 'zimo'], 'corrected 要排序');
   assert.deepEqual(p.added, ['zimo']);
   assert.deepEqual(p.removed, ['menqing']);
+});
+
+// ── 份數（2026-10-13）──────────────────────────────────────────────────
+// 起因：gameboy 實測的 11 筆訂正裡，花牌與連莊「幾份」完全看不到 ——
+// parsed／corrected 只存 id。系統判 3、他改成 2，在舊欄位上是 hadDiff=false。
+
+test('D4c-9 🔴 只有份數不同：hadDiff 仍是 false，但 unitsChanged=true 且兩邊份數都在', () => {
+  const p = buildCorrection({
+    heard: heardOf({ raw: '連三拉三', normalized: '連莊 連莊 連莊', sel: { lianzhuang: 3 }, ids: ['lianzhuang'] }),
+    sel: { lianzhuang: 2 },
+    ts: 1756800000,
+    rulesetVersion: '0.3.2',
+  });
+  assert.equal(p.hadDiff, false, 'hadDiff 的定義不變：台種集合沒變');
+  assert.equal(p.unitsChanged, true);
+  assert.deepEqual(p.parsedUnits, { lianzhuang: 3 });
+  assert.deepEqual(p.correctedUnits, { lianzhuang: 2 });
+});
+
+test('D4c-10 反控：份數相同 ⇒ unitsChanged=false；一般台種也列出來（值是 1）', () => {
+  const p = buildCorrection({
+    heard: heardOf({ raw: '三花 門清', normalized: '花牌 門清', sel: { zhenghua: 1, menqing: 1 }, ids: ['menqing', 'zhenghua'] }),
+    sel: { zhenghua: 1, menqing: 1 },
+    ts: 1756800000,
+    rulesetVersion: '0.3.2',
+  });
+  assert.equal(p.unitsChanged, false);
+  assert.deepEqual(p.parsedUnits, { menqing: 1, zhenghua: 1 });
+  assert.deepEqual(p.correctedUnits, { menqing: 1, zhenghua: 1 });
+});
+
+test('D4c-11 新增／刪掉的台種不算「份數改變」（那是 hadDiff 的事），但份數照記', () => {
+  const p = buildCorrection({
+    heard: heardOf({ raw: '自摸', normalized: '自摸', sel: { zimo: 1 }, ids: ['zimo'] }),
+    sel: { zimo: 1, zhenghua: 2 },
+    ts: 1756800000,
+    rulesetVersion: '0.3.2',
+  });
+  assert.equal(p.hadDiff, true);
+  assert.equal(p.unitsChanged, false);
+  assert.deepEqual(p.correctedUnits, { zhenghua: 2, zimo: 1 });
 });

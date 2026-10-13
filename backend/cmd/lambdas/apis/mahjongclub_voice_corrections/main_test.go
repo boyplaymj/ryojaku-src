@@ -487,3 +487,77 @@ func TestAsrNbestFields(t *testing.T) {
 		}
 	}
 }
+
+// 份數（2026-10-13）：三種狀態要分得開 —— 沒送／送了／送了髒值。
+func TestUnitsFields(t *testing.T) {
+	yes := true
+	item, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "correction",
+		Parsed: []string{"lianzhuang", "zimo"}, Corrected: []string{"lianzhuang"},
+		ParsedUnits:    map[string]int{"lianzhuang": 3, "zimo": 1, "not_in_parsed": 5},
+		CorrectedUnits: map[string]int{"lianzhuang": 2, "zimo": 0},
+		UnitsChanged:   &yes,
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem failed: %v", err)
+	}
+	pu, ok := item["parsedUnits"].(*types.AttributeValueMemberM)
+	if !ok {
+		t.Fatalf("parsedUnits 應該是 M, got %#v", item["parsedUnits"])
+	}
+	if n, ok := pu.Value["lianzhuang"].(*types.AttributeValueMemberN); !ok || n.Value != "3" {
+		t.Fatalf("parsedUnits.lianzhuang 應該是 3, got %#v", pu.Value["lianzhuang"])
+	}
+	if _, present := pu.Value["not_in_parsed"]; present {
+		t.Fatalf("不在 parsed 裡的 id 不可以寫進 parsedUnits")
+	}
+	cu := item["correctedUnits"].(*types.AttributeValueMemberM)
+	if n, ok := cu.Value["lianzhuang"].(*types.AttributeValueMemberN); !ok || n.Value != "2" {
+		t.Fatalf("correctedUnits.lianzhuang 應該是 2, got %#v", cu.Value["lianzhuang"])
+	}
+	if _, present := cu.Value["zimo"]; present {
+		t.Fatalf("不在 corrected 裡、值又是 0 的項目不可以寫入")
+	}
+	if b, ok := item["unitsChanged"].(*types.AttributeValueMemberBOOL); !ok || !b.Value {
+		t.Fatalf("unitsChanged 應該是 true, got %#v", item["unitsChanged"])
+	}
+
+	// 反控①：舊版前端沒送 ⇒ 三欄都**不存在**（不是空表、不是 false）。
+	old, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "correction", Parsed: []string{"zimo"}, Corrected: []string{"zimo"},
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem(old) failed: %v", err)
+	}
+	for _, name := range []string{"parsedUnits", "correctedUnits", "unitsChanged"} {
+		if _, present := old[name]; present {
+			t.Fatalf("舊版前端沒送時 %q 不該存在", name)
+		}
+	}
+
+	// 反控②：事件列即使 body 帶了也不寫（同 added／removed 那條紀律）。
+	ev, err := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "asr", ParsedUnits: map[string]int{"zimo": 1}, UnitsChanged: &yes,
+	}, 1756800000)
+	if err != nil {
+		t.Fatalf("buildItem(asr) failed: %v", err)
+	}
+	for _, name := range []string{"parsedUnits", "correctedUnits", "unitsChanged"} {
+		if _, present := ev[name]; present {
+			t.Fatalf("事件列不可以帶 %q", name)
+		}
+	}
+
+	// unitsChanged=false 是真實讀數，要落庫成 false。
+	no := false
+	f, _ := buildItem("u1", CorrectionRequest{
+		TS: 1756800000, Kind: "correction", Parsed: []string{"zimo"}, Corrected: []string{"zimo"},
+		ParsedUnits: map[string]int{}, UnitsChanged: &no,
+	}, 1756800000)
+	if b, ok := f["unitsChanged"].(*types.AttributeValueMemberBOOL); !ok || b.Value {
+		t.Fatalf("unitsChanged=false 應該落庫成 false, got %#v", f["unitsChanged"])
+	}
+	if m, ok := f["parsedUnits"].(*types.AttributeValueMemberM); !ok || len(m.Value) != 0 {
+		t.Fatalf("空表應該落庫成空 M, got %#v", f["parsedUnits"])
+	}
+}

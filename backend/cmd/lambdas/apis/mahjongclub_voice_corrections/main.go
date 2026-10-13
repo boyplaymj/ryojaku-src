@@ -82,6 +82,38 @@ type CorrectionRequest struct {
 	// 而那正是這兩個欄位存在的唯一理由（Codex 覆驗 P1，2026-09-05）。
 	AsrCandidates *int `json:"asrCandidates"`
 	AsrChosen     *int `json:"asrChosen"`
+
+	// 份數（2026-10-13）：id → 幾份。只有 Kind=="correction" 用得到。
+	//
+	// 🔴 **nil 與空表是兩種事實**：nil ＝舊版前端沒送（Go 對缺欄的 map 給 nil），
+	// 空表 `{}` ＝新版前端送了、只是這次沒有任何台種。前者不寫欄位，後者寫一個空 M。
+	// 🔴 UnitsChanged 是指標，理由同上面的 N-best：false 是真實讀數，不可以與「沒送」同形。
+	ParsedUnits    map[string]int `json:"parsedUnits"`
+	CorrectedUnits map[string]int `json:"correctedUnits"`
+	UnitsChanged   *bool          `json:"unitsChanged"`
+}
+
+// maxUnits：一個台種最多幾份。連莊實務上個位數；超過這個值視為髒資料。
+const maxUnits = 99
+
+// setUnits 把份數表寫成 DDB 的 M。
+// 只收「id 在 allowed 裡、值在 1..maxUnits」的項目 —— 其餘丟掉而不是整列拒收：
+// 整列的訂正比這一欄值錢，而 body 是不可信輸入（可以塞任意鍵）。
+func setUnits(item map[string]types.AttributeValue, name string, units map[string]int, allowed []string) {
+	if units == nil {
+		return
+	}
+	ok := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		ok[id] = true
+	}
+	m := map[string]types.AttributeValue{}
+	for id, n := range units {
+		if ok[id] && n >= 1 && n <= maxUnits {
+			m[id] = &types.AttributeValueMemberN{Value: strconv.Itoa(n)}
+		}
+	}
+	item[name] = &types.AttributeValueMemberM{Value: m}
 }
 
 // 允許的 kind。🔴 這份名單與前端 utils/voiceTaiMetrics.ts 的 EVENT_KINDS 是**同一份契約**，
@@ -202,6 +234,11 @@ func buildItem(userID string, req CorrectionRequest, nowUnix int64) (map[string]
 		setStringSet(item, "corrected", req.Corrected)
 		setStringSet(item, "added", req.Added)
 		setStringSet(item, "removed", req.Removed)
+		setUnits(item, "parsedUnits", req.ParsedUnits, req.Parsed)
+		setUnits(item, "correctedUnits", req.CorrectedUnits, req.Corrected)
+		if req.UnitsChanged != nil {
+			item["unitsChanged"] = &types.AttributeValueMemberBOOL{Value: *req.UnitsChanged}
+		}
 	}
 
 	if kind == "asr" {
