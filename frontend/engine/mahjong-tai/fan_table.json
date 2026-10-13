@@ -2,7 +2,7 @@
   "meta": {
     "title": "台灣十六張麻將 台數對照表",
     "purpose": "語音輸入判讀 + 手動選台共用的資料源。台數為可設定預設值,各家規則不同請自行調整。",
-    "version": "0.3.5",
+    "version": "0.3.6",
     "ruleset": "台灣16張(常見家規預設)",
     "usage": {
       "asr_vocabulary": "把每個台種的 name + aliases + asr_confusions 全部灌進雲端 ASR 的自訂詞庫(phrase hints),提升黑話辨識率。",
@@ -249,7 +249,7 @@
     {
       "id": "ziyise",
       "name": "字一色",
-      "tai": 8,
+      "tai": 16,
       "aliases": ["字一", "全字"],
       "asr_confusions": ["自一色"],
       "category": "字牌",
@@ -341,7 +341,7 @@
     {
       "id": "renhu",
       "name": "人胡",
-      "tai": 8,
+      "tai": 16,
       "aliases": ["人糊"],
       "asr_confusions": ["仁胡", "人湖"],
       "category": "大牌",
