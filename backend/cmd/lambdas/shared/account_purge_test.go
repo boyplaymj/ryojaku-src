@@ -3,6 +3,7 @@ package shared
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,8 @@ type memDB struct {
 	scans      map[string]int // 每張表被 Scan 幾次（不含翻頁；memDB 一次回完）
 	beforeGet  func(table string, key map[string]types.AttributeValue)
 	afterPut   func()
+	beforeUpd  func(table string, key map[string]types.AttributeValue)
+	updates    int
 }
 
 func sAttr(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
@@ -58,10 +61,12 @@ func (m *memDB) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynam
 			}
 		}
 		return out, nil
-	case "attribute_exists(purgedAt)":
+	case "attribute_exists(purgedAt)", "attribute_exists(purgedAt) AND attribute_not_exists(anonymizedAt)":
 		out := &dynamodb.ScanOutput{}
 		for _, item := range m.tables[*in.TableName] {
-			if _, ok := item["purgedAt"]; ok {
+			_, purged := item["purgedAt"]
+			_, anon := item["anonymizedAt"]
+			if purged && (!anon || *in.FilterExpression == "attribute_exists(purgedAt)") {
 				out.Items = append(out.Items, item)
 			}
 		}
@@ -153,18 +158,36 @@ func (m *memDB) DeleteItem(_ context.Context, in *dynamodb.DeleteItemInput, _ ..
 }
 
 func (m *memDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
-	// 只懂 markSwept 那一筆。
-	if *in.UpdateExpression != "SET sweptAt = :now" || *in.ConditionExpression != "attribute_exists(purgedAt)" {
-		return nil, errors.New("memDB 不認得這筆 UpdateItem：" + *in.UpdateExpression)
+	if m.beforeUpd != nil {
+		m.beforeUpd(*in.TableName, in.Key)
 	}
 	i := m.find(*in.TableName, in.Key)
 	if i < 0 {
 		return nil, &types.ConditionalCheckFailedException{}
 	}
-	if _, ok := m.tables[*in.TableName][i]["purgedAt"]; !ok {
-		return nil, &types.ConditionalCheckFailedException{}
+	row := m.tables[*in.TableName][i]
+	// 只懂 account_purge.go／account_anonymize.go 用到的三種形狀。
+	switch {
+	case (*in.UpdateExpression == "SET sweptAt = :now" || *in.UpdateExpression == "SET anonymizedAt = :now") &&
+		*in.ConditionExpression == "attribute_exists(purgedAt)":
+		if _, ok := row["purgedAt"]; !ok {
+			return nil, &types.ConditionalCheckFailedException{}
+		}
+		row[strings.TrimSuffix(strings.TrimPrefix(*in.UpdateExpression, "SET "), " = :now")] = in.ExpressionAttributeValues[":now"]
+	case *in.UpdateExpression == "SET #n = :name" && *in.ConditionExpression == "#u = :u":
+		if v, ok := row[in.ExpressionAttributeNames["#u"]]; !ok || !attrEq(v, in.ExpressionAttributeValues[":u"]) {
+			return nil, &types.ConditionalCheckFailedException{}
+		}
+		row[in.ExpressionAttributeNames["#n"]] = in.ExpressionAttributeValues[":name"]
+	case *in.UpdateExpression == "SET joinedPlayers = :new" && *in.ConditionExpression == "joinedPlayers = :old":
+		if !reflect.DeepEqual(row["joinedPlayers"], in.ExpressionAttributeValues[":old"]) {
+			return nil, &types.ConditionalCheckFailedException{}
+		}
+		row["joinedPlayers"] = in.ExpressionAttributeValues[":new"]
+	default:
+		return nil, errors.New("memDB 不認得這筆 UpdateItem：" + *in.UpdateExpression)
 	}
-	m.tables[*in.TableName][i]["sweptAt"] = in.ExpressionAttributeValues[":now"]
+	m.updates++
 	return &dynamodb.UpdateItemOutput{}, nil
 }
 
@@ -493,7 +516,8 @@ func TestRunAccountPurge(t *testing.T) {
 			t.Errorf("%s 被整表掃了 %d 次，應為 1（處理了 61 個人）", tb.name, m.scans["P_"+tb.name])
 		}
 	}
-	if got := attrNames(userRow(m, "u-del")); got != "deleteRequestedAt,displayName,purgedAt,userId" {
+	// 走完整個排程流程之後，墓碑上多一個 anonymizedAt（名字副本處理過的記號）。
+	if got := attrNames(userRow(m, "u-del")); got != "anonymizedAt,deleteRequestedAt,displayName,purgedAt,userId" {
 		t.Errorf("到期的人沒有變成墓碑：%s", got)
 	}
 	if run.Tombstones != 60 || run.Swept != 60 {

@@ -4,10 +4,7 @@ package shared
 //
 // 這一支只清「這個人自己的資料」：用 userId 當鍵就找得到的那幾張表，加上把 Users 那一列換成墓碑。
 //
-// 🔴 還沒做的那一半：別人紀錄裡**存下來的副本** —— Games.hostDisplayName／joinedPlayers、
-//    Registrations.displayName、Ratings.fromUserName、ChatMessages.SenderName、Community 的作者欄位。
-//    那幾張表沒有依使用者查詢的索引，要整表掃。在那一半做完之前，刪除頁第五條的
-//    「顯示名稱一律改為已刪除的使用者」只對**讀取時才去查 Users** 的畫面成立。
+// 另一半 —— 別人紀錄裡**存下來的名字副本** —— 在 account_anonymize.go，由 RunAccountPurge 在墓碑寫上之後呼叫。
 // 🔴 也沒清的：S3 上的大頭貼檔案。
 // ⓘ 刻意保留的：RedeemCodes.usedBy。那是「這張兌換碼被用掉了」的庫存紀錄，不是這個人的資料；
 //    它留下的 userId 之後只對得到墓碑，與別人牌局裡留下的 userId 同一種處理。
@@ -464,16 +461,18 @@ func purgeScanTablesFor(ctx context.Context, db accountPurgeDB, prefix string, u
 
 // AccountPurgeRun：一次排程執行的總結。
 type AccountPurgeRun struct {
-	DryRun     bool                 `json:"dryRun"`
-	Due        int                  `json:"due"`
-	Purged     int                  `json:"purged"`
-	Skipped    int                  `json:"skipped"`
-	Failed     int                  `json:"failed"`
-	Reswept    int                  `json:"reswept"`    // 已是墓碑、這次回頭又清到東西的人數
-	Swept      int                  `json:"swept"`      // 這次回掃了幾個墓碑（不論有沒有清到東西）
-	Tombstones int                  `json:"tombstones"` // 墓碑總數；遠大於 swept 代表一輪要好幾天
-	OutOfTime  bool                 `json:"outOfTime"`  // 時間不夠、沒做完就停了
-	Reports    []AccountPurgeReport `json:"reports"`
+	DryRun     bool `json:"dryRun"`
+	Due        int  `json:"due"`
+	Purged     int  `json:"purged"`
+	Skipped    int  `json:"skipped"`
+	Failed     int  `json:"failed"`
+	Reswept    int  `json:"reswept"`    // 已是墓碑、這次回頭又清到東西的人數
+	Swept      int  `json:"swept"`      // 這次回掃了幾個墓碑（不論有沒有清到東西）
+	Tombstones int  `json:"tombstones"` // 墓碑總數；遠大於 swept 代表一輪要好幾天
+	OutOfTime  bool `json:"outOfTime"`  // 時間不夠、沒做完就停了
+	// NameCopies：這次在別人紀錄裡改掉的名字副本，userId → 「表.欄位」→ 列數（account_anonymize.go）。
+	NameCopies map[string]map[string]int `json:"nameCopies,omitempty"`
+	Reports    []AccountPurgeReport      `json:"reports"`
 }
 
 // RunAccountPurge：一次排程執行。排程只該呼叫這一支。
@@ -551,6 +550,20 @@ func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now 
 			run.Purged++
 		}
 	}
+	// 名字副本：一定在墓碑寫上之後（理由見 AnonymizePurgedAccounts）。失敗不擋後面的回掃，但這次執行算失敗。
+	var anonErr error
+	if outOfTime() {
+		run.OutOfTime = true
+	} else {
+		var wouldPurge []string
+		for _, rep := range run.Reports {
+			if rep.Skipped == "" {
+				wouldPurge = append(wouldPurge, rep.UserID)
+			}
+		}
+		run.NameCopies, anonErr = AnonymizePurgedAccounts(ctx, db, prefix, now, dryRun, wouldPurge)
+	}
+
 	for _, id := range tombs {
 		if outOfTime() {
 			run.OutOfTime = true
@@ -574,6 +587,9 @@ func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now 
 	}
 	if run.Failed > 0 {
 		return run, fmt.Errorf("%d 個帳號清除失敗", run.Failed)
+	}
+	if anonErr != nil {
+		return run, fmt.Errorf("名字副本處理失敗：%w", anonErr)
 	}
 	return run, nil
 }

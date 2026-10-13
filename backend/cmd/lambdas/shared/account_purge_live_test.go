@@ -191,3 +191,117 @@ func TestPurgeAccountLive(t *testing.T) {
 		t.Errorf("旁邊那個人的 Users 列被動到了：%s（err=%v）", attrNames(kept.Item), err)
 	}
 }
+
+// 名字副本處理對**真的 stg DynamoDB** 跑一次（同樣要 RYO_PURGE_LIVE=1）。
+//
+// 量的是 nameCopyTables 的表名、鍵名、欄位名在線上的表上行得通：整表掃得到、條件式更新寫得進去，
+// 包括 ChatMessages 那個帶 # 的鍵名與 Games 的成員名單（List of Map 的整份比對）。
+// 測試列照下面這份獨立的對照產生，不是照 nameCopyTables（理由同上一條測試）。
+// ⚠️ 量不到：線上真實資料的欄位是不是真的長這樣（這份對照也是我照 struct 抄的）。
+func TestAnonymizeNameCopiesLive(t *testing.T) {
+	if os.Getenv("RYO_PURGE_LIVE") != "1" {
+		t.Skip("沒設 RYO_PURGE_LIVE=1 ⇒ 不碰線上")
+	}
+	const prefix = "MahjongClubStg_"
+	ctx := context.Background()
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("ap-southeast-1"))
+	if err != nil {
+		t.Fatalf("設備：載不到 AWS 設定：%v", err)
+	}
+	db := dynamodb.NewFromConfig(cfg)
+	tag := strconv.FormatInt(time.Now().UnixNano(), 10)
+	del, keep := "ANONPROBE-DELETEME-"+tag+"-DEL", "ANONPROBE-DELETEME-"+tag+"-KEEP"
+
+	type liveRow struct {
+		table string
+		key   map[string]types.AttributeValue
+		item  map[string]types.AttributeValue
+	}
+	var rows []liveRow
+	add := func(table string, key, rest map[string]types.AttributeValue) {
+		item := map[string]types.AttributeValue{}
+		for k, v := range key {
+			item[k] = v
+		}
+		for k, v := range rest {
+			item[k] = v
+		}
+		rows = append(rows, liveRow{prefix + table, key, item})
+	}
+	for _, u := range []string{del, keep} {
+		add("Registrations", map[string]types.AttributeValue{"registrationId": sAttr("reg-" + u)},
+			map[string]types.AttributeValue{"userId": sAttr(u), "displayName": sAttr("名字-" + u)})
+		for _, tb := range []string{"Ratings", "RatingComments"} {
+			add(tb, map[string]types.AttributeValue{"gameId": sAttr("anonprobe-" + tag), "fromUserId": sAttr(u)},
+				map[string]types.AttributeValue{"fromDisplayName": sAttr("名字-" + u)})
+		}
+		add("ChatMessages", map[string]types.AttributeValue{"RoomID": sAttr("anonprobe-" + tag), "Timestamp#MessageID": sAttr("t-" + u)},
+			map[string]types.AttributeValue{"SenderID": sAttr(u), "SenderName": sAttr("名字-" + u)})
+	}
+	add("Games", map[string]types.AttributeValue{"gameId": sAttr("anonprobe-host-del-" + tag)}, map[string]types.AttributeValue{
+		"hostUserId": sAttr(del), "hostDisplayName": sAttr("名字-" + del), "joinedPlayers": playerList(player(keep, "名字-"+keep))})
+	add("Games", map[string]types.AttributeValue{"gameId": sAttr("anonprobe-host-keep-" + tag)}, map[string]types.AttributeValue{
+		"hostUserId": sAttr(keep), "hostDisplayName": sAttr("名字-" + keep),
+		"joinedPlayers": playerList(player(del, "名字-"+del), player(keep, "名字-"+keep))})
+
+	defer func() {
+		for _, r := range rows {
+			if _, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.table), Key: r.key}); err != nil {
+				t.Errorf("🔴 清理：%s 刪除失敗：%v", r.table, err)
+			}
+			out, err := db.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.table), Key: r.key, ConsistentRead: aws.Bool(true)})
+			if err != nil || len(out.Item) != 0 {
+				t.Errorf("🔴 清理：%s 仍有殘留（err=%v）", r.table, err)
+			}
+		}
+	}()
+	for _, r := range rows {
+		if _, err := db.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.table), Item: r.item}); err != nil {
+			t.Fatalf("設備：%s 寫不進測試列（鍵名或型別與線上不符？）：%v", r.table, err)
+		}
+	}
+
+	counts, incomplete, err := anonymizeNameCopiesFor(ctx, db, prefix, map[string]bool{del: true}, false)
+	if err != nil || len(incomplete) != 0 {
+		t.Fatalf("anonymize：counts=%v incomplete=%v err=%v", counts, incomplete, err)
+	}
+	for _, what := range []string{"Registrations.displayName", "Ratings.fromDisplayName", "RatingComments.fromDisplayName",
+		"ChatMessages.SenderName", "Games.hostDisplayName", "Games.joinedPlayers"} {
+		if counts[del][what] != 1 {
+			t.Errorf("%s 改了 %d 列，應為 1（全部：%v）", what, counts[del][what], counts[del])
+		}
+	}
+	if len(counts) != 1 {
+		t.Errorf("回報裡出現了別人：%v", counts)
+	}
+	// 讀回每一列：被刪的人的名字欄位都換了、旁邊那個人的都沒動。
+	nameAttrOf := map[string][2]string{"Registrations": {"userId", "displayName"}, "Ratings": {"fromUserId", "fromDisplayName"},
+		"RatingComments": {"fromUserId", "fromDisplayName"}, "ChatMessages": {"SenderID", "SenderName"}, "Games": {"hostUserId", "hostDisplayName"}}
+	for _, r := range rows {
+		out, err := db.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.table), Key: r.key, ConsistentRead: aws.Bool(true)})
+		if err != nil {
+			t.Fatalf("讀回 %s：%v", r.table, err)
+		}
+		cols := nameAttrOf[strings.TrimPrefix(r.table, prefix)]
+		owner := strOf(out.Item, cols[0])
+		want := "名字-" + owner
+		if owner == del {
+			want = DeletedUserDisplayName
+		}
+		if got := strOf(out.Item, cols[1]); got != want {
+			t.Errorf("%s／%s：%s=%q，應為 %q", r.table, owner, cols[1], got, want)
+		}
+		if _, isGame := out.Item["joinedPlayers"]; isGame {
+			for _, p := range playersOf(out.Item) {
+				id, _, hasLine := strOf(p, "userId"), 0, p["lineId"] != nil
+				wantName, wantLine := "名字-"+id, true
+				if id == del {
+					wantName, wantLine = DeletedUserDisplayName, false
+				}
+				if strOf(p, "displayName") != wantName || hasLine != wantLine {
+					t.Errorf("%s 的成員 %s：displayName=%q lineId 在不在=%v", r.table, id, strOf(p, "displayName"), hasLine)
+				}
+			}
+		}
+	}
+}
