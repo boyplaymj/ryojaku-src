@@ -59,8 +59,18 @@
    * 🔴 demo.html 的 ± 步進與手動補台也必須走這支,不可各自乘 —— 自己乘會漏掉 tai_base。
    */
   function fanTai(fan, units) {
-    var u = fan.per_unit ? (units || 1) : 1;
+    var u = capUnits(fan, fan.per_unit ? (units || 1) : 1);
     return fan.tai * u + (fan.tai_base || 0);
+  }
+
+  /**
+   * 份數上限(2026-10-13 gameboy 定案:花牌、三元牌刻最多 2)。
+   * 表上寫 max_units 的台種才有上限;沒寫就不設限(連莊沒有上限)。
+   * 🔴 與 fanTai 同理是唯一來源:判讀(parse)與修正盤的 ± 都走這支,不各自寫一個 2。
+   */
+  function capUnits(fan, units) {
+    var m = fan && fan.max_units;
+    return (typeof m === 'number' && m >= 1 && units > m) ? m : units;
   }
 
   /**
@@ -114,7 +124,7 @@
     // 組成候選命中
     var candidates = Object.keys(raw).map(function (id) {
       var fan = idx.byId[id];
-      var units = fan.per_unit ? raw[id].count : 1;
+      var units = capUnits(fan, fan.per_unit ? raw[id].count : 1);
       return {
         id: id,
         name: fan.name,
@@ -180,5 +190,6 @@
     };
   }
 
-  return { parse: parse, buildIndex: buildIndex, fanTai: fanTai };
+  return { parse: parse, buildIndex: buildIndex, fanTai: fanTai,
+    capUnits: capUnits };
 });

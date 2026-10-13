@@ -210,3 +210,26 @@ test('toggle／step 不改動傳入的物件（React state 要靠這個）', () 
   step(TABLE, frozen, 'menqing', 1);
   assert.deepEqual(frozen, orig, '原物件必須沒被改到');
 });
+
+// ── 份數上限（2026-10-13 gameboy：花牌、三元牌刻最多 2）──────────────────
+test('U1 有上限的台種：＋ 到 2 就停，再按不會變 3', () => {
+  let sel: Selection = toggle(TABLE, {}, 'sanyuan_ke');
+  sel = step(TABLE, sel, 'sanyuan_ke', 1);
+  assert.equal(sel.sanyuan_ke, 2);
+  sel = step(TABLE, sel, 'sanyuan_ke', 1);
+  assert.equal(sel.sanyuan_ke, 2, '三元牌刻最多 2（3 組就是大三元了）');
+  let h: Selection = { zhenghua: 2 };
+  h = step(TABLE, h, 'zhenghua', 1);
+  assert.equal(h.zhenghua, 2, '花牌最多 2');
+});
+
+test('U2 反控：沒有上限的台種（連莊）照樣可以一直加', () => {
+  let sel: Selection = { lianzhuang: 2 };
+  sel = step(TABLE, sel, 'lianzhuang', 1);
+  sel = step(TABLE, sel, 'lianzhuang', 1);
+  assert.equal(sel.lianzhuang, 4);
+});
+
+test('U3 台數也封頂：就算份數被塞成 5，算出來仍是 2 份的台數', () => {
+  assert.equal(taiOf(TABLE, 'sanyuan_ke', 5), taiOf(TABLE, 'sanyuan_ke', 2));
+});

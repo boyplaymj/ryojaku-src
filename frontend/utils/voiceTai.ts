@@ -40,6 +40,8 @@ export interface Fan {
   tai: number;
   tai_base?: number;
   per_unit?: boolean;
+  /** 份數上限（2026-10-13：花牌、三元牌刻是 2）。沒寫＝不設限（連莊）。封頂由引擎的 capUnits 做，這裡不另寫數字。 */
+  max_units?: number;
   excludes?: string[];
   category?: string;
 }
@@ -139,7 +141,9 @@ export function step(table: FanTable, sel: Selection, id: string, delta: number)
   const next: Selection = { ...sel };
   const u = (next[id] || 1) + delta;
   if (u <= 0) delete next[id];
-  else next[id] = u;
+  // 🔴 上限走引擎的 capUnits（與判讀、計台同一支），不在這裡自己寫 2 ——
+  //    各寫各的話，按 ＋ 的上限與語音判出來的上限會各自漂。
+  else next[id] = MahjongTai.capUnits(fan, u);
   return next;
 }
 
