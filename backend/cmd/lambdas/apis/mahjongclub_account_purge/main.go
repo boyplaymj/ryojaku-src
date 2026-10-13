@@ -28,16 +28,6 @@ import (
 // hardMaxUsers：PURGE_MAX_USERS 的上限。要抬高得改程式、過覆驗，不是改一個環境變數。
 const hardMaxUsers = 50
 
-type Summary struct {
-	DryRun  bool                        `json:"dryRun"`
-	Due     int                         `json:"due"`
-	Purged  int                         `json:"purged"`
-	Skipped int                         `json:"skipped"`
-	Failed  int                         `json:"failed"`
-	Reswept int                         `json:"reswept"` // 已是墓碑、這次回頭又清到東西的人數
-	Reports []shared.AccountPurgeReport `json:"reports"`
-}
-
 // parseMaxUsers：沒設用 20；不是正整數或超過 hardMaxUsers 都回錯誤（不悄悄夾成合法值）。
 func parseMaxUsers(raw string) (int, error) {
 	if raw == "" {
@@ -60,65 +50,24 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func Handler(ctx context.Context) (Summary, error) {
+func Handler(ctx context.Context) (shared.AccountPurgeRun, error) {
 	dryRun := os.Getenv("PURGE_DRY_RUN") != "false"
 	maxUsers, err := parseMaxUsers(os.Getenv("PURGE_MAX_USERS"))
 	if err != nil {
-		return Summary{DryRun: dryRun}, err
+		return shared.AccountPurgeRun{DryRun: dryRun}, err
 	}
-	prefix := getEnv("TABLE_PREFIX", "MahjongClub_")
-
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(getEnv("AWS_REGION", "ap-southeast-1")))
 	if err != nil {
-		return Summary{DryRun: dryRun}, err
+		return shared.AccountPurgeRun{DryRun: dryRun}, err
 	}
-	db := dynamodb.NewFromConfig(cfg)
-	now := time.Now()
-
-	sum := Summary{DryRun: dryRun}
-	due, err := shared.FindAccountsDueForPurge(ctx, db, prefix, now, maxUsers)
-	if err != nil {
-		return sum, err
+	run, err := shared.RunAccountPurge(ctx, dynamodb.NewFromConfig(cfg), getEnv("TABLE_PREFIX", "MahjongClub_"), time.Now(), maxUsers, dryRun)
+	for _, rep := range run.Reports {
+		log.Printf("[account-purge] dryRun=%v user=%s skipped=%q rows=%v", dryRun, rep.UserID, rep.Skipped, rep.Rows)
 	}
-	sum.Due = len(due)
-	for _, userID := range due {
-		rep, perr := shared.PurgeAccount(ctx, db, prefix, userID, now, dryRun)
-		sum.Reports = append(sum.Reports, rep)
-		switch {
-		case perr != nil:
-			sum.Failed++
-			log.Printf("[account-purge] 失敗 user=%s rows=%v: %v", userID, rep.Rows, perr)
-		case rep.Skipped != "":
-			sum.Skipped++
-			log.Printf("[account-purge] 跳過 user=%s：%s", userID, rep.Skipped)
-		default:
-			sum.Purged++
-			log.Printf("[account-purge] dryRun=%v user=%s rows=%v", dryRun, userID, rep.Rows)
-		}
-	}
-	// 回頭再掃最近寫上墓碑的人：GSI 當時還沒同步的列、墓碑之後才被別人寫進來的通知。
-	recent, err := shared.FindAccountsForResweep(ctx, db, prefix, now, hardMaxUsers)
-	if err != nil {
-		return sum, err
-	}
-	for _, userID := range recent {
-		rep, rerr := shared.ResweepAccount(ctx, db, prefix, userID, dryRun)
-		switch {
-		case rerr != nil:
-			sum.Failed++
-			log.Printf("[account-purge] 回掃失敗 user=%s rows=%v: %v", userID, rep.Rows, rerr)
-		case len(rep.Rows) > 0:
-			sum.Reswept++
-			sum.Reports = append(sum.Reports, rep)
-			log.Printf("[account-purge] 回掃 dryRun=%v user=%s rows=%v", dryRun, userID, rep.Rows)
-		}
-	}
-	log.Printf("[account-purge] dryRun=%v due=%d purged=%d skipped=%d reswept=%d failed=%d", dryRun, sum.Due, sum.Purged, sum.Skipped, sum.Reswept, sum.Failed)
+	log.Printf("[account-purge] dryRun=%v due=%d purged=%d skipped=%d reswept=%d failed=%d err=%v",
+		dryRun, run.Due, run.Purged, run.Skipped, run.Reswept, run.Failed, err)
 	// 有人失敗就讓這次執行算失敗：沒清完的人下次還會被找到，但不可以安靜地過去。
-	if sum.Failed > 0 {
-		return sum, fmt.Errorf("%d 個帳號清除失敗", sum.Failed)
-	}
-	return sum, nil
+	return run, err
 }
 
 func main() {

@@ -160,7 +160,13 @@ func TestPurgeAccountLive(t *testing.T) {
 		}
 	}
 
-	rep, err := PurgeAccount(ctx, db, prefix, del, now, false)
+	// 走排程實際走的那條路：整表掃的表先各掃一次（只給它這一個合成帳號），再清其餘各表並寫墓碑。
+	// 🔴 刻意不直接呼叫 RunAccountPurge：它會處理 stg 上**所有**到期的帳號，不只我的合成帳號。
+	scanned, err := purgeScanTablesFor(ctx, db, prefix, map[string]bool{del: true}, false)
+	if err != nil || scanned[del]["AuthTokens"] != 1 || scanned[del]["EventRedemptions"] != 1 {
+		t.Fatalf("整表掃：%v err=%v（兩張表各應刪 1 列）", scanned, err)
+	}
+	rep, err := purgeAccount(ctx, db, prefix, del, now, false, true)
 	if err != nil || rep.Skipped != "" || rep.Rows["Users"] != 1 {
 		t.Fatalf("清除：rep=%+v err=%v", rep, err)
 	}

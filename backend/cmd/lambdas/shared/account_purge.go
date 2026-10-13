@@ -14,8 +14,13 @@ package shared
 //
 // 2026-10-13 Codex 覆驗後補的三件事（原本各自會造成清不乾淨或清錯）：
 //   1. 用 GSI 找列的表（AuthIdentities／Notifications／ChatConnections）是最終一致的，
-//      而且別人的動作隨時可能再替這個人寫進新的通知 ⇒ 墓碑寫上之後的七天內每次都回頭再掃一遍
-//      （ResweepAccount）。原本墓碑一寫上就再也不會回來。
+//      而且別人的動作隨時可能再替這個人寫進新的列（有人按他貼文的讚 ⇒ 一則新通知）
+//      ⇒ **每一次**執行都把所有墓碑回頭再清一遍（ResweepAccount）。原本墓碑一寫上就再也不會回來。
+//      第二輪覆驗（同日）把第一版的兩個洞補掉：只回掃七天（七天後的新通知沒人撿）、
+//      一次只取前 50 個而沒有游標（第 51 個以後可能永遠輪不到）。現在沒有期限、也沒有上限。
+//      ⚠️ 代價隨墓碑數線性成長（每個墓碑每次幾個查詢）。真正的解法是寫入端不要再替墓碑寫列，
+//         而通知的寫入散在九支 Lambda 裡，那是另一件事。
+//   4. 整表掃的兩張表原本「每個人各掃一次」。改成每次執行各掃一次、一次處理所有人（RunAccountPurge）。
 //   2. AuthTokens、EventRedemptions 也存了 userId，原本不在清單裡。
 //   3. 逐列刪除時帶條件「這一列現在還是這個人的」。原本只帶主鍵，查完之後那一列若換了主人照刪。
 
@@ -64,9 +69,6 @@ var accountPurgeTables = []accountPurgeTable{
 	{name: "AuthTokens", pk: "userId", keys: []string{"tokenHash"}, scan: true},
 	{name: "EventRedemptions", pk: "userId", keys: []string{"redemptionId"}, scan: true},
 }
-
-// AccountResweepWindow：墓碑寫上之後，這段時間內每次執行都回頭再清一遍各表。
-const AccountResweepWindow = 7 * 24 * time.Hour
 
 type accountPurgeDB interface {
 	Scan(ctx context.Context, in *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
@@ -126,6 +128,11 @@ type AccountPurgeReport struct {
 // 順序是刻意的：先清各表，**最後**才把 Users 換成墓碑。反過來的話，墓碑一寫上就再也
 // 找不到這個人，而他在其他表的資料會永遠留著。
 func PurgeAccount(ctx context.Context, db accountPurgeDB, prefix, userID string, now time.Time, dryRun bool) (AccountPurgeReport, error) {
+	return purgeAccount(ctx, db, prefix, userID, now, dryRun, false)
+}
+
+// skipScan＝整表掃的那幾張已經由呼叫端（RunAccountPurge）一次掃完，這裡不要每個人再掃一次。
+func purgeAccount(ctx context.Context, db accountPurgeDB, prefix, userID string, now time.Time, dryRun, skipScan bool) (AccountPurgeReport, error) {
 	rep := AccountPurgeReport{UserID: userID, DryRun: dryRun, Rows: map[string]int{}}
 	usersTable := prefix + "Users"
 	userKey := map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: userID}}
@@ -155,6 +162,9 @@ func PurgeAccount(ctx context.Context, db accountPurgeDB, prefix, userID string,
 	}
 
 	for _, t := range accountPurgeTables {
+		if t.scan && skipScan {
+			continue
+		}
 		n, err := purgeRowsOf(ctx, db, prefix+t.name, t, userID, dryRun)
 		rep.Rows[t.name] = n
 		if err != nil {
@@ -256,39 +266,54 @@ func purgeRowsOf(ctx context.Context, db accountPurgeDB, table string, t account
 	}
 }
 
-// FindAccountsForResweep 回最近 AccountResweepWindow 內寫上墓碑的 userId（最多 limit 個）。
-func FindAccountsForResweep(ctx context.Context, db accountPurgeDB, prefix string, now time.Time, limit int) ([]string, error) {
+// isTombstone：這一列是不是清除寫下的墓碑。
+// 不只看 purgedAt：有人手動把同一個 userId 救回成活帳號、卻沒把 purgedAt 拿掉時，
+// 只看那一欄會把活人的資料當成墓碑的殘留清掉。墓碑上不會有任何登入用的欄位。
+func isTombstone(item map[string]types.AttributeValue) bool {
+	if _, ok := item["purgedAt"].(*types.AttributeValueMemberN); !ok {
+		return false
+	}
+	for _, live := range []string{"email", "passwordHash", "lineId", "encryptedLineId"} {
+		if _, has := item[live]; has {
+			return false
+		}
+	}
+	return true
+}
+
+// FindTombstones 回所有墓碑的 userId。沒有期限、沒有上限，會把 Users 掃到底。
+func FindTombstones(ctx context.Context, db accountPurgeDB, prefix string) ([]string, error) {
 	var ids []string
 	var startKey map[string]types.AttributeValue
-	for len(ids) < limit {
+	for {
 		out, err := db.Scan(ctx, &dynamodb.ScanInput{
 			TableName:            aws.String(prefix + "Users"),
-			FilterExpression:     aws.String("purgedAt >= :since"),
+			FilterExpression:     aws.String("attribute_exists(purgedAt)"),
 			ProjectionExpression: aws.String("userId"),
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":since": &types.AttributeValueMemberN{Value: strconv.FormatInt(now.Add(-AccountResweepWindow).Unix(), 10)},
-			},
-			ExclusiveStartKey: startKey,
+			ExclusiveStartKey:    startKey,
 		})
 		if err != nil {
 			return ids, err
 		}
 		for _, item := range out.Items {
-			if id, ok := item["userId"].(*types.AttributeValueMemberS); ok && len(ids) < limit {
+			if id, ok := item["userId"].(*types.AttributeValueMemberS); ok {
 				ids = append(ids, id.Value)
 			}
 		}
 		if len(out.LastEvaluatedKey) == 0 {
-			break
+			return ids, nil
 		}
 		startKey = out.LastEvaluatedKey
 	}
-	return ids, nil
 }
 
 // ResweepAccount：對一個**已經寫上墓碑**的人再清一遍各表。不碰 Users。
 // 自己重讀一次確認真的是墓碑；不是的話一列都不動。
 func ResweepAccount(ctx context.Context, db accountPurgeDB, prefix, userID string, dryRun bool) (AccountPurgeReport, error) {
+	return resweepAccount(ctx, db, prefix, userID, dryRun, false)
+}
+
+func resweepAccount(ctx context.Context, db accountPurgeDB, prefix, userID string, dryRun, skipScan bool) (AccountPurgeReport, error) {
 	rep := AccountPurgeReport{UserID: userID, DryRun: dryRun, Rows: map[string]int{}}
 	got, err := db.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(prefix + "Users"), ConsistentRead: aws.Bool(true),
@@ -297,11 +322,14 @@ func ResweepAccount(ctx context.Context, db accountPurgeDB, prefix, userID strin
 	if err != nil {
 		return rep, err
 	}
-	if _, purged := got.Item["purgedAt"].(*types.AttributeValueMemberN); !purged {
+	if !isTombstone(got.Item) {
 		rep.Skipped = "not a tombstone"
 		return rep, nil
 	}
 	for _, t := range accountPurgeTables {
+		if t.scan && skipScan {
+			continue
+		}
 		n, err := purgeRowsOf(ctx, db, prefix+t.name, t, userID, dryRun)
 		if n > 0 {
 			rep.Rows[t.name] = n
@@ -311,4 +339,167 @@ func ResweepAccount(ctx context.Context, db accountPurgeDB, prefix, userID strin
 		}
 	}
 	return rep, nil
+}
+
+// purgeScanTablesFor：整表掃的那幾張，每張掃一次，把屬於 users 裡任何一個人的列刪掉。
+// 回 userId → 表名 → 列數。
+func purgeScanTablesFor(ctx context.Context, db accountPurgeDB, prefix string, users map[string]bool, dryRun bool) (map[string]map[string]int, error) {
+	counts := map[string]map[string]int{}
+	if len(users) == 0 {
+		return counts, nil
+	}
+	for _, t := range accountPurgeTables {
+		if !t.scan {
+			continue
+		}
+		table := prefix + t.name
+		var startKey map[string]types.AttributeValue
+		for {
+			out, err := db.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(table), ExclusiveStartKey: startKey})
+			if err != nil {
+				return counts, fmt.Errorf("%s: %w", t.name, err)
+			}
+			for _, item := range out.Items {
+				owner, ok := item[t.pk].(*types.AttributeValueMemberS)
+				if !ok || !users[owner.Value] {
+					continue
+				}
+				key := map[string]types.AttributeValue{}
+				for _, k := range t.keys {
+					v, has := item[k]
+					if !has {
+						return counts, fmt.Errorf("%s: row is missing key attribute %q", t.name, k)
+					}
+					key[k] = v
+				}
+				if !dryRun {
+					_, err := db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+						TableName: aws.String(table), Key: key, ConditionExpression: aws.String("#pk = :u"),
+						ExpressionAttributeNames:  map[string]string{"#pk": t.pk},
+						ExpressionAttributeValues: map[string]types.AttributeValue{":u": owner},
+					})
+					if err != nil {
+						var ccf *types.ConditionalCheckFailedException
+						if errors.As(err, &ccf) {
+							continue
+						}
+						return counts, fmt.Errorf("%s: %w", t.name, err)
+					}
+				}
+				if counts[owner.Value] == nil {
+					counts[owner.Value] = map[string]int{}
+				}
+				counts[owner.Value][t.name]++
+			}
+			if len(out.LastEvaluatedKey) == 0 {
+				break
+			}
+			startKey = out.LastEvaluatedKey
+		}
+	}
+	return counts, nil
+}
+
+// AccountPurgeRun：一次排程執行的總結。
+type AccountPurgeRun struct {
+	DryRun  bool                 `json:"dryRun"`
+	Due     int                  `json:"due"`
+	Purged  int                  `json:"purged"`
+	Skipped int                  `json:"skipped"`
+	Failed  int                  `json:"failed"`
+	Reswept int                  `json:"reswept"` // 已是墓碑、這次回頭又清到東西的人數
+	Reports []AccountPurgeReport `json:"reports"`
+}
+
+// RunAccountPurge：一次排程執行。排程只該呼叫這一支。
+//
+//  1. 找出到期的人（最多 maxUsers 個）與所有墓碑。
+//  2. 整表掃的那幾張各掃一次，把這些人的列清掉。這一步失敗就整次中止 —— 還沒有任何人被寫上墓碑。
+//  3. 到期的人：清其餘各表，最後寫墓碑（PurgeAccount 自己會再讀一次、再判一次到期）。
+//  4. 墓碑：其餘各表回頭再清一遍。
+//
+// maxUsers 只限制第 3 步「新清幾個人」。回掃沒有上限：它只碰已經確認是墓碑的人。
+func RunAccountPurge(ctx context.Context, db accountPurgeDB, prefix string, now time.Time, maxUsers int, dryRun bool) (AccountPurgeRun, error) {
+	run := AccountPurgeRun{DryRun: dryRun}
+	due, err := FindAccountsDueForPurge(ctx, db, prefix, now, maxUsers)
+	if err != nil {
+		return run, err
+	}
+	run.Due = len(due)
+	tombs, err := FindTombstones(ctx, db, prefix)
+	if err != nil {
+		return run, err
+	}
+
+	// 整表掃那一步是照名單刪的，所以名單上的每個人都要先各自重讀確認過。
+	users := map[string]bool{}
+	for _, list := range [][]string{due, tombs} {
+		for _, id := range list {
+			got, err := db.GetItem(ctx, &dynamodb.GetItemInput{
+				TableName: aws.String(prefix + "Users"), ConsistentRead: aws.Bool(true),
+				Key: map[string]types.AttributeValue{"userId": &types.AttributeValueMemberS{Value: id}},
+			})
+			if err != nil {
+				return run, err
+			}
+			if isTombstone(got.Item) || accountDueForPurge(got.Item, now) {
+				users[id] = true
+			}
+		}
+	}
+	scanCounts, err := purgeScanTablesFor(ctx, db, prefix, users, dryRun)
+	if err != nil {
+		return run, err
+	}
+	withScan := func(rep *AccountPurgeReport) {
+		for table, n := range scanCounts[rep.UserID] {
+			rep.Rows[table] = n
+		}
+	}
+
+	for _, id := range due {
+		rep, perr := purgeAccount(ctx, db, prefix, id, now, dryRun, true)
+		if rep.Skipped == "" {
+			withScan(&rep)
+		}
+		run.Reports = append(run.Reports, rep)
+		switch {
+		case perr != nil:
+			run.Failed++
+		case rep.Skipped != "":
+			run.Skipped++
+		default:
+			run.Purged++
+		}
+	}
+	for _, id := range tombs {
+		rep, rerr := resweepAccount(ctx, db, prefix, id, dryRun, true)
+		if rep.Skipped == "" {
+			withScan(&rep)
+		}
+		if rerr != nil {
+			run.Failed++
+			run.Reports = append(run.Reports, rep)
+		} else if len(rep.Rows) > 0 {
+			run.Reswept++
+			run.Reports = append(run.Reports, rep)
+		}
+	}
+	if run.Failed > 0 {
+		return run, fmt.Errorf("%d 個帳號清除失敗", run.Failed)
+	}
+	return run, nil
+}
+
+// accountDueForPurge：與 PurgeAccount 裡那段判定同一條線，給 RunAccountPurge 建名單用。
+func accountDueForPurge(item map[string]types.AttributeValue, now time.Time) bool {
+	if _, purged := item["purgedAt"]; purged {
+		return false
+	}
+	n, ok := item["deleteRequestedAt"].(*types.AttributeValueMemberN)
+	if !ok {
+		return false
+	}
+	v, err := strconv.ParseInt(n.Value, 10, 64)
+	return err == nil && v > 0 && v <= accountPurgeCutoff(now)
 }
