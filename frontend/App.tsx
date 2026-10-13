@@ -34,6 +34,7 @@ import { useDailyBonus } from './hooks/useDailyBonus';
 import VersionGuard from './components/VersionGuard';
 import { Capacitor } from '@capacitor/core';
 import { selectVersionConfig } from './utils/versionGate';
+import { startDeepLinkListener } from './services/deepLinkListener';
 import { api } from './services/dataService';
 import { authService } from './services/authService';
 import { Loader2 } from 'lucide-react';
@@ -115,6 +116,9 @@ function App() {
       console.error("Failed to check version", err);
     }
   }, []);
+
+  // 原生殼：被分享連結打開時，換到連結指的那一頁（services/deepLinkListener.ts）。
+  useEffect(() => startDeepLinkListener(), []);
 
   useEffect(() => {
     const currentUser = authService.getCurrentUser();
